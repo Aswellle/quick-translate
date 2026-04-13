@@ -1,0 +1,29 @@
+{
+  "$schema": "https://schemas.tauri.app/config/v2/capability.json",
+  "identifier": "default",
+  "description": "QuickTranslate default capabilities",
+  "windows": [
+    "popup",
+    "settings",
+    "history"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:window:allow-close",
+    "core:window:allow-set-focus",
+    "core:window:allow-set-position",
+    "core:window:allow-start-dragging",
+    "core:event:allow-listen",
+    "core:event:allow-emit",
+    "global-shortcut:allow-register",
+    "global-shortcut:allow-unregister",
+    "global-shortcut:allow-unregister-all",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled",
+    "updater:allow-check",
+    "updater:allow-download-and-install"
+  ]
+}

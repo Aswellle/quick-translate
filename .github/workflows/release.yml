@@ -1,0 +1,165 @@
+# .github/workflows/release.yml
+# push tag v* 时自动构建 Windows + macOS 安装包并发布到 GitHub Releases
+# 同时生成 latest.json 供 Tauri Updater 检查更新
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write  # 允许创建 Release 和上传构建产物
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+
+    runs-on: ${{ matrix.platform }}
+    name: Build (${{ matrix.target }})
+
+    steps:
+      # ── 1. 检出代码 ───────────────────────────────────────────
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ── 2. 安装 Node.js ──────────────────────────────────────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      # ── 3. 安装 Rust 工具链 ───────────────────────────────────
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # ── 4. 缓存 Cargo 依赖（加速构建）────────────────────────
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            src-tauri/target/
+          key: ${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ matrix.target }}-cargo-
+
+      # ── 5. 安装前端依赖 ───────────────────────────────────────
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # ── 6. macOS：安装代码签名证书（可选，无证书时跳过）───────
+      - name: Import macOS certificate
+        if: matrix.platform == 'macos-latest'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          MACOS_KEYCHAIN_PWD: ${{ secrets.MACOS_KEYCHAIN_PWD }}
+        run: |
+          if [ -n "$MACOS_CERTIFICATE" ]; then
+            echo "$MACOS_CERTIFICATE" | base64 --decode > certificate.p12
+            security create-keychain -p "$MACOS_KEYCHAIN_PWD" build.keychain
+            security default-keychain -s build.keychain
+            security unlock-keychain -p "$MACOS_KEYCHAIN_PWD" build.keychain
+            security import certificate.p12 -k build.keychain \
+              -P "$MACOS_CERTIFICATE_PWD" -T /usr/bin/codesign
+            security set-key-partition-list -S apple-tool:,apple: \
+              -s -k "$MACOS_KEYCHAIN_PWD" build.keychain
+          else
+            echo "No macOS certificate provided, skipping code signing"
+          fi
+
+      # ── 7. 构建 Tauri 应用 ────────────────────────────────────
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Tauri Updater 签名私钥（必须）
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # macOS 公证（可选）
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "QuickTranslate ${{ github.ref_name }}"
+          releaseBody: |
+            ## QuickTranslate ${{ github.ref_name }}
+
+            ### 下载
+            - **Windows**：下载 `.msi` 安装包或 `.zip` 便携版
+            - **macOS**：下载 `.dmg` 安装包
+
+            ### 更新内容
+            请查看 [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)
+          releaseDraft: false
+          prerelease: false
+          args: --target ${{ matrix.target }}
+
+  # ── 生成 latest.json 供 Tauri Updater 使用 ──────────────────
+  publish-update-manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    name: Publish update manifest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"   # 去掉 "v" 前缀
+
+          # 获取本次 Release 的所有资产 URL
+          ASSETS=$(gh release view "${{ github.ref_name }}" --json assets \
+            --jq '.assets[] | "\(.name) \(.url)"')
+
+          # 构建 latest.json（Tauri Updater 标准格式）
+          cat > latest.json << JSON
+          {
+            "version": "${VERSION}",
+            "notes": "See https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}",
+            "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "platforms": {
+              "windows-x86_64": {
+                "url": "$(echo "$ASSETS" | grep '.msi.zip$' | awk '{print $2}')",
+                "signature": "$(echo "$ASSETS" | grep '.msi.zip.sig$' | awk '{print $2}')"
+              },
+              "darwin-x86_64": {
+                "url": "$(echo "$ASSETS" | grep 'x86_64.*\.tar\.gz$' | awk '{print $2}')",
+                "signature": "$(echo "$ASSETS" | grep 'x86_64.*\.tar\.gz\.sig$' | awk '{print $2}')"
+              },
+              "darwin-aarch64": {
+                "url": "$(echo "$ASSETS" | grep 'aarch64.*\.tar\.gz$' | awk '{print $2}')",
+                "signature": "$(echo "$ASSETS" | grep 'aarch64.*\.tar\.gz\.sig$' | awk '{print $2}')"
+              }
+            }
+          }
+          JSON
+
+          # 上传 latest.json 到本次 Release
+          gh release upload "${{ github.ref_name }}" latest.json \
+            --clobber --repo "${{ github.repository }}"
+
+          echo "latest.json published:"
+          cat latest.json

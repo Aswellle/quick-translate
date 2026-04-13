@@ -1,0 +1,190 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   CSS 变量 — 主题系统
+   ============================================================ */
+
+:root {
+  /* 浮窗背景：Acrylic 启用时由 OS 提供磨砂，CSS 仅作降级兜底 */
+  --popup-bg: rgba(248, 248, 252, 0.88);
+  --popup-border: rgba(0, 0, 0, 0.07);
+  --popup-shadow: 0 8px 32px rgba(0, 0, 0, 0.10), 0 1px 4px rgba(0, 0, 0, 0.06);
+
+  --text-primary: #111827;
+  --text-secondary: #6b7280;
+  --text-muted: #9ca3af;
+
+  --divider: rgba(0, 0, 0, 0.07);
+  --hover-bg: rgba(0, 0, 0, 0.04);
+  --active-bg: rgba(0, 0, 0, 0.08);
+  --focus-ring: rgba(14, 144, 225, 0.35);
+
+  --color-success: #10b981;
+  --color-error: #ef4444;
+  --color-warning: #f59e0b;
+  --color-info: #0e90e1;
+
+  --radius-popup: 12px;
+  --radius-btn: 6px;
+
+  --font-ui: "Segoe UI", "SF Pro Text", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+}
+
+.dark {
+  --popup-bg: rgba(24, 24, 28, 0.90);
+  --popup-border: rgba(255, 255, 255, 0.09);
+  --popup-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), 0 1px 4px rgba(0, 0, 0, 0.30);
+
+  --text-primary: #f3f4f6;
+  --text-secondary: #9ca3af;
+  --text-muted: #6b7280;
+
+  --divider: rgba(255, 255, 255, 0.08);
+  --hover-bg: rgba(255, 255, 255, 0.06);
+  --active-bg: rgba(255, 255, 255, 0.10);
+  --focus-ring: rgba(56, 170, 245, 0.40);
+}
+
+/* ============================================================
+   全局 Reset
+   ============================================================ */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  /* 透明背景：让 OS Acrylic 效果透过 WebView 显示 */
+  background: transparent;
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.selectable {
+  user-select: text;
+  cursor: text;
+}
+
+/* 优化滚动条 */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--text-muted); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
+
+/* ============================================================
+   浮窗样式
+   Acrylic/Blur 启用时：OS 提供磨砂，CSS backdrop-filter 作降级
+   ============================================================ */
+
+.popup-container {
+  background: var(--popup-bg);
+  /* CSS 降级磨砂（Acrylic 不可用时生效） */
+  backdrop-filter: blur(24px) saturate(200%);
+  -webkit-backdrop-filter: blur(24px) saturate(200%);
+  border: 1px solid var(--popup-border);
+  border-radius: var(--radius-popup);
+  box-shadow: var(--popup-shadow);
+  overflow: hidden;
+  /* 动画由父节点 inline style 控制，此处只管布局 */
+}
+
+/* ============================================================
+   通用组件样式
+   ============================================================ */
+
+.input-field {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--divider);
+  background-color: white;
+  color: var(--text-primary);
+  transition: box-shadow 150ms;
+}
+.dark .input-field { background-color: #27272a; }
+.input-field:focus { outline: none; box-shadow: 0 0 0 2px var(--focus-ring); }
+.input-field::placeholder { color: var(--text-muted); }
+
+/* ============================================================
+   动画
+   ============================================================ */
+
+/* 骨架屏 */
+@keyframes shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position:  200% 0; }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--hover-bg) 25%,
+    var(--active-bg) 50%,
+    var(--hover-bg) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 4px;
+}
+
+/* 内容区淡入（LoadingView → ResultView 切换时） */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0);   }
+}
+.animate-popup { animation: fadeInUp 140ms ease-out; }
+
+/* 复制成功勾号 */
+@keyframes checkmark {
+  0%   { transform: scale(0.6); opacity: 0; }
+  60%  { transform: scale(1.2); }
+  100% { transform: scale(1);   opacity: 1; }
+}
+.animate-checkmark { animation: checkmark 200ms ease-out; }
+
+/* 加载旋转（用于设置面板 loading 状态） */
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.animate-spin { animation: spin 0.8s linear infinite; }
+
+/* ── 向导专用按钮工具类 ── */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem 1.25rem;
+  border-radius: 0.625rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  background-color: #3b82f6;
+  color: white;
+  transition: background-color 150ms, transform 100ms;
+  cursor: pointer;
+  border: none;
+}
+.btn-primary:hover  { background-color: #2563eb; }
+.btn-primary:active { transform: scale(0.97); }
+
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem 1.25rem;
+  border-radius: 0.625rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  background-color: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--divider);
+  transition: background-color 150ms;
+  cursor: pointer;
+}
+.btn-ghost:hover { background-color: var(--hover-bg); }

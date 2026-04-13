@@ -1,0 +1,32 @@
+# Node
+node_modules/
+dist/
+.vite/
+
+# Rust / Cargo
+target/
+src-tauri/target/
+src-tauri/gen/
+
+# Tauri build artifacts
+*.msi
+*.exe
+bundles/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE
+.idea/
+.vscode/settings.json
+*.swp
+
+# Logs
+*.log
+logs/
+
+# Env
+.env
+.env.local
