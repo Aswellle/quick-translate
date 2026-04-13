@@ -38,9 +38,9 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "PLACEHOLDER_REPLACE_WITH_YOUR_PUBKEY",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEMwMDQzMUE3OUIyNTFGMzgKUldRNEh5V2JwekVFd0d2SWl5MkRRdllRVHczYzdBeEVmKzJjc0lPY2dsL0ErWlU1Sm5ROUg0cGYK",
       "endpoints": [
-        "https://github.com/YOUR_GITHUB_USERNAME/quicktranslate/releases/latest/download/latest.json"
+        "https://github.com/Aswellle/quick-translate/releases/latest/download/latest.json"
       ],
       "dialog": false,
       "windows": {
