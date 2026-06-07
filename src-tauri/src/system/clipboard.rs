@@ -3,15 +3,6 @@
 
 use crate::error::AppError;
 
-/// 读取剪贴板文本内容
-pub fn read_clipboard_text() -> Result<String, AppError> {
-    let mut clipboard =
-        arboard::Clipboard::new().map_err(|e| AppError::ClipboardError(e.to_string()))?;
-    clipboard
-        .get_text()
-        .map_err(|e| AppError::ClipboardError(e.to_string()))
-}
-
 /// 写入文本到剪贴板
 pub fn write_clipboard_text(text: &str) -> Result<(), AppError> {
     let mut clipboard =

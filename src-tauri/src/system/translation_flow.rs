@@ -71,11 +71,10 @@ async fn do_translate(app: &AppHandle, text: &str, target_lang: &str, truncated:
             let record_clone = record.clone();
 
             tauri::async_runtime::spawn(async move {
-                let h = history.lock().await;
-                if let Err(e) = h.insert(&record_clone).await {
+                if let Err(e) = history.insert(&record_clone).await {
                     tracing::error!("历史记录写入失败: {}", e);
                 }
-                if let Err(e) = h.enforce_limit(limit).await {
+                if let Err(e) = history.enforce_limit(limit).await {
                     tracing::error!("历史清理失败: {}", e);
                 }
             });

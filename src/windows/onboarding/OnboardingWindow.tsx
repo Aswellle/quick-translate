@@ -68,22 +68,32 @@ export function OnboardingWindow() {
   }, [state.credentials, state.selectedProvider]);
 
   const handleSkipProvider = useCallback(async () => {
-    try { await setConfigBatch([["provider", "google"]]); } catch {}
-    await completeOnboarding();
-    // 必须先等待 onboarding 标记持久化，再关闭窗口
-    // 否则 clipboard monitor 可能读到旧缓存导致划词翻译不触发
-    await getCurrentWebviewWindow().close();
+    try {
+      await setConfigBatch([["provider", "google"]]);
+      await completeOnboarding();
+      // 必须先等待 onboarding 标记持久化，再关闭窗口
+      // 否则 clipboard monitor 可能读到旧缓存导致划词翻译不触发
+      await getCurrentWebviewWindow().close();
+    } catch (e) {
+      console.error("[onboarding] 跳过配置失败:", e);
+      toast("保存配置失败，请重试", "error");
+    }
   }, []);
 
   const handleFinish = useCallback(async () => {
-    if (Object.keys(state.credentials).length > 0) {
-      const updates: [string, string][] = Object.entries(state.credentials).map(([k, v]) => [k, v]);
-      updates.push(["provider", state.selectedProvider]);
-      try { await setConfigBatch(updates); } catch {}
+    try {
+      if (Object.keys(state.credentials).length > 0) {
+        const updates: [string, string][] = Object.entries(state.credentials).map(([k, v]) => [k, v]);
+        updates.push(["provider", state.selectedProvider]);
+        await setConfigBatch(updates);
+      }
+      // 必须先等待 onboarding 标记持久化，再关闭窗口
+      await completeOnboarding();
+      await getCurrentWebviewWindow().close();
+    } catch (e) {
+      console.error("[onboarding] 完成配置失败:", e);
+      toast("保存配置失败，请重试", "error");
     }
-    // 必须先等待 onboarding 标记持久化，再关闭窗口
-    await completeOnboarding();
-    await getCurrentWebviewWindow().close();
   }, [state.credentials, state.selectedProvider]);
 
   return (

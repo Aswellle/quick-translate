@@ -23,7 +23,6 @@ pub trait TranslationProvider: Send + Sync {
         &self,
         text: &str,
         target_lang: &str,
-        source_lang: Option<&str>,
     ) -> Result<TranslationResult, AppError>;
 
     fn info(&self) -> ProviderInfo;
@@ -117,10 +116,19 @@ impl TranslationEngine {
 
             let provider_id = info.id.clone();
 
-            match provider.translate(text, target_lang, None).await {
+            match provider.translate(text, target_lang).await {
                 Ok(result) => {
-                    tracing::info!("翻译成功: provider={}, {}ms", provider_id, result.duration_ms);
+                    tracing::info!(
+                        "翻译成功: provider={}, {}ms",
+                        provider_id,
+                        result.duration_ms
+                    );
                     return Ok(result);
+                }
+                Err(AppError::SameLanguage { lang }) => {
+                    // 源语言与目标语言相同，无需继续尝试其他 provider
+                    tracing::info!("检测到相同语言 ({})，跳过 fallback 链", lang);
+                    return Err(AppError::SameLanguage { lang });
                 }
                 Err(e) => {
                     tracing::warn!("翻译源 {} 失败: {}", provider_id, e);
@@ -140,14 +148,22 @@ impl TranslationEngine {
         let exists = providers.iter().any(|p| p.info().id == provider_id);
         drop(providers);
         if !exists {
-            return Err(AppError::ConfigError(format!("未知翻译源: {}", provider_id)));
+            return Err(AppError::ConfigError(format!(
+                "未知翻译源: {}",
+                provider_id
+            )));
         }
         *self.active_provider_id.write().await = provider_id.to_string();
         Ok(())
     }
 
     pub async fn list_providers(&self) -> Vec<ProviderInfo> {
-        self.providers.read().await.iter().map(|p| p.info()).collect()
+        self.providers
+            .read()
+            .await
+            .iter()
+            .map(|p| p.info())
+            .collect()
     }
 
     pub async fn update_provider_config(
@@ -164,7 +180,10 @@ impl TranslationEngine {
                 return Ok(());
             }
         }
-        Err(AppError::ConfigError(format!("未找到翻译源: {}", provider_id)))
+        Err(AppError::ConfigError(format!(
+            "未找到翻译源: {}",
+            provider_id
+        )))
     }
 
     /// 批量更新多字段凭证（腾讯/百度/有道专用）
@@ -180,10 +199,27 @@ impl TranslationEngine {
                 return Ok(());
             }
         }
-        Err(AppError::ConfigError(format!("未找到翻译源: {}", provider_id)))
+        Err(AppError::ConfigError(format!(
+            "未找到翻译源: {}",
+            provider_id
+        )))
     }
 
     pub async fn set_fallback_enabled(&self, enabled: bool) {
         *self.fallback_enabled.write().await = enabled;
+    }
+
+    /// 验证指定翻译源的凭证（调用 validate_credentials，不消耗翻译配额）
+    pub async fn validate_provider_credentials(&self, provider_id: &str) -> Result<bool, AppError> {
+        let providers = self.providers.read().await;
+        for provider in providers.iter() {
+            if provider.info().id == provider_id {
+                return provider.validate_credentials().await;
+            }
+        }
+        Err(AppError::ConfigError(format!(
+            "未知翻译源: {}",
+            provider_id
+        )))
     }
 }

@@ -123,9 +123,11 @@ pub async fn check_onboarding(app: AppHandle) -> Result<bool, AppError> {
 
 /// 使用系统默认浏览器打开指定 URL
 /// 仅允许 http/https，使用 explorer 而非 cmd shell 避免 & | 等字符被解析为 shell 指令
+/// scheme 比较不区分大小写（HTTPS:// 与 https:// 等效）
 #[tauri::command]
 pub fn open_url(url: String) -> Result<(), AppError> {
-    if !url.starts_with("https://") && !url.starts_with("http://") {
+    let scheme = url.split("://").next().unwrap_or("").to_lowercase();
+    if scheme != "http" && scheme != "https" {
         return Err(AppError::WindowError("仅支持 http/https 链接".to_string()));
     }
     std::process::Command::new("explorer")

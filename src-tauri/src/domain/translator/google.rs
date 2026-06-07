@@ -41,7 +41,8 @@ impl GoogleProvider {
 
     /// 获取下一个轮换 UA
     fn next_ua(&self) -> &'static str {
-        let idx = self.ua_index
+        let idx = self
+            .ua_index
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         USER_AGENTS[idx % USER_AGENTS.len()]
     }
@@ -89,11 +90,7 @@ impl GoogleProvider {
     }
 
     /// 实际执行单次 HTTP 请求
-    async fn do_request(
-        &self,
-        text: &str,
-        tl: &str,
-    ) -> Result<(String, String, u64), AppError> {
+    async fn do_request(&self, text: &str, tl: &str) -> Result<(String, String, u64), AppError> {
         let ua = self.next_ua();
         let start = Instant::now();
 
@@ -119,9 +116,10 @@ impl GoogleProvider {
         match status.as_u16() {
             200 => {
                 // 尝试解析 JSON，兜底处理非标准响应
-                let body: Value = response.json().await.map_err(|e| {
-                    AppError::NetworkError(format!("Google 响应解析失败: {}", e))
-                })?;
+                let body: Value = response
+                    .json()
+                    .await
+                    .map_err(|e| AppError::NetworkError(format!("Google 响应解析失败: {}", e)))?;
 
                 let (translated, detected) = Self::extract_translation(&body)
                     .ok_or_else(|| AppError::NetworkError("Google 返回空结果".to_string()))?;
@@ -145,7 +143,6 @@ impl TranslationProvider for GoogleProvider {
         &self,
         text: &str,
         target_lang: &str,
-        _source_lang: Option<&str>,
     ) -> Result<TranslationResult, AppError> {
         let tl = Self::to_google_lang(target_lang);
         let mut last_err = AppError::NetworkError("未知错误".into());
@@ -166,10 +163,13 @@ impl TranslationProvider for GoogleProvider {
                     if detected_lower == target_lower
                         || (detected_lower.starts_with("zh") && target_lower.starts_with("zh"))
                     {
-                        return Err(AppError::SameLanguage { lang: detected_lang });
+                        return Err(AppError::SameLanguage {
+                            lang: detected_lang,
+                        });
                     }
 
                     return Ok(TranslationResult {
+                        source_text: text.to_string(),
                         translated_text,
                         detected_source_lang: detected_lang,
                         target_lang: target_lang.to_string(),

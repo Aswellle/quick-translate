@@ -74,6 +74,18 @@ impl MonitorController {
 /// 后台线程主循环：轮询剪贴板，检测文本变化并防抖触发翻译
 fn clipboard_monitor_thread(app: AppHandle, controller: Arc<MonitorController>) {
     tracing::info!("[clipboard_monitor_thread] 线程开始运行");
+
+    // 创建一次剪贴板句柄并全程复用：
+    // 避免每 500ms 反复调用 arboard::Clipboard::new()（Windows 下每次
+    // 都打开/关闭系统剪贴板 API，约 120 次/分钟）
+    let mut clipboard = match arboard::Clipboard::new() {
+        Ok(cb) => cb,
+        Err(e) => {
+            tracing::error!("[clipboard_monitor] 剪贴板初始化失败，监控线程退出: {}", e);
+            return;
+        }
+    };
+
     let mut last_text: Option<String> = None;
     let mut pending_text: Option<String> = None;
     let mut pending_timer: Option<std::time::Instant> = None;
@@ -106,7 +118,7 @@ fn clipboard_monitor_thread(app: AppHandle, controller: Arc<MonitorController>) 
             continue;
         }
 
-        let current = match read_clipboard_native() {
+        let current = match clipboard.get_text() {
             Ok(t) => t,
             Err(_) => continue,
         };
@@ -153,14 +165,6 @@ fn clipboard_monitor_thread(app: AppHandle, controller: Arc<MonitorController>) 
             }
         }
     }
-}
-
-/// 在原生线程中读取剪贴板（不依赖 Tokio runtime）
-fn read_clipboard_native() -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    let mut clipboard = arboard::Clipboard::new()?;
-    clipboard
-        .get_text()
-        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
 }
 
 /// 触发翻译流程（异步，在 Tokio task 中调用）

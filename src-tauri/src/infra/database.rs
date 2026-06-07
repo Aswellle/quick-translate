@@ -1,7 +1,7 @@
 // src-tauri/src/infra/database.rs
 // SQLite 连接初始化、schema migration、数据损坏恢复
 
-use rusqlite::Connection;
+use rusqlite::{Connection, Transaction};
 use std::path::Path;
 use tracing::{error, info, warn};
 
@@ -20,7 +20,11 @@ pub fn init_db(app_data_dir: &Path) -> Result<Connection, AppError> {
     // 尝试打开并验证数据库
     match open_and_verify(&db_path) {
         Ok(conn) => {
-            run_schema(&conn)?;
+            let is_fresh = is_fresh_install(&conn);
+            run_migrations(&conn)?;
+            if is_fresh {
+                seed_defaults(&conn)?;
+            }
             Ok(conn)
         }
         Err(e) => {
@@ -28,7 +32,8 @@ pub fn init_db(app_data_dir: &Path) -> Result<Connection, AppError> {
             recover_database(&db_path)?;
 
             let conn = open_connection(&db_path)?;
-            run_schema(&conn)?;
+            run_migrations(&conn)?;
+            seed_defaults(&conn)?;
             Ok(conn)
         }
     }
@@ -57,11 +62,13 @@ fn open_connection(db_path: &Path) -> Result<Connection, AppError> {
         .map_err(|e| AppError::DatabaseError(format!("打开数据库失败: {}", e)))?;
 
     // 启用 WAL 模式：并发读写性能更好
-    conn.execute_batch("
+    conn.execute_batch(
+        "
         PRAGMA journal_mode = WAL;
         PRAGMA foreign_keys = ON;
         PRAGMA busy_timeout = 5000;
-    ")
+    ",
+    )
     .map_err(|e| AppError::DatabaseError(format!("PRAGMA 初始化失败: {}", e)))?;
 
     Ok(conn)
@@ -81,26 +88,136 @@ fn recover_database(db_path: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
-/// 执行 schema migration（幂等，使用 CREATE IF NOT EXISTS）
-fn run_schema(conn: &Connection) -> Result<(), AppError> {
-    conn.execute_batch(SCHEMA_SQL)
-        .map_err(|e| AppError::DatabaseError(format!("Schema 初始化失败: {}", e)))?;
+/// 判断是否为全新安装（schema_version 表不存在或为空）
+fn is_fresh_install(conn: &Connection) -> bool {
+    let exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='schema_version'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)
+        .unwrap_or(false);
 
-    // 检查 schema 版本
+    if !exists {
+        return true;
+    }
+
     let version: i64 = conn
         .query_row(
-            "SELECT MAX(version) FROM schema_version",
+            "SELECT COALESCE(MAX(version), 0) FROM schema_version",
             [],
             |row| row.get(0),
         )
         .unwrap_or(0);
 
-    info!("数据库 schema 版本: {}", version);
+    version == 0
+}
+
+/// 执行所有待应用的 schema migrations（按版本顺序，每个在独立事务中执行）
+pub fn run_migrations(conn: &Connection) -> Result<(), AppError> {
+    // 确保 schema_version 表本身存在（bootstrap）
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS schema_version (
+            version     INTEGER PRIMARY KEY NOT NULL,
+            applied_at  INTEGER NOT NULL
+        );",
+    )
+    .map_err(|e| AppError::DatabaseMigration {
+        message: format!("无法创建 schema_version 表: {}", e),
+    })?;
+
+    let current_version: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_version",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+
+    info!("当前数据库版本: {}", current_version);
+
+    // 迁移列表：(版本号, 迁移函数)
+    type MigrationFn = fn(&Transaction) -> Result<(), AppError>;
+    let migrations: &[(i64, MigrationFn)] = &[(1, migrate_v1), (2, migrate_v2), (3, migrate_v3)];
+
+    for &(version, migration_fn) in migrations {
+        if current_version >= version {
+            continue;
+        }
+
+        info!("应用数据库迁移 v{}", version);
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| AppError::DatabaseMigration {
+                message: format!("开启事务失败 (v{}): {}", version, e),
+            })?;
+
+        migration_fn(&tx).map_err(|e| AppError::DatabaseMigration {
+            message: format!("迁移 v{} 失败: {}", version, e),
+        })?;
+
+        tx.execute(
+            "INSERT INTO schema_version (version, applied_at) VALUES (?1, ?2)",
+            rusqlite::params![version, now_unix_ms()],
+        )
+        .map_err(|e| AppError::DatabaseMigration {
+            message: format!("记录迁移版本失败 (v{}): {}", version, e),
+        })?;
+
+        tx.commit().map_err(|e| AppError::DatabaseMigration {
+            message: format!("提交迁移事务失败 (v{}): {}", version, e),
+        })?;
+
+        info!("数据库迁移 v{} 完成", version);
+    }
+
     Ok(())
 }
 
-/// 完整 SQLite Schema（v1）
-const SCHEMA_SQL: &str = r#"
+/// 仅在全新安装时执行：写入默认配置值
+pub fn seed_defaults(conn: &Connection) -> Result<(), AppError> {
+    conn.execute_batch(SEED_SQL)
+        .map_err(|e| AppError::DatabaseError(format!("默认配置写入失败: {}", e)))?;
+    Ok(())
+}
+
+// ──────────── Migration v1 ────────────
+
+/// Migration v1：创建所有基础表（翻译记录、FTS5、配置、触发器、索引）
+fn migrate_v1(tx: &Transaction) -> Result<(), AppError> {
+    tx.execute_batch(SCHEMA_V1_SQL)
+        .map_err(|e| AppError::DatabaseError(format!("Schema v1 初始化失败: {}", e)))
+}
+
+// ──────────── Migration v2 ────────────
+
+/// Migration v2：为 translation_records 添加 is_starred 字段（Favorites 功能）
+fn migrate_v2(tx: &Transaction) -> Result<(), AppError> {
+    tx.execute_batch(
+        "ALTER TABLE translation_records ADD COLUMN is_starred INTEGER NOT NULL DEFAULT 0;
+         CREATE INDEX IF NOT EXISTS idx_records_starred ON translation_records(is_starred);",
+    )
+    .map_err(|e| AppError::DatabaseError(format!("Schema v2 迁移失败: {}", e)))
+}
+
+// ──────────── Migration v3 ────────────
+
+/// Migration v3：移除 FTS5 虚拟表和同步触发器
+/// 搜索改用 LIKE 子串匹配（更好地支持 CJK 字符），FTS5 只有写入开销无查询收益
+fn migrate_v3(tx: &Transaction) -> Result<(), AppError> {
+    tx.execute_batch(
+        "DROP TABLE IF EXISTS translation_records_fts;
+         DROP TRIGGER IF EXISTS trg_records_ai;
+         DROP TRIGGER IF EXISTS trg_records_ad;",
+    )
+    .map_err(|e| AppError::DatabaseError(format!("Schema v3 迁移失败: {}", e)))
+}
+
+// ──────────── SQL 常量 ────────────
+
+/// Schema v1：基础表结构（不含 is_starred，由 v2 迁移添加）
+const SCHEMA_V1_SQL: &str = r#"
 -- ============================================================
 -- 1. 翻译历史记录表
 -- ============================================================
@@ -152,23 +269,11 @@ CREATE TABLE IF NOT EXISTS app_config (
     value           TEXT        NOT NULL,
     updated_at      INTEGER     NOT NULL
 );
+"#;
 
--- ============================================================
--- 4. Schema 版本管理
--- ============================================================
-CREATE TABLE IF NOT EXISTS schema_version (
-    version         INTEGER     PRIMARY KEY NOT NULL,
-    applied_at      INTEGER     NOT NULL
-);
-
-INSERT OR IGNORE INTO schema_version (version, applied_at)
-VALUES (1, strftime('%s', 'now') * 1000);
-
--- ============================================================
--- 5. 默认配置初始化
--- ============================================================
+/// 默认配置种子数据（仅全新安装时执行）
+const SEED_SQL: &str = r#"
 INSERT OR IGNORE INTO app_config (key, value, updated_at) VALUES
-    ('hotkey',                '"Ctrl+Shift+D"',  strftime('%s','now')*1000),
     ('target_lang',           '"zh"',            strftime('%s','now')*1000),
     ('provider',              '"google"',         strftime('%s','now')*1000),
     ('deepl_api_key',         '""',              strftime('%s','now')*1000),
@@ -182,5 +287,6 @@ INSERT OR IGNORE INTO app_config (key, value, updated_at) VALUES
     ('history_limit',         '200',             strftime('%s','now')*1000),
     ('theme',                 '"system"',        strftime('%s','now')*1000),
     ('fallback_enabled',      'true',            strftime('%s','now')*1000),
-    ('onboarding_completed',  'false',           strftime('%s','now')*1000);
+    ('onboarding_completed',  'false',           strftime('%s','now')*1000),
+    ('clipboard_monitor_enabled', 'true',        strftime('%s','now')*1000);
 "#;

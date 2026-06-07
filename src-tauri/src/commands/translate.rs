@@ -31,16 +31,23 @@ pub async fn translate_text(
     };
 
     // 获取目标语言（参数 > 配置 > 默认值）
-    let target = target_lang.unwrap_or_else(|| {
-        state
+    // 必须用 .read().await，不能用 blocking_read()：此函数是 async fn，
+    // 在 Tokio worker 线程上运行，blocking_read() 会 panic + abort 整进程
+    let target = match target_lang {
+        Some(t) => t,
+        None => state
             .config
-            .blocking_read()
+            .read()
+            .await
             .get("target_lang")
-            .unwrap_or_else(|| "zh".to_string())
-    });
+            .unwrap_or_else(|| "zh".to_string()),
+    };
 
     // 调用翻译引擎
-    let mut result = state.translator.translate(&text_to_translate, &target).await?;
+    let mut result = state
+        .translator
+        .translate(&text_to_translate, &target)
+        .await?;
     result.truncated = truncated;
 
     // 异步写入历史记录（不阻塞返回）
@@ -55,11 +62,10 @@ pub async fn translate_text(
         .unwrap_or(200i64);
 
     tauri::async_runtime::spawn(async move {
-        let h = history.lock().await;
-        if let Err(e) = h.insert(&record).await {
+        if let Err(e) = history.insert(&record).await {
             tracing::error!("历史记录写入失败: {}", e);
         }
-        if let Err(e) = h.enforce_limit(limit).await {
+        if let Err(e) = history.enforce_limit(limit).await {
             tracing::error!("历史清理失败: {}", e);
         }
     });
@@ -75,23 +81,14 @@ pub async fn list_providers(
     Ok(state.translator.list_providers().await)
 }
 
-/// 验证指定翻译源的 API Key
+/// 验证指定翻译源的 API Key（调用 validate_credentials，不消耗翻译配额）
 #[tauri::command]
 pub async fn validate_provider(
     state: State<'_, AppState>,
     provider_id: String,
 ) -> Result<bool, AppError> {
-    let providers = state.translator.list_providers().await;
-    let exists = providers.iter().any(|p| p.id == provider_id);
-    if !exists {
-        return Err(AppError::ConfigError(format!(
-            "未知翻译源: {}",
-            provider_id
-        )));
-    }
-    // 通过临时触发一次翻译来验证
-    state.translator.translate("hello", "zh").await.map(|_| true).or_else(|e| match e {
-        AppError::AuthError { .. } => Ok(false),
-        other => Err(other),
-    })
+    state
+        .translator
+        .validate_provider_credentials(&provider_id)
+        .await
 }

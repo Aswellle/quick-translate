@@ -24,7 +24,11 @@ pub struct YoudaoProvider {
 
 impl YoudaoProvider {
     pub fn new(http_client: Arc<HttpClient>, app_key: String, app_secret: String) -> Self {
-        YoudaoProvider { http_client, app_key, app_secret }
+        YoudaoProvider {
+            http_client,
+            app_key,
+            app_secret,
+        }
     }
 
     fn to_youdao_lang(lang: &str) -> &str {
@@ -63,7 +67,7 @@ impl YoudaoProvider {
             self.app_key, truncated, salt, curtime, self.app_secret
         );
 
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut h = Sha256::new();
         h.update(sign_str.as_bytes());
         hex::encode(h.finalize())
@@ -85,10 +89,11 @@ impl TranslationProvider for YoudaoProvider {
         &self,
         text: &str,
         target_lang: &str,
-        _source_lang: Option<&str>,
     ) -> Result<TranslationResult, AppError> {
         if self.app_key.is_empty() || self.app_secret.is_empty() {
-            return Err(AppError::AuthError { provider: "youdao".into() });
+            return Err(AppError::AuthError {
+                provider: "youdao".into(),
+            });
         }
 
         let start = Instant::now();
@@ -96,7 +101,7 @@ impl TranslationProvider for YoudaoProvider {
         let salt = Uuid::new_v4().to_string();
         let curtime = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs()
             .to_string();
         let sign = self.sign(text, &curtime, &salt);
@@ -124,28 +129,43 @@ impl TranslationProvider for YoudaoProvider {
         let duration_ms = start.elapsed().as_millis() as u64;
 
         if !response.status().is_success() {
-            return Err(AppError::NetworkError(format!("有道翻译 HTTP {}", response.status().as_u16())));
+            return Err(AppError::NetworkError(format!(
+                "有道翻译 HTTP {}",
+                response.status().as_u16()
+            )));
         }
 
-        let resp: YoudaoResponse = response.json().await
+        let resp: YoudaoResponse = response
+            .json()
+            .await
             .map_err(|e| AppError::NetworkError(format!("有道翻译响应解析失败: {}", e)))?;
 
         if resp.error_code != "0" {
             return match resp.error_code.as_str() {
-                "101" | "102" | "103" | "104" =>
-                    Err(AppError::AuthError { provider: "youdao".into() }),
-                "207" => Err(AppError::RateLimit { provider: "youdao".into() }),
-                "411" | "412" => Err(AppError::RateLimit { provider: "youdao".into() }),
-                _ => Err(AppError::NetworkError(format!("有道翻译错误 {}", resp.error_code))),
+                "101" | "102" | "103" | "104" => Err(AppError::AuthError {
+                    provider: "youdao".into(),
+                }),
+                "207" => Err(AppError::RateLimit {
+                    provider: "youdao".into(),
+                }),
+                "411" | "412" => Err(AppError::RateLimit {
+                    provider: "youdao".into(),
+                }),
+                _ => Err(AppError::NetworkError(format!(
+                    "有道翻译错误 {}",
+                    resp.error_code
+                ))),
             };
         }
 
-        let items = resp.translation
+        let items = resp
+            .translation
             .ok_or_else(|| AppError::NetworkError("有道翻译返回空结果".into()))?;
         let translated = items.join("\n");
 
         // 从 lang_pair 提取源语言，格式如 "en2zh-CHS"
-        let detected = resp.lang_pair
+        let detected = resp
+            .lang_pair
             .as_deref()
             .and_then(|s| s.split('2').next())
             .unwrap_or("auto")
@@ -155,14 +175,18 @@ impl TranslationProvider for YoudaoProvider {
             "zh-CHS" => "zh",
             "zh-CHT" => "zh-tw",
             other => other,
-        }.to_string();
+        }
+        .to_string();
 
         let target_lower = target_lang.to_lowercase();
         if detected_norm == target_lower {
-            return Err(AppError::SameLanguage { lang: detected_norm });
+            return Err(AppError::SameLanguage {
+                lang: detected_norm,
+            });
         }
 
         Ok(TranslationResult {
+            source_text: text.to_string(),
             translated_text: translated,
             detected_source_lang: detected_norm,
             target_lang: target_lang.to_string(),
@@ -182,7 +206,9 @@ impl TranslationProvider for YoudaoProvider {
     }
 
     async fn validate_credentials(&self) -> Result<bool, AppError> {
-        if self.app_key.is_empty() || self.app_secret.is_empty() { return Ok(false); }
+        if self.app_key.is_empty() || self.app_secret.is_empty() {
+            return Ok(false);
+        }
         match self.translate("hello", "zh", None).await {
             Ok(_) => Ok(true),
             Err(AppError::AuthError { .. }) => Ok(false),
@@ -199,7 +225,11 @@ impl TranslationProvider for YoudaoProvider {
     }
 
     fn update_credentials(&mut self, creds: HashMap<String, String>) {
-        if let Some(k) = creds.get("youdao_app_key") { self.app_key = k.clone(); }
-        if let Some(s) = creds.get("youdao_app_secret") { self.app_secret = s.clone(); }
+        if let Some(k) = creds.get("youdao_app_key") {
+            self.app_key = k.clone();
+        }
+        if let Some(s) = creds.get("youdao_app_secret") {
+            self.app_secret = s.clone();
+        }
     }
 }

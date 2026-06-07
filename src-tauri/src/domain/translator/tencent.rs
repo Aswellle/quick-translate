@@ -32,7 +32,11 @@ pub struct TencentProvider {
 
 impl TencentProvider {
     pub fn new(http_client: Arc<HttpClient>, secret_id: String, secret_key: String) -> Self {
-        TencentProvider { http_client, secret_id, secret_key }
+        TencentProvider {
+            http_client,
+            secret_id,
+            secret_key,
+        }
     }
 
     fn to_tencent_lang(lang: &str) -> &str {
@@ -74,8 +78,12 @@ impl TencentProvider {
 
         let canonical_request = format!(
             "{}\n{}\n{}\n{}\n{}\n{}",
-            http_method, canonical_uri, canonical_querystring,
-            canonical_headers, signed_headers, hashed_payload
+            http_method,
+            canonical_uri,
+            canonical_querystring,
+            canonical_headers,
+            signed_headers,
+            hashed_payload
         );
 
         // Step 2: 构建待签字符串
@@ -87,7 +95,10 @@ impl TencentProvider {
         );
 
         // Step 3: 计算签名
-        let secret_date = hmac_sha256(format!("TC3{}", self.secret_key).as_bytes(), date.as_bytes());
+        let secret_date = hmac_sha256(
+            format!("TC3{}", self.secret_key).as_bytes(),
+            date.as_bytes(),
+        );
         let secret_service = hmac_sha256(&secret_date, SERVICE.as_bytes());
         let secret_signing = hmac_sha256(&secret_service, b"tc3_request");
         let signature = hex::encode(hmac_sha256(&secret_signing, string_to_sign.as_bytes()));
@@ -143,15 +154,19 @@ impl TranslationProvider for TencentProvider {
         &self,
         text: &str,
         target_lang: &str,
-        _source_lang: Option<&str>,
     ) -> Result<TranslationResult, AppError> {
         if self.secret_id.is_empty() || self.secret_key.is_empty() {
-            return Err(AppError::AuthError { provider: "tencent".into() });
+            return Err(AppError::AuthError {
+                provider: "tencent".into(),
+            });
         }
 
         let start = Instant::now();
         let target = Self::to_tencent_lang(target_lang);
-        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
 
         let body = TencentRequest {
             source_text: text.to_string(),
@@ -159,8 +174,8 @@ impl TranslationProvider for TencentProvider {
             target: target.to_string(),
             project_id: 0,
         };
-        let payload = serde_json::to_string(&body)
-            .map_err(|e| AppError::NetworkError(e.to_string()))?;
+        let payload =
+            serde_json::to_string(&body).map_err(|e| AppError::NetworkError(e.to_string()))?;
 
         let (authorization, ts_str) = self.sign(&payload, timestamp);
 
@@ -182,34 +197,48 @@ impl TranslationProvider for TencentProvider {
         let duration_ms = start.elapsed().as_millis() as u64;
 
         if !response.status().is_success() {
-            return Err(AppError::NetworkError(format!("腾讯翻译 HTTP {}", response.status().as_u16())));
+            return Err(AppError::NetworkError(format!(
+                "腾讯翻译 HTTP {}",
+                response.status().as_u16()
+            )));
         }
 
-        let resp: TencentResponse = response.json().await
+        let resp: TencentResponse = response
+            .json()
+            .await
             .map_err(|e| AppError::NetworkError(format!("腾讯翻译响应解析失败: {}", e)))?;
 
         if let Some(err) = resp.response.error {
             return match err.code.as_str() {
-                "AuthFailure" | "AuthFailure.SignatureFailure" =>
-                    Err(AppError::AuthError { provider: "tencent".into() }),
-                "RequestLimitExceeded" =>
-                    Err(AppError::RateLimit { provider: "tencent".into() }),
-                _ => Err(AppError::NetworkError(format!("腾讯翻译错误: {} {}", err.code, err.message))),
+                "AuthFailure" | "AuthFailure.SignatureFailure" => Err(AppError::AuthError {
+                    provider: "tencent".into(),
+                }),
+                "RequestLimitExceeded" => Err(AppError::RateLimit {
+                    provider: "tencent".into(),
+                }),
+                _ => Err(AppError::NetworkError(format!(
+                    "腾讯翻译错误: {} {}",
+                    err.code, err.message
+                ))),
             };
         }
 
-        let translated = resp.response.target_text
+        let translated = resp
+            .response
+            .target_text
             .ok_or_else(|| AppError::NetworkError("腾讯翻译返回空结果".into()))?;
-        let detected = resp.response.source
-            .unwrap_or_else(|| "auto".to_string());
+        let detected = resp.response.source.unwrap_or_else(|| "auto".to_string());
 
         let detected_lower = detected.to_lowercase();
         let target_lower = target_lang.to_lowercase();
-        if detected_lower == target_lower || (detected_lower.starts_with("zh") && target_lower.starts_with("zh")) {
+        if detected_lower == target_lower
+            || (detected_lower.starts_with("zh") && target_lower.starts_with("zh"))
+        {
             return Err(AppError::SameLanguage { lang: detected });
         }
 
         Ok(TranslationResult {
+            source_text: text.to_string(),
             translated_text: translated,
             detected_source_lang: detected,
             target_lang: target_lang.to_string(),
@@ -229,7 +258,9 @@ impl TranslationProvider for TencentProvider {
     }
 
     async fn validate_credentials(&self) -> Result<bool, AppError> {
-        if self.secret_id.is_empty() || self.secret_key.is_empty() { return Ok(false); }
+        if self.secret_id.is_empty() || self.secret_key.is_empty() {
+            return Ok(false);
+        }
         match self.translate("hello", "zh", None).await {
             Ok(_) => Ok(true),
             Err(AppError::AuthError { .. }) => Ok(false),
@@ -246,8 +277,12 @@ impl TranslationProvider for TencentProvider {
     }
 
     fn update_credentials(&mut self, creds: HashMap<String, String>) {
-        if let Some(id) = creds.get("tencent_secret_id") { self.secret_id = id.clone(); }
-        if let Some(key) = creds.get("tencent_secret_key") { self.secret_key = key.clone(); }
+        if let Some(id) = creds.get("tencent_secret_id") {
+            self.secret_id = id.clone();
+        }
+        if let Some(key) = creds.get("tencent_secret_key") {
+            self.secret_key = key.clone();
+        }
     }
 }
 
@@ -273,19 +308,37 @@ fn chrono_from_timestamp(ts: u64) -> (u32, u32, u32) {
     let mut d = days as u32;
     loop {
         let dy = if is_leap(y) { 366 } else { 365 };
-        if d < dy { break; }
+        if d < dy {
+            break;
+        }
         d -= dy;
         y += 1;
     }
-    let months = [31u32, if is_leap(y) { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let months = [
+        31u32,
+        if is_leap(y) { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut m = 0u32;
     for (i, &dm) in months.iter().enumerate() {
-        if d < dm { m = i as u32 + 1; break; }
+        if d < dm {
+            m = i as u32 + 1;
+            break;
+        }
         d -= dm;
     }
     (y, m, d + 1)
 }
 
 fn is_leap(y: u32) -> bool {
-    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+    (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
 }

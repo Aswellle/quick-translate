@@ -63,7 +63,6 @@ impl TranslationProvider for DeepLProvider {
         &self,
         text: &str,
         target_lang: &str,
-        _source_lang: Option<&str>,
     ) -> Result<TranslationResult, AppError> {
         if self.api_key.is_empty() {
             return Err(AppError::AuthError {
@@ -105,9 +104,7 @@ impl TranslationProvider for DeepLProvider {
                     .next()
                     .ok_or_else(|| AppError::NetworkError("DeepL 返回空结果".to_string()))?;
 
-                let detected_lang = translation
-                    .detected_source_language
-                    .to_lowercase();
+                let detected_lang = translation.detected_source_language.to_lowercase();
 
                 // 检查源语言与目标语言是否相同
                 let target_lower = target_lang.to_lowercase();
@@ -121,6 +118,7 @@ impl TranslationProvider for DeepLProvider {
                 }
 
                 Ok(TranslationResult {
+                    source_text: text.to_string(),
                     translated_text: translation.text,
                     detected_source_lang: detected_lang,
                     target_lang: target_lang.to_string(),
