@@ -5,7 +5,7 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::error::AppError;
 use crate::state::AppState;
-use crate::system::{hotkey, tray};
+use crate::system::tray;
 use crate::types::AppConfig;
 
 /// 获取完整配置（API Key 已脱敏）
@@ -46,39 +46,12 @@ pub async fn set_config_batch(
         state.config.write().await.set_batch(db_updates).await?;
     }
 
-    let mut need_menu_refresh = false;
-
+    // 逐键应用副作用，委托给 handle_side_effect，与 set_config 共用同一逻辑，消除分歧风险
+    // 宽松模式：单键副作用失败仅记录警告，不中止整批次
     for (key, value) in &updates {
-        match key.as_str() {
-            "hotkey" => {
-                hotkey::re_register(&app, value)?;
-            }
-            "provider" => {
-                state.translator.set_active_provider(value).await?;
-                need_menu_refresh = true;
-            }
-            "target_lang" => {
-                need_menu_refresh = true;
-            }
-            "deepl_api_key" => {
-                state.translator.update_provider_config("deepl", Some(value.clone())).await?;
-            }
-            "fallback_enabled" => {
-                state.translator.set_fallback_enabled(value == "true").await;
-            }
-            "auto_start" => {
-                crate::commands::system::set_autostart(app.clone(), value == "true").await?;
-            }
-            "theme" => {
-                // 广播给所有窗口，实现无刷新实时主题切换
-                emit_theme_changed(&app, value);
-            }
-            _ => {}
+        if let Err(e) = handle_side_effect(&app, &state, key, value).await {
+            tracing::warn!("[set_config_batch] side_effect[{}] 失败（已忽略）: {}", key, e);
         }
-    }
-
-    if need_menu_refresh {
-        tray::refresh_menu(&app);
     }
 
     Ok(())
@@ -93,51 +66,69 @@ async fn handle_side_effect(
     value: &str,
 ) -> Result<(), AppError> {
     match key {
-        "hotkey" => {
-            hotkey::re_register(app, value)?;
-        }
         "provider" => {
             state.translator.set_active_provider(value).await?;
-            tray::refresh_menu(app);
+            tray::refresh_menu(app).await;
         }
         "target_lang" => {
-            tray::refresh_menu(app);
+            tray::refresh_menu(app).await;
         }
         "deepl_api_key" => {
-            state.translator.update_provider_config("deepl", Some(value.to_string())).await?;
+            state
+                .translator
+                .update_provider_config("deepl", Some(value.to_string()))
+                .await?;
         }
         "tencent_secret_id" | "tencent_secret_key" => {
             let cfg = state.config.read().await;
             let creds = build_creds_map(
-                &*cfg,
-                &[("tencent_secret_id", "tencent_secret_id"),
-                  ("tencent_secret_key", "tencent_secret_key")],
-                key, value,
+                &cfg,
+                &[
+                    ("tencent_secret_id", "tencent_secret_id"),
+                    ("tencent_secret_key", "tencent_secret_key"),
+                ],
+                key,
+                value,
             );
             drop(cfg);
-            state.translator.update_provider_credentials("tencent", creds).await?;
+            state
+                .translator
+                .update_provider_credentials("tencent", creds)
+                .await?;
         }
         "baidu_app_id" | "baidu_secret_key" => {
             let cfg = state.config.read().await;
             let creds = build_creds_map(
-                &*cfg,
-                &[("baidu_app_id", "baidu_app_id"),
-                  ("baidu_secret_key", "baidu_secret_key")],
-                key, value,
+                &cfg,
+                &[
+                    ("baidu_app_id", "baidu_app_id"),
+                    ("baidu_secret_key", "baidu_secret_key"),
+                ],
+                key,
+                value,
             );
             drop(cfg);
-            state.translator.update_provider_credentials("baidu", creds).await?;
+            state
+                .translator
+                .update_provider_credentials("baidu", creds)
+                .await?;
         }
         "youdao_app_key" | "youdao_app_secret" => {
             let cfg = state.config.read().await;
             let creds = build_creds_map(
-                &*cfg,
-                &[("youdao_app_key", "youdao_app_key"),
-                  ("youdao_app_secret", "youdao_app_secret")],
-                key, value,
+                &cfg,
+                &[
+                    ("youdao_app_key", "youdao_app_key"),
+                    ("youdao_app_secret", "youdao_app_secret"),
+                ],
+                key,
+                value,
             );
             drop(cfg);
-            state.translator.update_provider_credentials("youdao", creds).await?;
+            state
+                .translator
+                .update_provider_credentials("youdao", creds)
+                .await?;
         }
         "fallback_enabled" => {
             state.translator.set_fallback_enabled(value == "true").await;
@@ -148,6 +139,14 @@ async fn handle_side_effect(
         "theme" => {
             emit_theme_changed(app, value);
         }
+        "clipboard_monitor_enabled" => {
+            if value == "true" {
+                state.clipboard_monitor.resume();
+            } else {
+                state.clipboard_monitor.suspend();
+            }
+            tray::refresh_menu(app).await;
+        }
         _ => {}
     }
     Ok(())
@@ -156,12 +155,18 @@ async fn handle_side_effect(
 /// 广播主题变更事件给所有已打开的 WebviewWindow
 fn emit_theme_changed(app: &AppHandle, theme: &str) {
     #[derive(serde::Serialize, Clone)]
-    struct ThemePayload { theme: String }
+    struct ThemePayload {
+        theme: String,
+    }
 
-    let _ = app.emit("theme-changed", ThemePayload { theme: theme.to_string() });
+    let _ = app.emit(
+        "theme-changed",
+        ThemePayload {
+            theme: theme.to_string(),
+        },
+    );
     tracing::info!("主题已切换: {}", theme);
 }
-
 
 // ── 辅助函数 ──
 
