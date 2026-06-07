@@ -166,6 +166,11 @@ impl TranslationEngine {
             .collect()
     }
 
+    /// 同步版本：供 tray::init 等同步上下文使用（setup 阶段安全）
+    pub fn list_providers_sync(&self) -> Vec<ProviderInfo> {
+        self.providers.blocking_read().iter().map(|p| p.info()).collect()
+    }
+
     pub async fn update_provider_config(
         &self,
         provider_id: &str,
