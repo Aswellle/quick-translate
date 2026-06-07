@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "QuickTranslate",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "com.quicktranslate.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -12,11 +12,7 @@
   "app": {
     "windows": [],
     "security": {
-      "csp": null
-    },
-    "trayIcon": {
-      "iconPath": "icons/32x32.png",
-      "iconAsTemplate": true
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
     }
   },
   "bundle": {
@@ -40,8 +36,8 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEMwMDQzMUE3OUIyNTFGMzgKUldRNEh5V2JwekVFd0d2SWl5MkRRdllRVHczYzdBeEVmKzJjc0lPY2dsL0ErWlU1Sm5ROUg0cGYK",
       "endpoints": [
-        "https://github.com/Aswellle/quick-translate/releases/latest/download/latest.json"
-      ],
+  "https://github.com/AsWellle/quicktranslate/releases/latest/download/latest.json"
+],
       "dialog": false,
       "windows": {
         "installMode": "passive"
