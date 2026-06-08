@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 // ---- 共享类型 ----
 
 export interface TranslationResult {
+  source_text: string;
   translated_text: string;
   detected_source_lang: string;
   target_lang: string;
@@ -30,10 +31,18 @@ export interface TranslationRecord {
   provider: string;
   created_at: number;
   duration_ms: number | null;
+  is_starred: boolean;
+}
+
+export interface StatsResult {
+  total_records: number;
+  total_chars: number;
+  by_provider: Record<string, number>;
+  last_7_days: number;
+  last_30_days: number;
 }
 
 export interface AppConfig {
-  hotkey: string;
   target_lang: string;
   provider: string;
   // 翻译源凭证（前端收到已脱敏）
@@ -49,12 +58,14 @@ export interface AppConfig {
   theme: string;
   fallback_enabled: boolean;
   onboarding_completed: boolean;
+  clipboard_monitor_enabled: boolean;
 }
 
 export interface HistoryQuery {
   search?: string;
   limit: number;
   offset: number;
+  starred_only?: boolean;
 }
 
 export interface AppError {
@@ -103,12 +114,31 @@ export async function queryHistory(
   return invoke("query_history", { params });
 }
 
-export async function countHistory(search?: string): Promise<number> {
-  return invoke("count_history", { search });
+export async function countHistory(
+  search?: string,
+  starredOnly?: boolean
+): Promise<number> {
+  return invoke("count_history", { search, starredOnly });
 }
 
 export async function clearHistory(): Promise<void> {
   return invoke("clear_history");
+}
+
+export async function deleteHistoryRecord(id: string): Promise<void> {
+  return invoke("delete_history_record", { id });
+}
+
+export async function toggleStarRecord(id: string): Promise<boolean> {
+  return invoke("toggle_star_record", { id });
+}
+
+export async function exportHistory(): Promise<string> {
+  return invoke("export_history");
+}
+
+export async function getStats(): Promise<StatsResult> {
+  return invoke("get_stats");
 }
 
 // ---- 系统 Commands ----
@@ -119,6 +149,10 @@ export async function copyToClipboard(text: string): Promise<void> {
 
 export async function hidePopup(): Promise<void> {
   return invoke("hide_popup");
+}
+
+export async function resizePopup(width: number, height: number): Promise<void> {
+  return invoke("resize_popup", { width, height });
 }
 
 export async function getAppVersion(): Promise<string> {
@@ -147,6 +181,18 @@ export async function setAutostart(enabled: boolean): Promise<void> {
   return invoke("set_autostart", { enabled });
 }
 
+// ---- 系统浏览器打开链接 ----
+
+export async function openUrl(url: string): Promise<void> {
+  return invoke("open_url", { url });
+}
+
+// ---- 剪贴板监控开关 ----
+
+export async function setClipboardMonitorEnabled(enabled: boolean): Promise<void> {
+  return invoke("set_clipboard_monitor_enabled", { enabled });
+}
+
 // ---- 更新检查 ----
 
 export async function checkUpdate(): Promise<void> {
@@ -161,4 +207,8 @@ export async function checkOnboarding(): Promise<boolean> {
 
 export async function completeOnboarding(): Promise<void> {
   return invoke("complete_onboarding");
+}
+
+export async function openOnboardingWindow(): Promise<void> {
+  return invoke("open_onboarding_window");
 }

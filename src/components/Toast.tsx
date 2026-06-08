@@ -1,5 +1,5 @@
 // src/components/Toast.tsx
-// 单条 Toast 组件（带淡入淡出动画）
+// 单条 Toast 组件（macOS 风格 — 灵动有活力）
 
 import { useEffect, useState } from "react";
 
@@ -41,17 +41,16 @@ const TOAST_ICONS: Record<ToastType, React.ReactNode> = {
 };
 
 const TOAST_COLORS: Record<ToastType, string> = {
-  error:   "text-red-500   dark:text-red-400",
+  error:   "text-red-500    dark:text-red-400",
   success: "text-green-500 dark:text-green-400",
-  warning: "text-amber-500 dark:text-amber-400",
+  warning: "text-orange-500 dark:text-orange-400",
   info:    "text-blue-500  dark:text-blue-400",
 };
 
-export function ToastItem({ id, message, type = "error", duration = 3500, onClose }: ToastProps) {
+export function ToastItem({ id, message, type = "info", duration = 3500, onClose }: ToastProps) {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
-    // 下一帧触发淡入
     const show = requestAnimationFrame(() => setVisible(true));
     const hide = setTimeout(() => {
       setVisible(false);
@@ -66,16 +65,17 @@ export function ToastItem({ id, message, type = "error", duration = 3500, onClos
   return (
     <div
       className={[
-        "flex items-start gap-2.5 px-3.5 py-2.5 rounded-xl max-w-xs",
-        "bg-[var(--popup-bg)] border border-[var(--popup-border)]",
-        "shadow-[0_4px_16px_rgba(0,0,0,0.14)]",
+        "flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl max-w-xs",
+        "bg-[var(--surface-primary)] dark:bg-[var(--surface-secondary)]",
+        "border border-[var(--border-secondary)]",
+        "shadow-macos",
         "transition-all duration-200 ease-out",
-        visible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-2",
+        visible ? "opacity-100 translate-y-0 scale-100" : "opacity-0 translate-y-2 scale-95",
         TOAST_COLORS[type],
       ].join(" ")}
     >
       {TOAST_ICONS[type]}
-      <span className="text-[var(--text-primary)] text-xs leading-relaxed">{message}</span>
+      <span className="text-[var(--text-primary)] text-[12px] leading-snug">{message}</span>
     </div>
   );
 }

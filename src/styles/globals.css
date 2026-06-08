@@ -3,52 +3,122 @@
 @tailwind utilities;
 
 /* ============================================================
-   CSS 变量 — 主题系统
+   CSS 变量 — macOS Design System
    ============================================================ */
 
 :root {
-  /* 浮窗背景：Acrylic 启用时由 OS 提供磨砂，CSS 仅作降级兜底 */
-  --popup-bg: rgba(248, 248, 252, 0.88);
-  --popup-border: rgba(0, 0, 0, 0.07);
-  --popup-shadow: 0 8px 32px rgba(0, 0, 0, 0.10), 0 1px 4px rgba(0, 0, 0, 0.06);
+  /* ── macOS System Colors ── */
+  --system-blue:    #007AFF;
+  --system-indigo:  #5856D6;
+  --system-purple:  #AF52DE;
+  --system-pink:    #FF2D55;
+  --system-red:     #FF3B30;
+  --system-orange:  #FF9500;
+  --system-yellow:  #FFCC00;
+  --system-green:   #34C759;
+  --system-teal:    #5AC8FA;
+  --system-cyan:    #32D4F4;
 
-  --text-primary: #111827;
-  --text-secondary: #6b7280;
-  --text-muted: #9ca3af;
+  /* ── macOS Semantic Tokens ── */
+  --color-accent:         var(--system-blue);
+  --color-success:        var(--system-green);
+  --color-error:          var(--system-red);
+  --color-warning:        var(--system-orange);
+  --color-info:           var(--system-teal);
+  --color-purple:         var(--system-purple);
+  --color-pink:           var(--system-pink);
 
-  --divider: rgba(0, 0, 0, 0.07);
-  --hover-bg: rgba(0, 0, 0, 0.04);
-  --active-bg: rgba(0, 0, 0, 0.08);
-  --focus-ring: rgba(14, 144, 225, 0.35);
+  /* ── Surface Colors (light mode) ── */
+  /* macOS uses tinted whites with subtle blue/warm tint, not gray */
+  --surface-primary:      #FFFFFF;
+  --surface-secondary:    #F5F5F7;
+  --surface-tertiary:     #EFEFF1;
+  --surface-elevated:     rgba(255, 255, 255, 0.72);
 
-  --color-success: #10b981;
-  --color-error: #ef4444;
-  --color-warning: #f59e0b;
-  --color-info: #0e90e1;
+  /* ── Text Colors ── */
+  --text-primary:         #1D1D1F;
+  --text-secondary:       #636366;
+  --text-tertiary:        #AEAEB2;
+  --text-placeholder:      #C7C7CC;
 
-  --radius-popup: 12px;
-  --radius-btn: 6px;
+  /* ── Border / Divider ── */
+  --border-primary:       rgba(0, 0, 0, 0.1);
+  --border-secondary:      rgba(0, 0, 0, 0.06);
+  --border-tertiary:      rgba(0, 0, 0, 0.04);
 
-  --font-ui: "Segoe UI", "SF Pro Text", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  /* ── Backgrounds ── */
+  --bg-primary:           #FFFFFF;
+  --bg-secondary:         #F5F5F7;
+  --bg-tertiary:          #EBEBED;
+  --hover-bg:             rgba(0, 0, 0, 0.04);
+  --active-bg:            rgba(0, 0, 0, 0.08);
+  --focus-ring:           rgba(0, 122, 255, 0.35);
+
+  /* ── Popup / Card ── */
+  --popup-bg:            rgba(255, 255, 255, 0.82);
+  --popup-border:        rgba(0, 0, 0, 0.08);
+  --popup-shadow:        0 8px 32px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.08);
+  --card-bg:             rgba(255, 255, 255, 0.60);
+  --card-border:         rgba(0, 0, 0, 0.06);
+  --card-shadow:         0 2px 8px rgba(0, 0, 0, 0.06);
+
+  /* ── Skeleton ── */
+  --skeleton-base:        rgba(0, 0, 0, 0.04);
+  --skeleton-shimmer:    rgba(0, 0, 0, 0.08);
+
+  /* ── Radii ── */
+  --radius-xs:           4px;
+  --radius-sm:           6px;
+  --radius-md:           10px;
+  --radius-lg:           14px;
+  --radius-xl:           20px;
+  --radius-full:         9999px;
+
+  /* ── Typography ── */
+  --font-ui: "SF Pro Text", "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-display: "SF Pro Display", "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+
+  /* ── Transitions ── */
+  --ease-out-expo:       cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring:         cubic-bezier(0.32, 0.72, 0, 1);
 }
 
+/* ── Dark Mode ── */
 .dark {
-  --popup-bg: rgba(24, 24, 28, 0.90);
-  --popup-border: rgba(255, 255, 255, 0.09);
-  --popup-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), 0 1px 4px rgba(0, 0, 0, 0.30);
+  --surface-primary:      #1C1C1E;
+  --surface-secondary:    #2C2C2E;
+  --surface-tertiary:     #3A3A3C;
+  --surface-elevated:     rgba(44, 44, 46, 0.78);
 
-  --text-primary: #f3f4f6;
-  --text-secondary: #9ca3af;
-  --text-muted: #6b7280;
+  --text-primary:         #F5F5F7;
+  --text-secondary:       #98989D;
+  --text-tertiary:        #636366;
+  --text-placeholder:     #48484A;
 
-  --divider: rgba(255, 255, 255, 0.08);
-  --hover-bg: rgba(255, 255, 255, 0.06);
-  --active-bg: rgba(255, 255, 255, 0.10);
-  --focus-ring: rgba(56, 170, 245, 0.40);
+  --border-primary:       rgba(255, 255, 255, 0.12);
+  --border-secondary:     rgba(255, 255, 255, 0.08);
+  --border-tertiary:      rgba(255, 255, 255, 0.05);
+
+  --bg-primary:           #1C1C1E;
+  --bg-secondary:         #2C2C2E;
+  --bg-tertiary:          #3A3A3C;
+  --hover-bg:             rgba(255, 255, 255, 0.06);
+  --active-bg:            rgba(255, 255, 255, 0.10);
+  --focus-ring:           rgba(0, 122, 255, 0.45);
+
+  --popup-bg:            rgba(28, 28, 30, 0.85);
+  --popup-border:        rgba(255, 255, 255, 0.10);
+  --popup-shadow:        0 8px 32px rgba(0, 0, 0, 0.50), 0 2px 8px rgba(0, 0, 0, 0.35);
+  --card-bg:             rgba(44, 44, 46, 0.60);
+  --card-border:         rgba(255, 255, 255, 0.08);
+  --card-shadow:         0 2px 8px rgba(0, 0, 0, 0.25);
+
+  --skeleton-base:        rgba(255, 255, 255, 0.05);
+  --skeleton-shimmer:     rgba(255, 255, 255, 0.10);
 }
 
 /* ============================================================
-   全局 Reset
+   Global Reset
    ============================================================ */
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -58,11 +128,11 @@ html, body, #root {
   padding: 0;
   width: 100%;
   height: 100%;
-  /* 透明背景：让 OS Acrylic 效果透过 WebView 显示 */
   background: transparent;
   font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  color: var(--text-primary);
 }
 
 .selectable {
@@ -70,52 +140,159 @@ html, body, #root {
   cursor: text;
 }
 
-/* 优化滚动条 */
-::-webkit-scrollbar { width: 4px; }
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--text-muted); border-radius: 2px; }
+::-webkit-scrollbar-thumb { background: var(--text-tertiary); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
 
 /* ============================================================
-   浮窗样式
-   Acrylic/Blur 启用时：OS 提供磨砂，CSS backdrop-filter 作降级
+   Popup Container — macOS Vibrancy
    ============================================================ */
 
 .popup-container {
   background: var(--popup-bg);
-  /* CSS 降级磨砂（Acrylic 不可用时生效） */
-  backdrop-filter: blur(24px) saturate(200%);
-  -webkit-backdrop-filter: blur(24px) saturate(200%);
+  backdrop-filter: blur(28px) saturate(180%) brightness(1.02);
+  -webkit-backdrop-filter: blur(28px) saturate(180%) brightness(1.02);
   border: 1px solid var(--popup-border);
-  border-radius: var(--radius-popup);
+  border-radius: var(--radius-lg);
   box-shadow: var(--popup-shadow);
   overflow: hidden;
-  /* 动画由父节点 inline style 控制，此处只管布局 */
+}
+
+/* ── macOS-style card ── */
+.macos-card {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--card-shadow);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
 }
 
 /* ============================================================
-   通用组件样式
+   Form Controls
    ============================================================ */
 
 .input-field {
-  padding: 0.375rem 0.75rem;
+  padding: 0.4rem 0.75rem;
   font-size: 0.875rem;
-  line-height: 1.25rem;
-  border-radius: 0.5rem;
-  border: 1px solid var(--divider);
-  background-color: white;
+  line-height: 1.4;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-primary);
+  background-color: var(--surface-primary);
   color: var(--text-primary);
-  transition: box-shadow 150ms;
+  transition: box-shadow 150ms var(--ease-out-expo), border-color 150ms;
+  width: 100%;
 }
-.dark .input-field { background-color: #27272a; }
-.input-field:focus { outline: none; box-shadow: 0 0 0 2px var(--focus-ring); }
-.input-field::placeholder { color: var(--text-muted); }
+.dark .input-field { background-color: var(--surface-secondary); }
+.input-field:focus {
+  outline: none;
+  border-color: var(--system-blue);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+.input-field::placeholder { color: var(--text-placeholder); }
+
+/* macOS-style select */
+select.input-field {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2 4l4 4 4-4' stroke='%23AEAEB2' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  padding-right: 2rem;
+  cursor: pointer;
+}
 
 /* ============================================================
-   动画
+   Buttons
    ============================================================ */
 
-/* 骨架屏 */
+/* Primary — macOS system blue */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.45rem 1.25rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  font-weight: 500;
+  background-color: var(--system-blue);
+  color: #FFFFFF;
+  transition: background-color 150ms, transform 100ms var(--ease-spring);
+  cursor: pointer;
+  border: none;
+  letter-spacing: -0.01em;
+}
+.btn-primary:hover  { background-color: #0071E3; }
+.btn-primary:active { transform: scale(0.97); }
+.btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+/* Ghost — subtle border, no fill */
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.45rem 1.25rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  font-weight: 500;
+  background-color: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-primary);
+  transition: background-color 150ms, border-color 150ms, color 150ms;
+  cursor: pointer;
+  letter-spacing: -0.01em;
+}
+.btn-ghost:hover {
+  background-color: var(--hover-bg);
+  border-color: var(--border-secondary);
+  color: var(--text-primary);
+}
+
+/* Accent — purple tinted primary */
+.btn-accent {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.45rem 1.25rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.875rem;
+  font-weight: 500;
+  background-color: var(--system-purple);
+  color: #FFFFFF;
+  transition: background-color 150ms, transform 100ms var(--ease-spring);
+  cursor: pointer;
+  border: none;
+}
+.btn-accent:hover  { background-color: #9B4DD4; }
+.btn-accent:active { transform: scale(0.97); }
+
+/* Icon button */
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: background-color 120ms, color 120ms;
+}
+.btn-icon:hover {
+  background-color: var(--hover-bg);
+  color: var(--text-secondary);
+}
+
+/* ============================================================
+   Animations
+   ============================================================ */
+
 @keyframes shimmer {
   0%   { background-position: -200% 0; }
   100% { background-position:  200% 0; }
@@ -124,67 +301,47 @@ html, body, #root {
 .skeleton {
   background: linear-gradient(
     90deg,
-    var(--hover-bg) 25%,
-    var(--active-bg) 50%,
-    var(--hover-bg) 75%
+    var(--skeleton-base)  25%,
+    var(--skeleton-shimmer) 50%,
+    var(--skeleton-base)  75%
   );
   background-size: 200% 100%;
-  animation: shimmer 1.5s infinite;
-  border-radius: 4px;
+  animation: shimmer 1.6s infinite;
+  border-radius: var(--radius-xs);
 }
 
-/* 内容区淡入（LoadingView → ResultView 切换时） */
+/* Content fade in */
 @keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(4px); }
+  from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0);   }
 }
-.animate-popup { animation: fadeInUp 140ms ease-out; }
+.animate-popup { animation: fadeInUp 200ms var(--ease-out-expo) forwards; }
 
-/* 复制成功勾号 */
+/* Checkmark pop */
 @keyframes checkmark {
-  0%   { transform: scale(0.6); opacity: 0; }
+  0%   { transform: scale(0.5); opacity: 0; }
   60%  { transform: scale(1.2); }
   100% { transform: scale(1);   opacity: 1; }
 }
-.animate-checkmark { animation: checkmark 200ms ease-out; }
+.animate-checkmark { animation: checkmark 250ms var(--ease-spring) forwards; }
 
-/* 加载旋转（用于设置面板 loading 状态） */
+/* Spin */
 @keyframes spin {
   from { transform: rotate(0deg); }
   to   { transform: rotate(360deg); }
 }
 .animate-spin { animation: spin 0.8s linear infinite; }
 
-/* ── 向导专用按钮工具类 ── */
-.btn-primary {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.5rem 1.25rem;
-  border-radius: 0.625rem;
-  font-size: 0.875rem;
-  font-weight: 500;
-  background-color: #3b82f6;
-  color: white;
-  transition: background-color 150ms, transform 100ms;
-  cursor: pointer;
-  border: none;
+/* Pulse glow */
+@keyframes pulseGlow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(0, 122, 255, 0.3); }
+  50%       { box-shadow: 0 0 0 6px rgba(0, 122, 255, 0); }
 }
-.btn-primary:hover  { background-color: #2563eb; }
-.btn-primary:active { transform: scale(0.97); }
+.animate-pulse-glow { animation: pulseGlow 1.5s ease-in-out infinite; }
 
-.btn-ghost {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.5rem 1.25rem;
-  border-radius: 0.625rem;
-  font-size: 0.875rem;
-  font-weight: 500;
-  background-color: transparent;
-  color: var(--text-secondary);
-  border: 1px solid var(--divider);
-  transition: background-color 150ms;
-  cursor: pointer;
+/* Success flash */
+@keyframes successFlash {
+  0%   { background-color: rgba(52, 199, 89, 0.15); }
+  100% { background-color: transparent; }
 }
-.btn-ghost:hover { background-color: var(--hover-bg); }
+.animate-success-flash { animation: successFlash 600ms ease-out forwards; }

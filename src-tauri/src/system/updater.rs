@@ -35,10 +35,7 @@ pub async fn check_and_notify(app: &AppHandle) {
             let app_clone = app.clone();
             // 后台下载安装：使用 tauri::async_runtime::spawn 避免 reactor 问题
             tauri::async_runtime::spawn(async move {
-                match update
-                    .download_and_install(|_dl, _total| {}, || {})
-                    .await
-                {
+                match update.download_and_install(|_dl, _total| {}, || {}).await {
                     Ok(_) => {
                         emit_toast(
                             &app_clone,

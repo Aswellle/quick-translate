@@ -30,3 +30,10 @@ logs/
 # Env
 .env
 .env.local
+
+# Claude Code
+CLAUDE.md
+
+# Tauri signing keys (NEVER commit private key)
+~/.tauri/
+*.key

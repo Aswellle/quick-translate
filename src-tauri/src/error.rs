@@ -20,9 +20,7 @@ pub enum AppError {
     Timeout { timeout_secs: u64 },
 
     #[error("所有翻译源均不可用")]
-    AllProvidersFailed {
-        errors: Vec<(String, String)>,
-    },
+    AllProvidersFailed { errors: Vec<(String, String)> },
 
     // ---- 输入错误 ----
     #[error("未检测到选中文本")]
@@ -38,11 +36,11 @@ pub enum AppError {
     #[error("剪贴板操作失败：{0}")]
     ClipboardError(String),
 
-    #[error("快捷键注册失败：{hotkey} 可能已被其他程序占用")]
-    HotkeyConflict { hotkey: String },
-
     #[error("数据库错误：{0}")]
     DatabaseError(String),
+
+    #[error("数据库迁移失败：{message}")]
+    DatabaseMigration { message: String },
 
     #[error("配置错误：{0}")]
     ConfigError(String),
@@ -84,8 +82,8 @@ impl AppError {
             Self::NonTextContent => "NON_TEXT_CONTENT",
             Self::SameLanguage { .. } => "SAME_LANGUAGE",
             Self::ClipboardError(_) => "CLIPBOARD_ERROR",
-            Self::HotkeyConflict { .. } => "HOTKEY_CONFLICT",
             Self::DatabaseError(_) => "DATABASE_ERROR",
+            Self::DatabaseMigration { .. } => "DB_MIGRATION_FAILED",
             Self::ConfigError(_) => "CONFIG_ERROR",
             Self::WindowError(_) => "WINDOW_ERROR",
             Self::CryptoError(_) => "CRYPTO_ERROR",
@@ -110,8 +108,6 @@ impl From<reqwest::Error> for AppError {
     fn from(e: reqwest::Error) -> Self {
         if e.is_timeout() {
             AppError::Timeout { timeout_secs: 5 }
-        } else if e.is_connect() || e.is_request() {
-            AppError::NetworkError(e.to_string())
         } else {
             AppError::NetworkError(e.to_string())
         }
