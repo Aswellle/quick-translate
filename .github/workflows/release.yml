@@ -75,6 +75,12 @@ jobs:
         run: npm audit --audit-level=high
         continue-on-error: false
 
+      # ── 预装 WiX 4（MSI 打包工具）────────────────────────────────────────
+      # Tauri bundler 在运行时从 GitHub 下载 WiX，会因网络 504 失败；
+      # 提前安装后 bundler 直接使用本地工具链，避免 CI 网络超时。
+      - name: Install WiX toolset
+        run: dotnet tool install --global wix
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
