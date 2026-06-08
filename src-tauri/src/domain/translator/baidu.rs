@@ -206,7 +206,7 @@ impl TranslationProvider for BaiduProvider {
         if self.app_id.is_empty() || self.secret_key.is_empty() {
             return Ok(false);
         }
-        match self.translate("hello", "zh", None).await {
+        match self.translate("hello", "zh").await {
             Ok(_) => Ok(true),
             Err(AppError::AuthError { .. }) => Ok(false),
             Err(e) => Err(e),

@@ -161,7 +161,7 @@ impl TranslationProvider for DeepLProvider {
         }
 
         // 发送一个极短文本的测试翻译
-        match self.translate("hi", "zh", None).await {
+        match self.translate("hi", "zh").await {
             Ok(_) => Ok(true),
             Err(AppError::AuthError { .. }) => Ok(false),
             Err(e) => Err(e),

@@ -209,7 +209,7 @@ impl TranslationProvider for YoudaoProvider {
         if self.app_key.is_empty() || self.app_secret.is_empty() {
             return Ok(false);
         }
-        match self.translate("hello", "zh", None).await {
+        match self.translate("hello", "zh").await {
             Ok(_) => Ok(true),
             Err(AppError::AuthError { .. }) => Ok(false),
             Err(e) => Err(e),
