@@ -119,10 +119,10 @@ jobs:
           MSI_URL=""
           for i in $(seq 1 30); do
             MSI_SIG_URL=$(gh release view "$TAG" --json assets \
-              --jq '.assets[] | select(.name | endswith(".msi.sig")) | .browser_download_url' \
+              --jq '.assets[] | select(.name | endswith(".msi.zip.sig")) | .browser_download_url' \
               --repo "${{ github.repository }}" 2>/dev/null || true)
             MSI_URL=$(gh release view "$TAG" --json assets \
-              --jq '.assets[] | select(.name | endswith(".msi") and (.name | endswith(".msi.sig") | not)) | .browser_download_url' \
+              --jq '.assets[] | select(.name | endswith(".msi.zip") and (.name | endswith(".msi.zip.sig") | not)) | .browser_download_url' \
               --repo "${{ github.repository }}" 2>/dev/null || true)
             if [ -n "$MSI_SIG_URL" ] && [ -n "$MSI_URL" ]; then
               echo "Assets found after $i attempt(s)"
@@ -134,7 +134,7 @@ jobs:
 
           # ── 内容验证：URL 或签名为空则立即失败，不发布损坏的 manifest ──
           if [ -z "$MSI_URL" ]; then
-            echo "ERROR: MSI download URL not found after polling — check asset names in the release"
+            echo "ERROR: MSI .zip download URL not found after polling — check asset names in the release"
             gh release view "$TAG" --json assets --jq '.assets[].name' --repo "${{ github.repository }}"
             exit 1
           fi
