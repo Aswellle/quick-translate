@@ -125,7 +125,7 @@ cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
 npm run tauri build
 ```
 
-> **注意**：本项目为 **Windows 专属**，剪贴板模块依赖 `windows-sys`（`GetCursorPos` / `SendInput`），macOS / Linux 无对应实现。
+> **注意**：本项目为 **Windows 平台用户专用**，剪贴板模块依赖 `windows-sys`（`GetCursorPos` / `SendInput`）。
 
 ### 技术栈
 
