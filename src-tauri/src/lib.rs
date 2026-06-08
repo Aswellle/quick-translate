@@ -62,7 +62,7 @@ pub fn run() {
                     // ensure_popup_window 已调用 show()，无需再次 show/focus
                     tracing::info!("[on_window_event] onboarding 关闭，开始 ensure_popup_window");
                     let app_h = window.app_handle();
-                    system::translation_flow::ensure_popup_window(&app_h);
+                    system::translation_flow::ensure_popup_window(app_h);
                     let _ = window.close();
                     tracing::info!("[on_window_event] onboarding 已关闭，popup 应该可见");
                 } else {
