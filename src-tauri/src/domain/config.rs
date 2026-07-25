@@ -190,10 +190,10 @@ fn load_config_from_db(conn: &Connection) -> Result<AppConfig, AppError> {
                 config.provider = ps(&raw).unwrap_or(config.provider);
             }
             "auto_start" => {
-                config.auto_start = raw.trim() == "true";
+                config.auto_start = decode(&raw) == "true";
             }
             "history_limit" => {
-                if let Ok(n) = raw.trim().parse::<i64>() {
+                if let Ok(n) = decode(&raw).parse::<i64>() {
                     config.history_limit = n;
                 }
             }
@@ -201,13 +201,13 @@ fn load_config_from_db(conn: &Connection) -> Result<AppConfig, AppError> {
                 config.theme = ps(&raw).unwrap_or(config.theme);
             }
             "fallback_enabled" => {
-                config.fallback_enabled = raw.trim() == "true";
+                config.fallback_enabled = decode(&raw) == "true";
             }
             "onboarding_completed" => {
-                config.onboarding_completed = raw.trim() == "true";
+                config.onboarding_completed = decode(&raw) == "true";
             }
             "clipboard_monitor_enabled" => {
-                config.clipboard_monitor_enabled = raw.trim() == "true";
+                config.clipboard_monitor_enabled = decode(&raw) == "true";
             }
             _ => {}
         }
@@ -217,4 +217,55 @@ fn load_config_from_db(conn: &Connection) -> Result<AppConfig, AppError> {
 
 fn ps(raw: &str) -> Option<String> {
     serde_json::from_str::<String>(raw).ok()
+}
+
+/// 容错解码存储值。
+///
+/// `set()` / `set_batch()` 用 `serde_json::to_string()` 写入，所以布尔与整数在库中
+/// 是带引号的 JSON 字符串（如 `"true"`、`"200"`）。此前布尔/整数读取路径用裸比较
+/// （`raw.trim() == "true"`），带引号的值永远不匹配 → 所有布尔配置重启后读成 false，
+/// 导致划词翻译被 suspend + onboarding 未完成双重拦截。
+///
+/// 优先按 JSON 字符串解码，失败则回退裸字符串（兼容手工写入的历史数据）。
+fn decode(raw: &str) -> String {
+    serde_json::from_str::<String>(raw).unwrap_or_else(|_| raw.trim().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode;
+
+    /// 模拟 set() 的写入编码，确保 write → read 往返一致
+    fn encode(value: &str) -> String {
+        serde_json::to_string(value).unwrap()
+    }
+
+    #[test]
+    fn bool_roundtrip_through_json_encoding() {
+        // 回归：此前读取用裸比较，encode("true") == "\"true\"" 永远不等于 "true"，
+        // 导致 clipboard_monitor_enabled / onboarding_completed 重启后全变 false
+        assert_eq!(decode(&encode("true")), "true");
+        assert_eq!(decode(&encode("false")), "false");
+        assert!(decode(&encode("true")) == "true");
+        assert!(decode(&encode("false")) != "true");
+    }
+
+    #[test]
+    fn int_roundtrip_through_json_encoding() {
+        assert_eq!(decode(&encode("200")).parse::<i64>().unwrap(), 200);
+    }
+
+    #[test]
+    fn string_roundtrip_through_json_encoding() {
+        assert_eq!(decode(&encode("zh")), "zh");
+        assert_eq!(decode(&encode("system")), "system");
+    }
+
+    #[test]
+    fn falls_back_to_bare_value_for_legacy_rows() {
+        // 手工写入或旧版本遗留的裸值仍需可读
+        assert_eq!(decode("true"), "true");
+        assert_eq!(decode(" true "), "true");
+        assert_eq!(decode("200"), "200");
+    }
 }
