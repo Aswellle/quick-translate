@@ -17,13 +17,22 @@ export function useTauriEvent<T>(
   deps: unknown[] = []
 ) {
   useEffect(() => {
+    // cancelled 标志修复注册竞态：listen() 是异步的，若 cleanup 在 Promise
+    // resolve 前执行（StrictMode 双调用、或快速卸载），unlisten 仍为 undefined，
+    // 解绑变成空操作 → 监听器永久泄漏，事件被重复处理。
     let unlisten: UnlistenFn | undefined;
+    let cancelled = false;
 
     listen<T>(event, handler).then((fn) => {
-      unlisten = fn;
+      if (cancelled) {
+        fn(); // cleanup 已发生，立即解绑
+      } else {
+        unlisten = fn;
+      }
     });
 
     return () => {
+      cancelled = true;
       unlisten?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

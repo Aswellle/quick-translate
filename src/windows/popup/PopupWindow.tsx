@@ -158,7 +158,11 @@ export function PopupWindow() {
   //   因为 startDragging() 会导致 OS 层短暂 blur，不应触发 hidePopup。
   useEffect(() => {
     const appWindow = getCurrentWebviewWindow();
+    // cancelled 标志修复注册竞态：onFocusChanged() 异步注册，若 cleanup 在
+    // Promise resolve 前执行（StrictMode 双调用），unlisten 仍为 undefined →
+    // 首个监听器永久泄漏，失焦时 hidePopup 被重复调用两次。
     let unlisten: (() => void) | undefined;
+    let cancelled = false;
 
     appWindow
       .onFocusChanged(({ payload: focused }) => {
@@ -167,10 +171,17 @@ export function PopupWindow() {
         }
       })
       .then((fn) => {
-        unlisten = fn;
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
       });
 
-    return () => unlisten?.();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   }, []);
 
   // ── 渲染 ──
