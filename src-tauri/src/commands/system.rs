@@ -9,8 +9,14 @@ use crate::system::clipboard;
 use crate::types::ToastPayload;
 
 /// 将文本写入剪贴板（前端"复制"按钮触发）
+///
+/// 写入前标记 clipboard_monitor：下次监控轮询检测到此内容时静默吸收，
+/// 不触发二次翻译（否则复制译文/原文会被监控当作新剪贴板内容重新翻译）。
 #[tauri::command]
-pub async fn copy_to_clipboard(text: String) -> Result<(), AppError> {
+pub async fn copy_to_clipboard(app: AppHandle, text: String) -> Result<(), AppError> {
+    app.state::<crate::state::AppState>()
+        .clipboard_monitor
+        .mark_app_write();
     clipboard::write_clipboard_text(&text)
 }
 

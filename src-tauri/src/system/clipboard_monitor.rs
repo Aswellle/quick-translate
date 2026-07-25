@@ -25,6 +25,9 @@ pub struct MonitorController {
     /// hide_popup 请求重置标志：下次循环时清空 last_text，
     /// 确保关闭浮窗后再次复制相同文本仍能触发翻译
     pub reset_requested: Arc<AtomicBool>,
+    /// app 主动写剪贴板标志：下次循环时将当前内容静默吸收进 last_text，
+    /// 防止 copy_to_clipboard（复制译文/原文按钮）触发二次翻译
+    pub app_wrote_clipboard: Arc<AtomicBool>,
 }
 
 /// 启动剪贴板监控后台任务（在 lib.rs setup 中调用）
@@ -32,6 +35,7 @@ pub fn start_monitor(app: AppHandle) -> MonitorController {
     let controller = MonitorController {
         suspended: Arc::new(AtomicBool::new(false)),
         reset_requested: Arc::new(AtomicBool::new(false)),
+        app_wrote_clipboard: Arc::new(AtomicBool::new(false)),
     };
     let controller_thread = controller.clone();
 
@@ -68,6 +72,13 @@ impl MonitorController {
     pub fn reset_last_text(&self) {
         self.reset_requested.store(true, Ordering::SeqCst);
         tracing::info!("[MonitorController] reset_last_text() 已请求");
+    }
+
+    /// 通知监控线程 app 刚主动写入剪贴板（复制译文/原文按钮）。
+    /// 下次循环时将新内容静默吸收进 last_text，不触发翻译。
+    pub fn mark_app_write(&self) {
+        self.app_wrote_clipboard.store(true, Ordering::SeqCst);
+        tracing::info!("[MonitorController] mark_app_write() 已标记");
     }
 }
 
@@ -124,6 +135,15 @@ fn clipboard_monitor_thread(app: AppHandle, controller: Arc<MonitorController>) 
         };
 
         let current_normalized = clipboard::normalize_text(&current);
+
+        // app 主动写入剪贴板（复制译文/原文）：静默吸收，不触发翻译
+        if controller.app_wrote_clipboard.swap(false, Ordering::SeqCst) {
+            tracing::info!("[clipboard_monitor] 检测到 app 写入，已吸收 len={}", current_normalized.len());
+            last_text = Some(current);
+            pending_text = None;
+            pending_timer = None;
+            continue;
+        }
 
         // 跳过空白或极短内容
         if current_normalized.trim().len() < 2 {
