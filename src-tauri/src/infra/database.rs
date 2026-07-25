@@ -139,7 +139,8 @@ pub fn run_migrations(conn: &Connection) -> Result<(), AppError> {
 
     // 迁移列表：(版本号, 迁移函数)
     type MigrationFn = fn(&Transaction) -> Result<(), AppError>;
-    let migrations: &[(i64, MigrationFn)] = &[(1, migrate_v1), (2, migrate_v2), (3, migrate_v3)];
+    let migrations: &[(i64, MigrationFn)] =
+        &[(1, migrate_v1), (2, migrate_v2), (3, migrate_v3), (4, migrate_v4)];
 
     for &(version, migration_fn) in migrations {
         if current_version >= version {
@@ -212,6 +213,15 @@ fn migrate_v3(tx: &Transaction) -> Result<(), AppError> {
          DROP TRIGGER IF EXISTS trg_records_ad;",
     )
     .map_err(|e| AppError::DatabaseError(format!("Schema v3 迁移失败: {}", e)))
+}
+
+// ──────────── Migration v4 ────────────
+
+/// Migration v4：删除遗留的 `hotkey` 配置项
+/// 早期快捷键方案的残留，`AppConfig` 已无对应字段，读取时被 `_ => {}` 忽略
+fn migrate_v4(tx: &Transaction) -> Result<(), AppError> {
+    tx.execute_batch("DELETE FROM app_config WHERE key = 'hotkey';")
+        .map_err(|e| AppError::DatabaseError(format!("Schema v4 迁移失败: {}", e)))
 }
 
 // ──────────── SQL 常量 ────────────

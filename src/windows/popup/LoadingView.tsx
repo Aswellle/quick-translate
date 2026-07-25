@@ -3,7 +3,7 @@
 
 export function LoadingView() {
   return (
-    <div className="p-4 space-y-3 animate-popup">
+    <div className="px-4 pb-4 pt-1 space-y-3 animate-popup">
       {/* 语言标签骨架 */}
       <div className="skeleton h-3 w-24 rounded" />
 

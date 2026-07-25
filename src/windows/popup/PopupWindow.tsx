@@ -1,7 +1,7 @@
 // src/windows/popup/PopupWindow.tsx
 // 翻译浮窗主组件（macOS 风格 — 灵动有活力）
 
-import { useEffect, useCallback, useRef } from "react";
+import { useEffect, useCallback, useRef, useState } from "react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { EVENTS } from "@/lib/constants";
@@ -12,10 +12,17 @@ import { LoadingView } from "./LoadingView";
 import { ResultView } from "./ResultView";
 import { ErrorView } from "./ErrorView";
 import { ErrorBoundary } from "./ErrorBoundary";
+import { TrafficLights } from "./TrafficLights";
 import type {
   TranslationResultPayload,
   TranslationErrorPayload,
 } from "@/lib/types";
+
+// 浮窗尺寸常量（与后端 resize_popup 的 clamp 范围保持一致）
+const WIDTH_NORMAL = 400;
+const WIDTH_WIDE = 520;
+const COLLAPSED_H = 44;
+const LOADING_H = 160;
 
 export function PopupWindow() {
   const { status, result, errorCode, errorMessage, setLoading, setResult, setError } =
@@ -27,12 +34,38 @@ export function PopupWindow() {
   // 拖拽进行中标志：阻止 onFocusChanged 在 startDragging 期间误关弹窗
   const isDragging = useRef(false);
 
+  // ── 红绿灯窗体状态 ──
+  // collapsed：折叠成仅标题栏的紧凑条（替代无任务栏可去的 minimize）
+  // wide：阅读宽度（520）/ 标准宽度（400）切换（替代无意义的全屏）
+  const [collapsed, setCollapsed] = useState(false);
+  const [wide, setWide] = useState(false);
+
+  const width = wide ? WIDTH_WIDE : WIDTH_NORMAL;
+
+  const handleClose = useCallback(() => {
+    hidePopup().catch(console.error);
+  }, []);
+
+  // 折叠时立即压到标题栏高度；展开时交由下方 measure effect 重新量算内容高度
+  const handleToggleCollapse = useCallback(() => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      if (next) resizePopup(width, COLLAPSED_H).catch(console.error);
+      return next;
+    });
+  }, [width]);
+
+  const handleToggleWide = useCallback(() => {
+    setWide((prev) => !prev);
+  }, []);
+
   // ── 监听翻译 Loading 事件 ──
+  // 新一轮翻译开始：复位折叠态（否则新结果会被压在紧凑条里看不见）
   const handleLoading = useCallback(() => {
     setLoading();
-    // 重置为骨架屏高度（LoadingView ≈ 160px）
-    resizePopup(400, 160).catch(console.error);
-  }, [setLoading]);
+    setCollapsed(false);
+    resizePopup(width, LOADING_H).catch(console.error);
+  }, [setLoading, width]);
   useTauriEvent<unknown>(EVENTS.TRANSLATION_LOADING, handleLoading);
 
   // ── 监听翻译结果事件 ──
@@ -54,28 +87,61 @@ export function PopupWindow() {
   useTauriEvent<TranslationErrorPayload>(EVENTS.TRANSLATION_ERROR, handleError);
 
   // ── 翻译结果到达后，测量内容动态调整窗口大小 ──
+  // 依赖含 collapsed/wide：折叠展开或宽度切换后需重新量算（换行数变了，高度也变）
   useEffect(() => {
-    if (!result) return;
+    if (!result || collapsed) return;
     const id = requestAnimationFrame(() => {
       const container = popupRef.current;
       if (!container) return;
-      const totalH = container.offsetHeight;
-      resizePopup(400, totalH).catch(console.error);
+      resizePopup(width, container.offsetHeight).catch(console.error);
     });
     return () => cancelAnimationFrame(id);
-  }, [result]);
+  }, [result, collapsed, width]);
 
-  // ── 仅 Escape 关闭浮窗（不影响文本选择等其他按键行为）─────────────
+  // ── 键盘快捷键：Escape / 空格 关闭，Enter 折叠切换 ────────────────
+  //
+  // 空格作为关闭键需要三重防护，否则会吃掉正常输入：
+  //   1. 焦点在输入框/文本域/contenteditable 时放行（让用户能打空格）
+  //   2. 存在文本选区时放行（用户正在选译文，空格不该关窗）
+  //   3. e.repeat 时忽略（长按不重复触发）
   useEffect(() => {
+    const isEditableTarget = (t: EventTarget | null) => {
+      const el = t as HTMLElement | null;
+      if (!el) return false;
+      const tag = el.tagName;
+      return (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        el.isContentEditable
+      );
+    };
+
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        hidePopup().catch(console.error);
+        handleClose();
+        return;
+      }
+
+      // " " 是空格键的标准 KeyboardEvent.key 值
+      if (e.key === " ") {
+        if (e.repeat || isEditableTarget(e.target)) return;
+        if (!window.getSelection()?.isCollapsed) return;
+        e.preventDefault();
+        handleClose();
+        return;
+      }
+
+      if (e.key === "Enter" && !isEditableTarget(e.target)) {
+        e.preventDefault();
+        handleToggleCollapse();
       }
     };
+
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, []);
+  }, [handleClose, handleToggleCollapse]);
 
   // ── 点击窗体外部区域时关闭 ──────────────────────────────────────────
   useEffect(() => {
@@ -83,12 +149,12 @@ export function PopupWindow() {
       const popup = popupRef.current;
       if (!popup) return;
       if (!popup.contains(e.target as Node)) {
-        hidePopup().catch(console.error);
+        handleClose();
       }
     };
     window.addEventListener("click", handleWindowClick);
     return () => window.removeEventListener("click", handleWindowClick);
-  }, []);
+  }, [handleClose]);
 
   // ── 拖拽移动窗体 ────────────────────────────────────────────────────
   // 整个窗口区域可拖拽：mousedown 触发 Tauri startDragging
@@ -189,22 +255,48 @@ export function PopupWindow() {
     <ErrorBoundary>
       <div
         ref={popupRef}
-        className="popup-container w-full min-h-[60px] overflow-hidden cursor-grab active:cursor-grabbing select-none"
-        style={{ minWidth: "280px", maxWidth: "520px" }}
+        className="popup-container w-full overflow-hidden cursor-grab active:cursor-grabbing select-none"
         onMouseDown={handlePopupMouseDown}
       >
-        {status === "idle" && (
-          <div className="px-4 py-4 text-xs text-[var(--text-tertiary)] text-center">
-            等待翻译…
-          </div>
-        )}
-        {status === "loading" && <LoadingView />}
-        {status === "success" && result && <ResultView result={result} />}
-        {status === "error" && (
-          <ErrorView
-            code={errorCode ?? "UNKNOWN"}
-            message={errorMessage ?? undefined}
+        {/* ── 标题栏：红绿灯 + 折叠态摘要 ── */}
+        <div className="popup-titlebar">
+          <TrafficLights
+            onClose={handleClose}
+            onToggleCollapse={handleToggleCollapse}
+            onToggleWide={handleToggleWide}
+            collapsed={collapsed}
+            wide={wide}
           />
+          {collapsed && (
+            <span className="popup-titlebar__summary">
+              {status === "success" && result
+                ? result.translated_text
+                : status === "loading"
+                  ? "翻译中…"
+                  : status === "error"
+                    ? "翻译失败"
+                    : "等待翻译…"}
+            </span>
+          )}
+        </div>
+
+        {/* ── 内容区（折叠时隐藏）── */}
+        {!collapsed && (
+          <>
+            {status === "idle" && (
+              <div className="px-4 pb-4 text-xs text-[var(--text-tertiary)] text-center">
+                等待翻译…
+              </div>
+            )}
+            {status === "loading" && <LoadingView />}
+            {status === "success" && result && <ResultView result={result} />}
+            {status === "error" && (
+              <ErrorView
+                code={errorCode ?? "UNKNOWN"}
+                message={errorMessage ?? undefined}
+              />
+            )}
+          </>
         )}
       </div>
     </ErrorBoundary>

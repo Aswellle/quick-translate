@@ -40,8 +40,9 @@ pub async fn hide_popup(app: AppHandle) -> Result<(), AppError> {
 pub async fn resize_popup(app: AppHandle, width: f64, height: f64) -> Result<(), AppError> {
     if let Some(window) = app.get_webview_window("popup") {
         // 限制尺寸范围，避免过大或过小
+        // 下限 40：折叠态（仅红绿灯标题栏）需要约 44px
         let w = width.clamp(280.0, 520.0);
-        let h = height.clamp(60.0, 480.0);
+        let h = height.clamp(40.0, 480.0);
         window
             .set_size(tauri::LogicalSize::new(w, h))
             .map_err(|e: tauri::Error| AppError::WindowError(e.to_string()))?;

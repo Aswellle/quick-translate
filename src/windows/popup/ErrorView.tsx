@@ -13,7 +13,7 @@ export function ErrorView({ code, message }: ErrorViewProps) {
     ERROR_MESSAGES[code] ?? message ?? ERROR_MESSAGES["UNKNOWN"];
 
   return (
-    <div className="animate-popup px-5 py-6 flex flex-col items-center gap-3 text-center">
+    <div className="animate-popup px-5 pb-6 pt-2 flex flex-col items-center gap-3 text-center">
       {/* 错误图标 — macOS SF Symbol 风格 */}
       <div className="w-11 h-11 rounded-full bg-gradient-to-br from-red-50 to-red-100 dark:from-red-950/30 dark:to-red-900/20 flex items-center justify-center shadow-sm">
         <svg

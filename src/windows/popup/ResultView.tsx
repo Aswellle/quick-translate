@@ -18,8 +18,8 @@ export function ResultView({ result }: ResultViewProps) {
 
   return (
     <div className="animate-popup">
-      {/* ── 顶部：语言方向标签 ── */}
-      <div className="px-4 pt-3.5 pb-2.5 flex items-center gap-2">
+      {/* ── 顶部：语言方向标签（pt 收窄，上方已有红绿灯标题栏）── */}
+      <div className="px-4 pt-1 pb-2.5 flex items-center gap-2">
         <span className="text-[11px] font-medium text-[var(--text-tertiary)] tracking-wide uppercase">
           {sourceLang}
         </span>
@@ -51,7 +51,7 @@ export function ResultView({ result }: ResultViewProps) {
 
       {/* ── 翻译结果文本 ── */}
       <div
-        className="selectable px-4 py-3.5 text-[13px] leading-[1.8] text-[var(--text-primary)] overflow-y-auto whitespace-pre-wrap break-words"
+        className="selectable px-4 py-3.5 text-[13.5px] leading-[1.75] tracking-[0.005em] text-[var(--text-primary)] overflow-y-auto whitespace-pre-wrap break-words"
         style={{ maxHeight: "360px", fontFamily: "var(--font-ui)" }}
       >
         {result.translated_text}
@@ -70,6 +70,11 @@ export function ResultView({ result }: ResultViewProps) {
 
         {/* 右：meta 信息 */}
         <div className="flex items-center gap-2.5">
+          {/* 快捷键提示：让"空格关闭"可被发现 */}
+          <span className="hidden sm:flex items-center gap-1 text-[10px] text-[var(--text-tertiary)]">
+            <kbd className="kbd-hint">空格</kbd>
+            关闭
+          </span>
           {import.meta.env.DEV && (
             <span className="text-[10px] text-[var(--text-tertiary)] tabular-nums">
               {result.duration_ms}ms

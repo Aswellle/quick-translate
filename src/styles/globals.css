@@ -151,6 +151,7 @@ html, body, #root {
    ============================================================ */
 
 .popup-container {
+  position: relative;
   background: var(--popup-bg);
   backdrop-filter: blur(28px) saturate(180%) brightness(1.02);
   -webkit-backdrop-filter: blur(28px) saturate(180%) brightness(1.02);
@@ -158,7 +159,134 @@ html, body, #root {
   border-radius: var(--radius-lg);
   box-shadow: var(--popup-shadow);
   overflow: hidden;
+  /* 宽度/高度切换时的平滑过渡 */
+  transition: width 260ms var(--ease-out-expo);
 }
+
+/* 液态玻璃质感强化：顶部内高光 + 极淡渐变，模拟玻璃边缘折射。
+   用 ::before 叠加而非改 background，保留 backdrop-filter 的透明模糊。 */
+.popup-container::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.14) 0%,
+    rgba(255, 255, 255, 0.04) 22%,
+    transparent 55%
+  );
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.28);
+}
+
+:root.dark .popup-container::before {
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.07) 0%,
+    rgba(255, 255, 255, 0.02) 22%,
+    transparent 55%
+  );
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.10);
+}
+
+/* ============================================================
+   Popup Titlebar + Traffic Lights
+   ============================================================ */
+
+.popup-titlebar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  /* 32px 容纳 26px 命中区（14px 色点 + 上下各 6px padding） */
+  height: 32px;
+  padding: 2px 0.75rem 0;
+}
+
+/* 折叠态摘要：单行截断显示译文 */
+.popup-titlebar__summary {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  animation: fadeIn 180ms var(--ease-out-expo) forwards;
+}
+
+/* 键盘按键提示胶囊 */
+.kbd-hint {
+  font-family: var(--font-ui);
+  font-size: 9.5px;
+  line-height: 1;
+  padding: 2.5px 4.5px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-tertiary);
+  border: 1px solid var(--border-secondary);
+  color: var(--text-tertiary);
+}
+
+.traffic-lights {
+  display: flex;
+  align-items: center;
+  /* gap 为 0：相邻按钮各自 6px 的透明 padding 已构成 12px 视觉间距，
+     且命中区彼此紧邻无死区，鼠标横向移动即可命中下一个 */
+  gap: 0;
+  flex-shrink: 0;
+  /* 抵消最左侧按钮的 padding，使色点与容器左边缘对齐 */
+  margin-left: -6px;
+}
+
+/* 命中区放大：色点视觉直径 14px，但用 padding 把可点击区域撑到 26x26，
+   远大于鼠标指针热区，不需要精确瞄准。background-clip: content-box
+   让背景色只画在 content 区域（即那 14px 的圆点）上，padding 保持透明。 */
+.traffic-light {
+  width: 14px;
+  height: 14px;
+  padding: 6px;
+  box-sizing: content-box;
+  background-clip: content-box;
+  border: none;
+  background-color: transparent;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: filter 150ms ease, transform 150ms var(--ease-spring);
+}
+
+.traffic-light svg {
+  width: 14px;
+  height: 14px;
+  /* 字形默认隐藏，hover 任意按钮时整组显出 */
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+
+.traffic-lights.group:hover .traffic-light:not(:disabled) svg { opacity: 1; }
+
+.traffic-light:hover:not(:disabled) { filter: brightness(1.08); }
+.traffic-light:active:not(:disabled) { transform: scale(0.9); filter: brightness(0.9); }
+
+.traffic-light:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.traffic-light:disabled { cursor: default; opacity: 0.45; }
+
+/* 用 background-color（而非 background 简写）以保留 background-clip: content-box */
+.traffic-light--close    { background-color: #ff5f57; color: rgba(94, 0, 0, 0.75); }
+.traffic-light--collapse { background-color: #febc2e; color: rgba(92, 59, 0, 0.75); }
+.traffic-light--wide     { background-color: #28c840; color: rgba(0, 68, 12, 0.75); }
+
+/* 注意：这里不做"窗口失焦转灰"。曾用 body:not(:focus-within) 实现，但
+   :focus-within 要求有后代元素持有 DOM 焦点，而浮窗弹出时窗口虽有 OS 焦点、
+   DOM 内却无可聚焦元素 → 三个点一开始全是灰的，必须先点一下才变彩色。
+   浮窗是短生命周期的置顶窗口，恒定显示彩色更合适。 */
 
 /* ── macOS-style card ── */
 .macos-card {
@@ -316,6 +444,20 @@ select.input-field {
   to   { opacity: 1; transform: translateY(0);   }
 }
 .animate-popup { animation: fadeInUp 200ms var(--ease-out-expo) forwards; }
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* 尊重系统"减少动态效果"偏好：关闭动画与过渡，保留玻璃质感 */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
 
 /* Checkmark pop */
 @keyframes checkmark {
