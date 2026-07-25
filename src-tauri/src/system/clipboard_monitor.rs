@@ -12,6 +12,23 @@ use tauri::{AppHandle, Manager};
 use crate::state::AppState;
 use crate::system::clipboard;
 
+/// 读取系统剪贴板序列号：每次剪贴板被写入都会自增。
+///
+/// 用于区分"同一段文本被用户重新复制"（序列号变化）与"文本原地未动"
+/// （序列号不变）。仅靠文本内容比较无法区分这两种情况。
+#[cfg(target_os = "windows")]
+fn clipboard_seq() -> u32 {
+    // SAFETY: 无参数、无副作用的 Win32 查询调用，失败时返回 0
+    unsafe { windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber() }
+}
+
+/// 非 Windows 平台无对应原语，返回常量 0 使判定退化为纯文本比较。
+/// 代价：关闭浮窗后重新复制同一段文本不会再触发（不会出现浮窗弹回）。
+#[cfg(not(target_os = "windows"))]
+fn clipboard_seq() -> u32 {
+    0
+}
+
 /// 监控任务配置
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// 防抖延迟：剪贴板内容变化后等待此时间再触发翻译
@@ -100,6 +117,8 @@ fn clipboard_monitor_thread(app: AppHandle, controller: Arc<MonitorController>) 
     let mut last_text: Option<String> = None;
     let mut pending_text: Option<String> = None;
     let mut pending_timer: Option<std::time::Instant> = None;
+    // 上次判定时的剪贴板序列号，用于识别"同一段文本被重新复制"
+    let mut last_seq: u32 = clipboard_seq();
 
     loop {
         // 暂停时等待，不消耗 CPU
@@ -111,13 +130,24 @@ fn clipboard_monitor_thread(app: AppHandle, controller: Arc<MonitorController>) 
             continue;
         }
 
-        // 处理 hide_popup 发出的重置请求：清空 last_text，
-        // 使关闭浮窗后再次复制相同文本能重新触发翻译
+        // 处理 hide_popup 发出的重置请求。
+        //
+        // 此前这里把 last_text 置为 None，意图是"关闭后再次复制相同文本仍能触发"。
+        // 但剪贴板里那段文本并没有消失，下一轮轮询就把它当成全新内容，防抖到期后
+        // 立刻重新翻译 —— 浮窗关掉约 1 秒又自己弹回来，红色按钮/空格键看起来失效。
+        //
+        // 改为"吸收"当前剪贴板内容并记录剪贴板序列号：
+        //   同文本 + 同序列号 → 原地未动，不触发（浮窗保持关闭）
+        //   同文本 + 序列号变化 → 用户真的重新复制了一次，正常触发
         if controller.reset_requested.swap(false, Ordering::SeqCst) {
-            tracing::info!("[clipboard_monitor] last_text 已重置（hide_popup 触发）");
-            last_text = None;
+            last_text = clipboard.get_text().ok();
+            last_seq = clipboard_seq();
             pending_text = None;
             pending_timer = None;
+            tracing::info!(
+                "[clipboard_monitor] hide_popup 触发：已吸收当前剪贴板内容 seq={}",
+                last_seq
+            );
         }
 
         thread::sleep(POLL_INTERVAL);
@@ -140,6 +170,9 @@ fn clipboard_monitor_thread(app: AppHandle, controller: Arc<MonitorController>) 
         if controller.app_wrote_clipboard.swap(false, Ordering::SeqCst) {
             tracing::info!("[clipboard_monitor] 检测到 app 写入，已吸收 len={}", current_normalized.len());
             last_text = Some(current);
+            // 同步序列号：app 的写入本身会让序列号自增，若不同步则下一轮
+            // 会因"文本相同但序列号变化"被误判成用户重新复制
+            last_seq = clipboard_seq();
             pending_text = None;
             pending_timer = None;
             continue;
@@ -152,17 +185,21 @@ fn clipboard_monitor_thread(app: AppHandle, controller: Arc<MonitorController>) 
             continue;
         }
 
-        // 检测是否是新内容
+        // 检测是否是新内容。
+        // 文本变化 → 新内容；文本相同但剪贴板序列号变化 → 用户重新复制了同一段文本，
+        // 同样视为新内容（这是关闭浮窗后重复复制仍能触发翻译的依据）。
+        let current_seq = clipboard_seq();
         let is_new = match &last_text {
             Some(prev) => {
                 let prev_norm = clipboard::normalize_text(prev);
-                current_normalized != prev_norm
+                current_normalized != prev_norm || current_seq != last_seq
             }
             None => true,
         };
 
         if is_new {
             last_text = Some(current);
+            last_seq = current_seq;
             pending_text = Some(current_normalized);
             pending_timer = Some(std::time::Instant::now());
         } else {

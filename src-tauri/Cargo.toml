@@ -47,6 +47,8 @@ windows-sys = { version = "0.52", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Storage_FileSystem",
+    # GetClipboardSequenceNumber：区分"同一段文本被重新复制"与"文本原地未动"
+    "Win32_System_DataExchange",
 ] }
 
 [profile.release]
