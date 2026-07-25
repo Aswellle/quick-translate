@@ -1,6 +1,8 @@
 # .github/workflows/release.yml
-# 推送 v* tag 时自动构建 Windows 安装包，发布到 GitHub Releases
-# 并生成 latest.json 供 Tauri Updater 自动更新使用
+# 推送 v* tag 时自动构建 Windows 安装包，发布到 GitHub Releases。
+#
+# latest.json（Tauri Updater 自动更新清单）由 tauri-action 依据
+# tauri.conf.json 的 createUpdaterArtifacts 自动生成并上传，本文件无需干预。
 
 name: Release
 
@@ -103,79 +105,11 @@ jobs:
           prerelease: false
           args: --target x86_64-pc-windows-msvc
 
-  publish-update-manifest:
-    needs: build-windows
-    runs-on: ubuntu-latest
-    name: Publish update manifest (latest.json)
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Generate and upload latest.json
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${{ github.ref_name }}"
-          VERSION="${TAG#v}"
-
-          # ── 等待 Release assets 可用（轮询，最多等待 10 分钟）──────────
-          # Tauri 2 Windows MSI 签名文件命名：*.msi.sig（不是 *.msi.zip.sig）
-          MSI_SIG_URL=""
-          MSI_URL=""
-          for i in $(seq 1 30); do
-            MSI_SIG_URL=$(gh release view "$TAG" --json assets \
-              --jq '.assets[] | select(.name | endswith(".msi.zip.sig")) | .browser_download_url' \
-              --repo "${{ github.repository }}" 2>/dev/null || true)
-            MSI_URL=$(gh release view "$TAG" --json assets \
-              --jq '.assets[] | select(.name | endswith(".msi.zip") and (.name | endswith(".msi.zip.sig") | not)) | .browser_download_url' \
-              --repo "${{ github.repository }}" 2>/dev/null || true)
-            if [ -n "$MSI_SIG_URL" ] && [ -n "$MSI_URL" ]; then
-              echo "Assets found after $i attempt(s)"
-              break
-            fi
-            echo "Waiting for assets... attempt $i/30 (sleeping 20s)"
-            sleep 20
-          done
-
-          # ── 内容验证：URL 或签名为空则立即失败，不发布损坏的 manifest ──
-          if [ -z "$MSI_URL" ]; then
-            echo "ERROR: MSI .zip download URL not found after polling — check asset names in the release"
-            gh release view "$TAG" --json assets --jq '.assets[].name' --repo "${{ github.repository }}"
-            exit 1
-          fi
-          if [ -z "$MSI_SIG_URL" ]; then
-            echo "ERROR: MSI signature URL not found"
-            exit 1
-          fi
-
-          # ── 读取签名内容（.sig 文件是纯文本 base64 字符串）──────────────
-          MSI_SIG=$(curl -sL -H "Authorization: token $GITHUB_TOKEN" \
-            -H "Accept: application/octet-stream" "$MSI_SIG_URL")
-
-          if [ -z "$MSI_SIG" ]; then
-            echo "ERROR: MSI signature content is empty"
-            exit 1
-          fi
-
-          # ── 生成 latest.json（Tauri Updater 标准格式）───────────────────
-          cat > latest.json << EOF
-          {
-            "version": "${VERSION}",
-            "notes": "https://github.com/${{ github.repository }}/releases/tag/${TAG}",
-            "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "platforms": {
-              "windows-x86_64": {
-                "url": "${MSI_URL}",
-                "signature": "${MSI_SIG}"
-              }
-            }
-          }
-          EOF
-
-          echo "Generated latest.json:"
-          cat latest.json
-
-          # ── 上传到 Release ───────────────────────────────────────────────
-          gh release upload "$TAG" latest.json \
-            --clobber --repo "${{ github.repository }}"
+  # ── 已移除：publish-update-manifest job ──────────────────────────────
+  # 曾手工生成并上传 latest.json。自 6b9d165 启用 createUpdaterArtifacts 后，
+  # tauri-action 已自动产出完整的 latest.json（含 windows-x86_64 / -msi / -nsis
+  # 三个平台键与真实签名），该 job 变为冗余。
+  #
+  # 且它已失效：轮询的资产名是 *.msi.zip / *.msi.zip.sig，而 Tauri 2 不再将
+  # MSI 打成 zip，实际产物为 *.msi / *.msi.sig。轮询 30 次 × 20s 后必然报错，
+  # 把整个 run 标记为失败 —— 即使发行版本身完全正常，造成误导。
