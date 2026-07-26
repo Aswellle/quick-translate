@@ -1,221 +1,147 @@
+<div align="center">
+
+<img src="assets/banner.jpg" alt="QuickTranslate" width="720">
+
 # QuickTranslate
 
-> **系统级剪贴板翻译工具** — 复制即翻译，浮窗就地呈现，无需切换任何应用。
+### 复制，就是翻译。
 
-[![Version](https://img.shields.io/badge/version-0.1.2-blue)](https://github.com/Aswellle/quick-translate/releases)
-[![Platform](https://img.shields.io/badge/platform-Windows%20x64-informational)](#运行环境)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Tauri](https://img.shields.io/badge/Tauri-2.x-orange)](#)
-[![CI](https://github.com/Aswellle/quick-translate/actions/workflows/release.yml/badge.svg)](https://github.com/Aswellle/quick-translate/actions)
+**看到不认识的英文，`Ctrl+C` 一下。译文就浮在你光标旁边。**
 
----
+没有切窗口，没有开网页，没有粘贴框。手都不用离开键盘。
 
-## 它解决什么问题？
+[![下载](https://img.shields.io/badge/⬇_立即下载-Windows_x64-2563eb?style=for-the-badge)](https://github.com/Aswellle/quick-translate/releases/latest)
+[![版本](https://img.shields.io/github/v/release/Aswellle/quick-translate?style=for-the-badge&label=版本&color=555)](https://github.com/Aswellle/quick-translate/releases)
+[![体积](https://img.shields.io/badge/安装包-5MB-555?style=for-the-badge)](https://github.com/Aswellle/quick-translate/releases/latest)
 
-**场景一：阅读英文技术文档**
-你在 VS Code 里看报错堆栈，或在浏览器里读 MDN / GitHub Issues，遇到不确定的表达，只需 `Ctrl+C` 复制，翻译浮窗立刻出现在光标旁边，确认含义后 `Esc` 关闭，继续阅读。全程不离开当前窗口，不打断思路。
-
-**场景二：研究/阅读 PDF 论文**
-在 Adobe Reader、Zotero 或浏览器内嵌 PDF 中读文献，选中一段晦涩的英文摘要或结论，复制，0.x 秒内看到中文译文。无需打开翻译网站，无需粘贴——对比切来切去节省的是注意力，不只是时间。
-
-**场景三：处理外文邮件 / 即时消息**
-收到英文或日文客户邮件，在 Outlook / 企业微信 / Slack 里逐段复制，浮窗依次弹出。回复前再复制对方原文确认语气，一整封邮件处理完不用离开邮件客户端。
-
-**场景四：看外文字幕 / 文章**
-刷 YouTube 外文视频、看 Twitter/X 推文或海外新闻，遇到不认识的单词或俚语，复制，即刻得到翻译，并自动保存到历史记录，方便事后回顾和积累词汇。
-
-**场景五：程序员日常工作**
-在终端复制编译错误信息，在 Figma 复制英文设计术语，在 Jira 复制英文需求描述——任何能复制文本的地方都能触发翻译，不受应用类型限制。
+</div>
 
 ---
 
-## 核心特性
+## 你有没有经历过这个
 
-| 特性 | 说明 |
-|------|------|
-| **零操作触发** | 复制（`Ctrl+C`）即触发，剪贴板监控全自动，无需额外快捷键 |
-| **就地浮窗** | 弹窗紧贴光标位置，DPI 感知精确定位，支持拖移，`Esc` 或失焦自动关闭 |
-| **五大翻译源** | DeepL · 腾讯翻译君 · 百度翻译 · 有道翻译 · Google Translate |
-| **自动 Fallback** | 主翻译源失败时按优先级自动切换备用源，保障可用性 |
-| **翻译历史** | SQLite 本地持久化，支持关键词搜索、星标收藏、分页浏览 |
-| **API Key 加密存储** | AES-256-GCM 加密，密钥不明文落盘 |
-| **自动静默更新** | 启动 5 秒后后台检查更新，有新版本自动下载安装，Toast 提示进度 |
-| **极致轻量** | 安装包 ≤ 15MB，空闲内存 ≤ 50MB，CPU 占用接近 0% |
-| **高 DPI 适配** | 物理像素坐标转逻辑像素，150% / 200% 缩放下浮窗位置精确 |
-| **开机自启** | 可选注册表自启，状态可在设置中随时切换 |
+你在看一份英文文档。遇到一句读不懂的。
 
----
+于是你切到浏览器，找到翻译网站那个标签页（如果还没被你关掉），点进输入框，`Ctrl+V`，等它加载，读完译文，再切回文档 —— 然后花三秒钟找回刚才读到哪一行了。
 
-## 下载安装
+一次十几秒。听着不多。但一份文档下来你要做几十次，**真正被消耗掉的不是时间，是你刚刚建立起来的那点专注**。每一次切换，思路都得重新接上。
 
-前往 [GitHub Releases](https://github.com/Aswellle/quick-translate/releases) 下载最新版本：
+QuickTranslate 就是为了删掉这十几秒而存在的。
 
-| 文件 | 说明 |
-|------|------|
-| `QuickTranslate_x.x.x_x64_en-US.msi` | Windows 标准安装包（推荐） |
-| `QuickTranslate_x.x.x_x64-setup.exe` | Windows NSIS 安装包 |
+**复制。译文出现在光标旁边。看完按空格关掉。继续读。**
 
-> **系统要求**：Windows 10 / 11，x86_64，需安装 [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)（Windows 11 已内置）。
+没有第四步。
 
 ---
 
-## 快速上手
+## 它长在哪里，就在哪里工作
 
-1. 安装后首次启动，完成引导向导（设置目标语言、可选配置翻译源 API Key）
-2. 应用最小化到**系统托盘**，后台持续运行
-3. 在任意应用中**选中文本后复制**（`Ctrl+C`）
-4. 翻译浮窗自动弹出，显示译文、来源语言、翻译源
-5. 点击「译文」或「原文」按钮一键复制，或按 `Esc` / 点击浮窗外侧关闭
+它不挑应用。**任何能复制文字的地方，它都在。**
 
-> 可在设置中**暂停/恢复**剪贴板监控，避免特定场景下的误触发。
+**看技术文档** — VS Code 里的报错堆栈、MDN、GitHub Issues。复制那句看不懂的，扫一眼译文，`Esc` 关掉，视线都没离开屏幕中央。
+
+**读英文论文** — Adobe Reader、Zotero、浏览器内嵌 PDF 都一样。选中一段绕口的摘要，复制，译文就在旁边。PDF 里那些烦人的断行，它会自动接好再翻。
+
+**处理外文邮件** — Outlook、企业微信、Slack 里逐段复制，浮窗依次弹出。一整封邮件读完，你没离开过邮件客户端。
+
+**刷外文内容** — YouTube 视频标题、Twitter 推文、海外新闻。遇到不认识的俚语复制一下，顺手就存进了历史记录，晚上还能翻回来看。
+
+**日常搬砖** — 终端里的编译错误、Figma 里的英文术语、Jira 里的需求描述。都一样，复制即翻译。
 
 ---
 
-## 翻译源配置
+## 三个让你用得下去的细节
 
-右键托盘图标 → **设置** → **翻译源** 标签页
+产品好不好用，往往不在功能列表里，在这些地方：
 
-| 翻译源 | 所需凭证 | 免费额度 |
-|--------|---------|---------|
-| **Google Translate** | 无需配置 | 免费（非官方接口） |
-| **DeepL** | API Key（`xxxx:fx` 格式） | 500,000 字符 / 月 |
-| **腾讯翻译君** | SecretId + SecretKey | 500 万字符 / 月 |
+**浮窗不会挡住你正在读的那句话。** 它会算光标四周哪边空间大，往那边放。屏幕边缘也不会被截掉一半。多显示器、150% 或 200% 缩放都试过 —— 位置该在哪就在哪。
+
+**关掉它只需要一根手指。** 空格键。不是 `Ctrl+W`，不是找那个小 ×，就是空格。也可以按 `Esc`，或者点浮窗外面任何地方。左上角还有三颗仿 macOS 的红绿灯 —— 红色关闭，黄色折叠成一条（想留着待会儿再看），绿色把窗口拉宽（长文本更好读）。
+
+**翻译源坏了它自己会换。** 配了多个源的话，主力挂了会按顺序自动切下一个，你根本不会察觉。不用等报错，不用手动切。
+
+还有些不用你操心的：译文和原文一键复制、历史记录本地存着可以搜可以收藏、API Key 加密落盘、深浅色跟随系统、新版本后台静默装好。
+
+---
+
+## 五个翻译源，先用哪个都行
+
+| 翻译源 | 要配置吗 | 免费额度 |
+|:--|:--|:--|
+| **Google 翻译** | **不用，装完就能用** | 免费（非官方接口） |
+| **DeepL** | 一个 API Key | 50 万字符 / 月 |
+| **腾讯翻译君** | SecretId + Key | 500 万字符 / 月 |
 | **百度翻译** | AppId + 密钥 | 100 万字符 / 月 |
-| **有道翻译** | 应用 ID + 应用密钥 | 按量计费，有免费体验额度 |
+| **有道翻译** | 应用 ID + 密钥 | 有免费体验额度 |
 
-**Fallback 优先级**（启用后主源失败自动切换）：
-```
-DeepL → 腾讯翻译君 → 百度翻译 → 有道翻译 → Google Translate
-```
+**懒人路线**：装完，引导页点「暂时跳过」，立刻开始用 Google 源。
 
----
+**讲究一点**：DeepL 的中文质量确实更好，去官网注册拿个免费 Key（一分钟的事），配上就行。腾讯的免费额度大到日常用不完。
 
-## 开发环境
-
-### 依赖项
-
-| 工具 | 版本要求 | 说明 |
-|------|---------|------|
-| [Node.js](https://nodejs.org/) | ≥ 18 | 前端构建 |
-| [Rust](https://rustup.rs/) | stable ≥ 1.75 | 后端编译（通过 rustup 安装） |
-| [Tauri CLI](https://tauri.app/start/) | 2.x | `npm install` 时自动安装 |
-| Windows SDK / MSVC | 随 Rust 安装 | 需勾选 `Desktop development with C++` |
-
-### 本地开发
-
-```bash
-# 克隆并安装依赖
-git clone https://github.com/Aswellle/quick-translate.git
-cd quick-translate
-npm install
-
-# 开发模式（Rust 热重载 + Vite HMR）
-npm run tauri dev
-
-# 调整 Rust 日志级别
-RUST_LOG=debug npm run tauri dev
-
-# TypeScript 类型检查
-npx tsc --noEmit
-
-# Rust lint
-cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
-
-# 生产构建（输出至 src-tauri/target/release/）
-npm run tauri build
-```
-
-> **注意**：本项目为 **Windows 平台用户专用**，剪贴板模块依赖 `windows-sys`（`GetCursorPos` / `SendInput`）。
-
-### 技术栈
-
-| 层级 | 技术 |
-|------|------|
-| 前端 | React 19 + TypeScript + Vite + Tailwind CSS + Zustand |
-| 后端 | Rust（Tauri 2 + Tokio 异步运行时） |
-| 本地存储 | SQLite（rusqlite，WAL 模式，FTS5 全文索引） |
-| HTTP | Reqwest（翻译 API 请求） |
-| 加密 | AES-256-GCM（API Key 落盘加密） |
-| 更新 | tauri-plugin-updater + GitHub Releases |
-
-### 项目结构
-
-```
-quicktranslate/
-├── src/                        # React 前端
-│   ├── App.tsx                 # 窗口路由（#popup / #settings / #history / #onboarding）
-│   ├── windows/
-│   │   ├── popup/              # 翻译浮窗（加载 / 结果 / 错误 / ErrorBoundary）
-│   │   ├── settings/           # 设置面板
-│   │   ├── history/            # 翻译历史浏览器
-│   │   └── onboarding/         # 首次运行引导向导
-│   ├── stores/                 # Zustand 状态（configStore / historyStore / translationStore）
-│   ├── hooks/                  # useTauriEvent、useTheme
-│   ├── lib/                    # commands.ts（唯一 invoke 入口）、constants、types
-│   └── styles/globals.css      # macOS 风格 CSS 变量设计系统
-│
-└── src-tauri/src/              # Rust 后端
-    ├── lib.rs                  # 5 步初始化 + Tauri 命令注册
-    ├── state.rs                # AppState（Arc/RwLock/Mutex，Tauri managed）
-    ├── error.rs                # AppError 枚举 + IPC 序列化（error_code）
-    ├── types.rs                # 跨层共享数据结构
-    ├── commands/               # Tauri command handlers（translate / config / history / system）
-    ├── domain/
-    │   ├── config.rs           # ConfigService（JSON-KV，SQLite 持久化）
-    │   ├── history.rs          # HistoryRepository（CRUD + FIFO 淘汰 + 星标保留）
-    │   └── translator/         # TranslationEngine + 5 个 Provider（Trait 模式）
-    ├── infra/
-    │   ├── database.rs         # SQLite 连接、WAL、完整性检查、Schema 版本迁移
-    │   ├── http_client.rs      # Reqwest 封装
-    │   └── crypto.rs           # AES-256-GCM 加密
-    └── system/
-        ├── tray.rs             # 系统托盘菜单
-        ├── clipboard.rs        # 剪贴板读写（arboard）+ 按键模拟（enigo）
-        ├── clipboard_monitor.rs# 翻译主触发器：500ms 轮询 + 400ms 防抖 + 自触发防护
-        ├── translation_flow.rs # 完整翻译流程编排（光标捕获 → 浮窗 → 翻译 → 事件推送）
-        └── updater.rs          # 后台更新检查 + 自动下载安装 + Toast 通知
-```
+翻译源随时能在设置里换，配几个当备用也行。支持 13 种语言互译，目标语言默认中文。
 
 ---
 
-## 发布流程
+## 三步开始用
 
-推送 `v*` tag 即触发 GitHub Actions 自动构建并发布：
+**1. 下载安装**
 
-```bash
-# 三处版本号必须保持一致：package.json / src-tauri/tauri.conf.json / src-tauri/Cargo.toml
-git tag v0.2.0
-git push origin v0.2.0
-```
+去 [Releases 页面](https://github.com/Aswellle/quick-translate/releases/latest) 拿 `.msi` 装上。5MB，装完就好。
 
-CI 流程：版本号一致性检查 → TypeScript 类型检查 → Rust Clippy lint → npm audit → Tauri 构建签名 → 上传 Release Assets → 生成 `latest.json`（供客户端自动更新）。
+> Windows 10 / 11（x64）。如果提示缺 WebView2 运行时，安装包会自己引导你装 —— Win11 一般已经自带了。
 
-**所需 GitHub Secrets**：
+**2. 走完引导（半分钟）**
 
-| Secret | 说明 |
-|--------|------|
-| `TAURI_SIGNING_PRIVATE_KEY` | minisign 私钥（base64 编码），用于安装包签名 |
-| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | 私钥密码（无密码时设为空字符串） |
+选个目标语言，翻译源直接点「暂时跳过」也完全能用。
 
----
+**3. 试一下**
 
-## 路线图
+随便找段英文，`Ctrl+C`。
 
-- [x] 剪贴板监控触发翻译（全自动，无需手动快捷键）
-- [x] 5 个翻译源 + 自动 Fallback 链
-- [x] DPI 感知浮窗定位 + 拖移支持
-- [x] 翻译历史（SQLite + 星标 + 搜索）
-- [x] AES-256-GCM API Key 加密存储
-- [x] 引导向导（Onboarding）
-- [x] 静默自动更新（下载 + 安装）
-- [x] GitHub Actions CI/CD（Windows `.msi` 自动构建 + 签名）
-- [ ] 浮窗磨砂玻璃效果（Windows Acrylic）
-- [ ] 历史记录导出（CSV / JSON）
-- [ ] 多语言互译（当前默认目标语言为中文）
-- [ ] 快捷键冲突检测
+浮窗出现了 —— 那就成了。看完按空格。
+
+之后它就安静地待在系统托盘里。右键图标可以打开设置、翻历史、或者临时关掉监控（比如你要复制一堆密码的时候）。
 
 ---
 
-## License
+## 关于自动更新
 
-MIT © QuickTranslate Contributors
+装好之后你基本不用再管它。启动几秒后会静默查一次更新，有新版就自己下好装上，只弹个小提示告诉你一声。
+
+> **如果你还在用 v0.2.0**：那个版本的更新地址写错了（一个连字符的锅），自动更新连不上。请去 [Releases](https://github.com/Aswellle/quick-translate/releases/latest) 手动下载一次，之后就正常了。给你添麻烦了。
+
+---
+
+## 常见问题
+
+**复制了但浮窗没出来？**
+右键托盘图标看看剪贴板监控是不是被关了。另外提醒一句：很多终端里 `Ctrl+C` 是中断命令而不是复制 —— 在 Windows Terminal 里需要先选中文字才算复制。
+
+**能不能改成快捷键触发，别自动弹？**
+目前是复制即触发。不想被打扰的时候，托盘菜单里一键关掉监控就行。
+
+**它会偷偷传我的东西吗？**
+只有你复制的那段文字会发给你自己配置的翻译服务商（这是翻译的必要条件）。历史记录和 API Key 都在本地，Key 是加密存的。
+
+**占多少资源？**
+空闲时内存 50MB 以内，CPU 基本是 0。安装包 5MB。
+
+---
+
+## 想要什么功能
+
+有想法、遇到 bug，都欢迎开 [Issue](https://github.com/Aswellle/quick-translate/issues) 说一声。
+
+正在琢磨的：浮窗磨砂玻璃效果、历史记录导出、快捷键冲突检测。
+
+---
+
+<div align="center">
+
+**如果它帮你省下了那些十几秒，点个 ⭐ 让更多人看到。**
+
+[⬇ 下载最新版](https://github.com/Aswellle/quick-translate/releases/latest) · [🐛 报告问题](https://github.com/Aswellle/quick-translate/issues) · [📋 更新日志](https://github.com/Aswellle/quick-translate/releases)
+
+<sub>QuickTranslate · 专有软件，版权所有 © 2026 welle · 仅供个人使用</sub>
+
+</div>
