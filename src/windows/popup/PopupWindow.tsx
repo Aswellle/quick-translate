@@ -86,30 +86,36 @@ export function PopupWindow() {
   );
   useTauriEvent<TranslationErrorPayload>(EVENTS.TRANSLATION_ERROR, handleError);
 
-  // ── 翻译结果到达后，测量内容动态调整窗口大小 ──
-  // 依赖含 collapsed/wide：折叠展开或宽度切换后需重新量算（换行数变了，高度也变）
+  // ── 内容/几何变化后，测量内容动态调整窗口大小 ──
+  // 不限定 result 存在：error/idle/loading 视图同样需要在展开时恢复高度。
+  // 此前 `!result` 提前返回导致「折叠 → 展开」在非 success 状态下窗口
+  // 永远卡在 COLLAPSED_H(44px)，内容被 overflow-hidden 裁切（F1）。
   useEffect(() => {
-    if (!result || collapsed) return;
+    if (collapsed) return;
     const id = requestAnimationFrame(() => {
       const container = popupRef.current;
       if (!container) return;
       resizePopup(width, container.offsetHeight).catch(console.error);
     });
     return () => cancelAnimationFrame(id);
-  }, [result, collapsed, width]);
+  }, [status, result, collapsed, width]);
 
   // ── 键盘快捷键：Escape / 空格 关闭，Enter 折叠切换 ────────────────
   //
   // 空格作为关闭键需要三重防护，否则会吃掉正常输入：
-  //   1. 焦点在输入框/文本域/contenteditable 时放行（让用户能打空格）
+  //   1. 焦点在输入框/文本域/contenteditable/按钮上时放行（元素自行消费按键）
   //   2. 存在文本选区时放行（用户正在选译文，空格不该关窗）
   //   3. e.repeat 时忽略（长按不重复触发）
   useEffect(() => {
-    const isEditableTarget = (t: EventTarget | null) => {
+    // 焦点应自行消费按键的目标：可编辑元素 + 按钮。
+    // BUTTON 必须在列 —— 否则全局 preventDefault 会杀死焦点按钮的
+    // 原生 Enter/Space 激活，红绿灯与复制按钮沦为仅鼠标可用（F2）。
+    const isKeyConsumingTarget = (t: EventTarget | null) => {
       const el = t as HTMLElement | null;
       if (!el) return false;
       const tag = el.tagName;
       return (
+        tag === "BUTTON" ||
         tag === "INPUT" ||
         tag === "TEXTAREA" ||
         tag === "SELECT" ||
@@ -126,14 +132,14 @@ export function PopupWindow() {
 
       // " " 是空格键的标准 KeyboardEvent.key 值
       if (e.key === " ") {
-        if (e.repeat || isEditableTarget(e.target)) return;
+        if (e.repeat || isKeyConsumingTarget(e.target)) return;
         if (!window.getSelection()?.isCollapsed) return;
         e.preventDefault();
         handleClose();
         return;
       }
 
-      if (e.key === "Enter" && !isEditableTarget(e.target)) {
+      if (e.key === "Enter" && !isKeyConsumingTarget(e.target)) {
         e.preventDefault();
         handleToggleCollapse();
       }
