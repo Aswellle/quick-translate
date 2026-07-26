@@ -155,6 +155,22 @@ export async function resizePopup(width: number, height: number): Promise<void> 
   return invoke("resize_popup", { width, height });
 }
 
+/// 浮窗尺寸契约（后端 popup_geometry 为唯一来源，C3）
+export interface PopupGeometry {
+  width_normal: number;
+  width_wide: number;
+  height_collapsed: number;
+  height_loading: number;
+  min_width: number;
+  max_width: number;
+  min_height: number;
+  max_height: number;
+}
+
+export async function getPopupGeometry(): Promise<PopupGeometry> {
+  return invoke("get_popup_geometry");
+}
+
 export async function getAppVersion(): Promise<string> {
   return invoke("get_app_version");
 }

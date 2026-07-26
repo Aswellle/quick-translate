@@ -44,15 +44,19 @@ pub async fn hide_popup(app: AppHandle) -> Result<(), AppError> {
 #[tauri::command]
 pub async fn resize_popup(app: AppHandle, width: f64, height: f64) -> Result<(), AppError> {
     if let Some(window) = app.get_webview_window("popup") {
-        // 限制尺寸范围，避免过大或过小
-        // 下限 40：折叠态（仅红绿灯标题栏）需要约 44px
-        let w = width.clamp(280.0, 520.0);
-        let h = height.clamp(40.0, 480.0);
+        // 边界来自 popup_geometry —— 尺寸契约的唯一来源（C3）
+        let (w, h) = crate::system::popup_geometry::clamp_size(width, height);
         window
             .set_size(tauri::LogicalSize::new(w, h))
             .map_err(|e: tauri::Error| AppError::WindowError(e.to_string()))?;
     }
     Ok(())
+}
+
+/// 下发浮窗尺寸契约，供前端替代硬编码常量（C3）
+#[tauri::command]
+pub fn get_popup_geometry() -> crate::system::popup_geometry::PopupGeometry {
+    crate::system::popup_geometry::PopupGeometry::current()
 }
 
 /// 获取应用版本号

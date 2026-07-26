@@ -14,21 +14,25 @@ use tauri::{AppHandle, Manager};
 use crate::state::AppState;
 use crate::system::clipboard;
 
-/// 读取系统剪贴板序列号：每次剪贴板被写入都会自增。
+/// 剪贴板变更序列号。`Some(n)` = 平台提供权威序列号；`None` = 不可用。
 ///
 /// 用于区分"同一段文本被用户重新复制"（序列号变化）与"文本原地未动"
 /// （序列号不变）。仅靠文本内容比较无法区分这两种情况。
+///
+/// 返回 Option 而非哨兵 0 —— 此前非 Windows 恒返回 0 使判定退化为纯文本
+/// 比较，"关闭浮窗后重新复制同一段文本仍能触发"这一承诺静默失效，与
+/// `reset_last_text()` 的文档相矛盾（F8）。现在不可用时改由调用方选择
+/// 显式的降级策略。
 #[cfg(target_os = "windows")]
-fn clipboard_seq() -> u32 {
-    // SAFETY: 无参数、无副作用的 Win32 查询调用，失败时返回 0
-    unsafe { windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber() }
+fn clipboard_seq() -> Option<u32> {
+    // SAFETY: 无参数、无副作用的 Win32 查询调用
+    Some(unsafe { windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber() })
 }
 
-/// 非 Windows 平台无对应原语，返回常量 0 使判定退化为纯文本比较。
-/// 代价：关闭浮窗后重新复制同一段文本不会再触发（不会出现浮窗弹回）。
+/// 非 Windows 平台无对应原语。
 #[cfg(not(target_os = "windows"))]
-fn clipboard_seq() -> u32 {
-    0
+fn clipboard_seq() -> Option<u32> {
+    None
 }
 
 /// app 内写入的期望登记：绑定内容哈希 + 登记时刻（F4）。
@@ -173,8 +177,9 @@ fn clipboard_monitor_thread(app: AppHandle, controller: Arc<MonitorController>) 
     // 防抖挂起项：(归一化文本, 入队时刻)。合并为单元组后，
     // 各分支的重置从两行收敛为一次赋值（C6）
     let mut pending: Option<(String, Instant)> = None;
-    // 上次判定时的剪贴板序列号，用于识别"同一段文本被重新复制"
-    let mut last_seq: u32 = clipboard_seq();
+    // 上次判定时的剪贴板序列号，用于识别"同一段文本被重新复制"。
+    // None = 平台不提供序列号，走 seq 不可用时的降级策略（见 is_new 判定）
+    let mut last_seq: Option<u32> = clipboard_seq();
 
     loop {
         // 暂停时等待，不消耗 CPU
@@ -195,12 +200,21 @@ fn clipboard_monitor_thread(app: AppHandle, controller: Arc<MonitorController>) 
         //   同文本 + 同序列号 → 原地未动，不触发（浮窗保持关闭）
         //   同文本 + 序列号变化 → 用户真的重新复制了一次，正常触发
         if controller.reset_requested.swap(false, Ordering::SeqCst) {
-            last_text = clipboard.get_text().ok();
             last_seq = clipboard_seq();
+            // 序列号可用 → 吸收当前内容（同文本+同序列号将不再触发）。
+            // 序列号不可用（非 Windows）→ 回退旧语义，清空 last_text，
+            // 保住 reset_last_text() 承诺的"重复复制仍能触发"，代价是
+            // 浮窗可能在关闭后因剪贴板残留内容再次弹出（F8）。
+            last_text = if last_seq.is_some() {
+                clipboard.get_text().ok()
+            } else {
+                None
+            };
             pending = None;
             tracing::info!(
-                "[clipboard_monitor] hide_popup 触发：已吸收当前剪贴板内容 seq={}",
-                last_seq
+                "[clipboard_monitor] hide_popup 触发：seq={:?} absorbed={}",
+                last_seq,
+                last_text.is_some()
             );
         }
 
@@ -241,11 +255,21 @@ fn clipboard_monitor_thread(app: AppHandle, controller: Arc<MonitorController>) 
         // 检测是否是新内容。
         // 文本变化 → 新内容；文本相同但剪贴板序列号变化 → 用户重新复制了同一段文本，
         // 同样视为新内容（这是关闭浮窗后重复复制仍能触发翻译的依据）。
+        //
+        // 序列号不可用时（非 Windows）只能靠文本比较，"重新复制同一段文本"
+        // 无法被识别 —— 但此时 hide_popup 分支已清空 last_text，重复复制
+        // 仍会因 last_text == None 而触发，承诺得以保住（F8）。
         let current_seq = clipboard_seq();
         let is_new = match &last_text {
             Some(prev) => {
                 let prev_norm = clipboard::normalize_text(prev);
-                current_normalized != prev_norm || current_seq != last_seq
+                let text_changed = current_normalized != prev_norm;
+                let recopied = match (current_seq, last_seq) {
+                    (Some(cur), Some(last)) => cur != last,
+                    // 序列号不可用：不做"重新复制"推断，避免恒真/恒假的误判
+                    _ => false,
+                };
+                text_changed || recopied
             }
             None => true,
         };
