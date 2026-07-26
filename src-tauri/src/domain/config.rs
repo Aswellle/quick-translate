@@ -228,7 +228,8 @@ fn ps(raw: &str) -> Option<String> {
 ///
 /// 优先按 JSON 字符串解码，失败则回退裸字符串（兼容手工写入的历史数据）。
 fn decode(raw: &str) -> String {
-    serde_json::from_str::<String>(raw).unwrap_or_else(|_| raw.trim().to_string())
+    // 复用 ps() 的 JSON 解码，仅补裸值回退（C2：消除双解码器）
+    ps(raw).unwrap_or_else(|| raw.trim().to_string())
 }
 
 #[cfg(test)]

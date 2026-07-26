@@ -97,6 +97,13 @@ impl MonitorController {
         self.app_wrote_clipboard.store(true, Ordering::SeqCst);
         tracing::info!("[MonitorController] mark_app_write() 已标记");
     }
+
+    /// 撤销 mark_app_write：写剪贴板失败时调用，避免残留标志
+    /// 吞掉用户下一次真实复制（F5）。
+    pub fn unmark_app_write(&self) {
+        self.app_wrote_clipboard.store(false, Ordering::SeqCst);
+        tracing::info!("[MonitorController] unmark_app_write() 已撤销（写入失败）");
+    }
 }
 
 /// 后台线程主循环：轮询剪贴板，检测文本变化并防抖触发翻译

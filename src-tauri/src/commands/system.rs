@@ -11,13 +11,18 @@ use crate::types::ToastPayload;
 /// 将文本写入剪贴板（前端"复制"按钮触发）
 ///
 /// 写入前标记 clipboard_monitor：下次监控轮询检测到此内容时静默吸收，
-/// 不触发二次翻译（否则复制译文/原文会被监控当作新剪贴板内容重新翻译）。
+/// 不触发二次翻译。顺序刻意为"先标记后写入"（写后再标记会开出一个
+/// 监控在间隙读到新内容而误翻译的反向竞态窗口）；写入失败则撤销标记，
+/// 避免残留标志吞掉用户下一次真实复制（F5）。
 #[tauri::command]
 pub async fn copy_to_clipboard(app: AppHandle, text: String) -> Result<(), AppError> {
-    app.state::<crate::state::AppState>()
-        .clipboard_monitor
-        .mark_app_write();
-    clipboard::write_clipboard_text(&text)
+    let state = app.state::<crate::state::AppState>();
+    state.clipboard_monitor.mark_app_write();
+    let result = clipboard::write_clipboard_text(&text);
+    if result.is_err() {
+        state.clipboard_monitor.unmark_app_write();
+    }
+    result
 }
 
 /// 隐藏翻译浮窗，并重置剪贴板监控的 last_text
