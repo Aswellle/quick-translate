@@ -140,7 +140,13 @@ pub fn run_migrations(conn: &Connection) -> Result<(), AppError> {
     // 迁移列表：(版本号, 迁移函数)
     type MigrationFn = fn(&Transaction) -> Result<(), AppError>;
     let migrations: &[(i64, MigrationFn)] =
-        &[(1, migrate_v1), (2, migrate_v2), (3, migrate_v3), (4, migrate_v4)];
+        &[
+            (1, migrate_v1),
+            (2, migrate_v2),
+            (3, migrate_v3),
+            (4, migrate_v4),
+            (5, migrate_v5),
+        ];
 
     for &(version, migration_fn) in migrations {
         if current_version >= version {
@@ -224,6 +230,36 @@ fn migrate_v4(tx: &Transaction) -> Result<(), AppError> {
         .map_err(|e| AppError::DatabaseError(format!("Schema v4 迁移失败: {}", e)))
 }
 
+// ──────────── Migration v5 ────────────
+
+/// Migration v5：将遗留的裸值配置项归一化为 JSON 字符串形式（C4）
+///
+/// v0.2.2 之前 SEED_SQL 为布尔/整数写入裸值（'false'/'200'），而
+/// `ConfigService::set()` 写入 JSON（'"false"'/'"200"'）—— 同一张表并存
+/// 两种格式，读取端只能靠容错解码兜着。种子已在同版本改为 JSON，此迁移
+/// 补齐已安装用户的历史行，使"所有配置值均为 JSON 编码"真正成为不变量。
+///
+/// 仅处理非加密键：加密字段存的是 base64 密文，本就不是 JSON，
+/// 且走 `is_encrypted` 分支读取，不能加引号。
+/// 条件 `value NOT LIKE '"%'` 保证幂等，重复执行无副作用。
+fn migrate_v5(tx: &Transaction) -> Result<(), AppError> {
+    tx.execute_batch(
+        r#"
+        UPDATE app_config
+           SET value = '"' || value || '"'
+         WHERE key IN (
+                 'auto_start',
+                 'history_limit',
+                 'fallback_enabled',
+                 'onboarding_completed',
+                 'clipboard_monitor_enabled'
+               )
+           AND value NOT LIKE '"%';
+        "#,
+    )
+    .map_err(|e| AppError::DatabaseError(format!("Schema v5 迁移失败: {}", e)))
+}
+
 // ──────────── SQL 常量 ────────────
 
 /// Schema v1：基础表结构（不含 is_starred，由 v2 迁移添加）
@@ -293,10 +329,14 @@ INSERT OR IGNORE INTO app_config (key, value, updated_at) VALUES
     ('baidu_secret_key',      '""',              strftime('%s','now')*1000),
     ('youdao_app_key',        '""',              strftime('%s','now')*1000),
     ('youdao_app_secret',     '""',              strftime('%s','now')*1000),
-    ('auto_start',            'false',           strftime('%s','now')*1000),
-    ('history_limit',         '200',             strftime('%s','now')*1000),
+    -- 布尔/整数同样写 JSON 字符串形式，与 ConfigService::set() 的
+    -- serde_json::to_string() 编码保持一致（C4）。此前种子写裸值
+    -- 'false'/'200'，用户改过设置后被重写成 '"false"'/'"200"'，
+    -- 同一张表长期并存两种格式。
+    ('auto_start',            '"false"',         strftime('%s','now')*1000),
+    ('history_limit',         '"200"',           strftime('%s','now')*1000),
     ('theme',                 '"system"',        strftime('%s','now')*1000),
-    ('fallback_enabled',      'true',            strftime('%s','now')*1000),
-    ('onboarding_completed',  'false',           strftime('%s','now')*1000),
-    ('clipboard_monitor_enabled', 'true',        strftime('%s','now')*1000);
+    ('fallback_enabled',      '"true"',          strftime('%s','now')*1000),
+    ('onboarding_completed',  '"false"',         strftime('%s','now')*1000),
+    ('clipboard_monitor_enabled', '"true"',      strftime('%s','now')*1000);
 "#;

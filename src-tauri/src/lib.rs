@@ -235,6 +235,7 @@ pub fn run() {
             commands::system::open_onboarding_window,
             commands::system::open_url,
             commands::system::set_clipboard_monitor_enabled,
+            commands::system::get_popup_geometry,
         ])
         .run(tauri::generate_context!())
         .expect("QuickTranslate 启动失败");

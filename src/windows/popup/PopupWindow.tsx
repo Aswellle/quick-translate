@@ -5,7 +5,12 @@ import { useEffect, useCallback, useRef, useState } from "react";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { EVENTS } from "@/lib/constants";
-import { hidePopup, resizePopup } from "@/lib/commands";
+import {
+  hidePopup,
+  resizePopup,
+  getPopupGeometry,
+  type PopupGeometry,
+} from "@/lib/commands";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { useTranslationStore } from "@/stores/translationStore";
 import { LoadingView } from "./LoadingView";
@@ -13,16 +18,25 @@ import { ResultView } from "./ResultView";
 import { ErrorView } from "./ErrorView";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { TrafficLights } from "./TrafficLights";
+import { isKeyConsumingTarget, isDragBlockingTarget } from "@/lib/domUtils";
 import type {
   TranslationResultPayload,
   TranslationErrorPayload,
 } from "@/lib/types";
 
-// 浮窗尺寸常量（与后端 resize_popup 的 clamp 范围保持一致）
-const WIDTH_NORMAL = 400;
-const WIDTH_WIDE = 520;
-const COLLAPSED_H = 44;
-const LOADING_H = 160;
+// 浮窗尺寸契约由后端 popup_geometry 下发（唯一来源，C3）。
+// 此处仅保留首帧兜底值 —— get_popup_geometry 是异步 IPC，到达前需要
+// 一组可渲染的尺寸；到达后即被后端权威值覆盖。
+const FALLBACK_GEOMETRY: PopupGeometry = {
+  width_normal: 400,
+  width_wide: 520,
+  height_collapsed: 44,
+  height_loading: 160,
+  min_width: 280,
+  max_width: 520,
+  min_height: 40,
+  max_height: 480,
+};
 
 export function PopupWindow() {
   const { status, result, errorCode, errorMessage, setLoading, setResult, setError } =
@@ -40,7 +54,21 @@ export function PopupWindow() {
   const [collapsed, setCollapsed] = useState(false);
   const [wide, setWide] = useState(false);
 
-  const width = wide ? WIDTH_WIDE : WIDTH_NORMAL;
+  // 后端权威尺寸契约（C3）：挂载时拉取一次，失败则沿用兜底值
+  const [geometry, setGeometry] = useState<PopupGeometry>(FALLBACK_GEOMETRY);
+  useEffect(() => {
+    let cancelled = false;
+    getPopupGeometry()
+      .then((g) => {
+        if (!cancelled) setGeometry(g);
+      })
+      .catch((err) => console.error("[PopupWindow] 获取尺寸契约失败，沿用兜底值:", err));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const width = wide ? geometry.width_wide : geometry.width_normal;
 
   const handleClose = useCallback(() => {
     hidePopup().catch(console.error);
@@ -62,8 +90,8 @@ export function PopupWindow() {
   const handleLoading = useCallback(() => {
     setLoading();
     setCollapsed(false);
-    resizePopup(width, LOADING_H).catch(console.error);
-  }, [setLoading, width]);
+    resizePopup(width, geometry.height_loading).catch(console.error);
+  }, [setLoading, width, geometry.height_loading]);
   useTauriEvent<unknown>(EVENTS.TRANSLATION_LOADING, handleLoading);
 
   // ── 监听翻译结果事件 ──
@@ -88,10 +116,10 @@ export function PopupWindow() {
   // 折叠 → 固定压到标题栏高度；展开/内容变化 → 测量当前视图自然高度。
   // 不限定 result 存在：error/idle/loading 视图同样需要在展开时恢复高度。
   // 此前 `!result` 提前返回导致「折叠 → 展开」在非 success 状态下窗口
-  // 永远卡在 COLLAPSED_H(44px)，内容被 overflow-hidden 裁切（F1）。
+  // 永远卡在折叠高度（44px），内容被 overflow-hidden 裁切（F1）。
   useEffect(() => {
     if (collapsed) {
-      resizePopup(width, COLLAPSED_H).catch(console.error);
+      resizePopup(width, geometry.height_collapsed).catch(console.error);
       return;
     }
     // 两段式量高（F6）：首次测量发生在 OS 窗口仍是旧宽度时，文本换行数
@@ -122,7 +150,7 @@ export function PopupWindow() {
       cancelled = true;
       cancelAnimationFrame(id);
     };
-  }, [status, result, collapsed, width]);
+  }, [status, result, collapsed, width, geometry.height_collapsed]);
 
   // ── 键盘快捷键：Escape / 空格 关闭，Enter 折叠切换 ────────────────
   //
@@ -131,22 +159,6 @@ export function PopupWindow() {
   //   2. 存在文本选区时放行（用户正在选译文，空格不该关窗）
   //   3. e.repeat 时忽略（长按不重复触发）
   useEffect(() => {
-    // 焦点应自行消费按键的目标：可编辑元素 + 按钮。
-    // BUTTON 必须在列 —— 否则全局 preventDefault 会杀死焦点按钮的
-    // 原生 Enter/Space 激活，红绿灯与复制按钮沦为仅鼠标可用（F2）。
-    const isKeyConsumingTarget = (t: EventTarget | null) => {
-      const el = t as HTMLElement | null;
-      if (!el) return false;
-      const tag = el.tagName;
-      return (
-        tag === "BUTTON" ||
-        tag === "INPUT" ||
-        tag === "TEXTAREA" ||
-        tag === "SELECT" ||
-        el.isContentEditable
-      );
-    };
-
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -201,17 +213,8 @@ export function PopupWindow() {
     const handleMouseDown = async (e: MouseEvent) => {
       // 仅响应左键
       if (e.button !== 0) return;
-      // 如果点击目标是交互元素（按钮、输入框等），跳过拖拽
-      const target = e.target as HTMLElement;
-      if (
-        target.tagName === "BUTTON" ||
-        target.tagName === "INPUT" ||
-        target.tagName === "TEXTAREA" ||
-        target.tagName === "SELECT" ||
-        target.closest("[data-no-drag]")
-      ) {
-        return;
-      }
+      // 点击交互元素或 [data-no-drag] 容器内时跳过拖拽（C5：判定收敛至 domUtils）
+      if (isDragBlockingTarget(e.target)) return;
       e.preventDefault();
       isDragging.current = true;
       try {

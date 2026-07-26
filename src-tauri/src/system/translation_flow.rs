@@ -6,6 +6,7 @@
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::state::AppState;
+use crate::system::popup_geometry;
 use crate::types::{
     now_unix_ms, PopupPosition, TranslationErrorPayload, TranslationLoadingPayload,
     TranslationRecord, TranslationResult, TranslationResultPayload,
@@ -13,9 +14,9 @@ use crate::types::{
 
 const POPUP_LABEL: &str = "popup";
 
-/// 浮窗逻辑尺寸（与前端 CSS 保持一致）
-const POPUP_LOGICAL_W: f64 = 400.0;
-const POPUP_LOGICAL_H: f64 = 300.0;
+/// 浮窗初始逻辑尺寸 —— 取自 popup_geometry（尺寸契约唯一来源，C3）
+const POPUP_LOGICAL_W: f64 = popup_geometry::WIDTH_NORMAL;
+const POPUP_LOGICAL_H: f64 = popup_geometry::HEIGHT_INITIAL;
 
 /// 在指定光标位置执行翻译（clipboard_monitor 直接调用，传入已捕获的文本）
 pub async fn execute_at_position(app: &AppHandle, cursor_x: f64, cursor_y: f64, text: String) {
