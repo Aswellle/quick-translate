@@ -94,12 +94,34 @@ export function PopupWindow() {
       resizePopup(width, COLLAPSED_H).catch(console.error);
       return;
     }
+    // 两段式量高（F6）：首次测量发生在 OS 窗口仍是旧宽度时，文本换行数
+    // 与新宽度不符 —— 单次 resizePopup(新宽, 旧宽下的高) 会留白或裁切。
+    // 首次 resize 落地后再补测一次，仅高度变化超过 1px 时追加第二次调用。
+    let cancelled = false;
     const id = requestAnimationFrame(() => {
       const container = popupRef.current;
       if (!container) return;
-      resizePopup(width, container.offsetHeight).catch(console.error);
+      const firstH = container.offsetHeight;
+      resizePopup(width, firstH)
+        .then(() => {
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              if (cancelled) return;
+              const c2 = popupRef.current;
+              if (!c2) return;
+              const secondH = c2.offsetHeight;
+              if (Math.abs(secondH - firstH) > 1) {
+                resizePopup(width, secondH).catch(console.error);
+              }
+            });
+          });
+        })
+        .catch(console.error);
     });
-    return () => cancelAnimationFrame(id);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(id);
+    };
   }, [status, result, collapsed, width]);
 
   // ── 键盘快捷键：Escape / 空格 关闭，Enter 折叠切换 ────────────────

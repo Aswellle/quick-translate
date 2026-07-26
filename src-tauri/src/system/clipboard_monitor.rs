@@ -2,10 +2,12 @@
 // 后台剪贴板监控：监听剪贴板文本变化，自动触发翻译浮窗
 // 使用跨平台 arboard + Tokio 实现轮询式监控
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Manager};
 
@@ -29,6 +31,27 @@ fn clipboard_seq() -> u32 {
     0
 }
 
+/// app 内写入的期望登记：绑定内容哈希 + 登记时刻（F4）。
+///
+/// 取代此前的裸 AtomicBool —— 布尔标志不绑定内容，存在三个吸收错文本的
+/// 竞态窗口（写入落地前被消费 / 同窗口用户复制被吞 / 暂停期存活吞掉恢复
+/// 后首次复制）。哈希匹配才吸收，天然免疫全部三者；EXPECT_TTL 兜底清理
+/// 「写入被用户复制覆盖导致期望永远匹配不上」的残留。
+#[derive(Clone, Copy)]
+struct ExpectedWrite {
+    text_hash: u64,
+    at: Instant,
+}
+
+/// 期望登记的存活时长：超过即视为写入已被覆盖，丢弃
+const EXPECT_TTL: Duration = Duration::from_secs(3);
+
+fn hash_text(text: &str) -> u64 {
+    let mut h = DefaultHasher::new();
+    text.hash(&mut h);
+    h.finish()
+}
+
 /// 监控任务配置
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// 防抖延迟：剪贴板内容变化后等待此时间再触发翻译
@@ -39,12 +62,12 @@ const DEBOUNCE_DELAY: Duration = Duration::from_millis(400);
 pub struct MonitorController {
     /// 暂停标志（true = 暂停中，不执行翻译检测）
     pub suspended: Arc<AtomicBool>,
-    /// hide_popup 请求重置标志：下次循环时清空 last_text，
+    /// hide_popup 请求重置标志：下次循环时吸收当前剪贴板内容，
     /// 确保关闭浮窗后再次复制相同文本仍能触发翻译
     pub reset_requested: Arc<AtomicBool>,
-    /// app 主动写剪贴板标志：下次循环时将当前内容静默吸收进 last_text，
-    /// 防止 copy_to_clipboard（复制译文/原文按钮）触发二次翻译
-    pub app_wrote_clipboard: Arc<AtomicBool>,
+    /// app 内写入的期望登记（复制译文/原文按钮）：
+    /// 监控读到哈希匹配的内容时静默吸收，不触发翻译
+    expected_write: Arc<Mutex<Option<ExpectedWrite>>>,
 }
 
 /// 启动剪贴板监控后台任务（在 lib.rs setup 中调用）
@@ -52,7 +75,7 @@ pub fn start_monitor(app: AppHandle) -> MonitorController {
     let controller = MonitorController {
         suspended: Arc::new(AtomicBool::new(false)),
         reset_requested: Arc::new(AtomicBool::new(false)),
-        app_wrote_clipboard: Arc::new(AtomicBool::new(false)),
+        expected_write: Arc::new(Mutex::new(None)),
     };
     let controller_thread = controller.clone();
 
@@ -91,18 +114,43 @@ impl MonitorController {
         tracing::info!("[MonitorController] reset_last_text() 已请求");
     }
 
-    /// 通知监控线程 app 刚主动写入剪贴板（复制译文/原文按钮）。
-    /// 下次循环时将新内容静默吸收进 last_text，不触发翻译。
-    pub fn mark_app_write(&self) {
-        self.app_wrote_clipboard.store(true, Ordering::SeqCst);
-        tracing::info!("[MonitorController] mark_app_write() 已标记");
+    /// 登记一次 app 内剪贴板写入（复制译文/原文按钮）。
+    /// 哈希取自 normalize_text 后的文本 —— Windows 剪贴板往返可能改写
+    /// 换行（LF↔CRLF），原文哈希会永远匹配不上导致吸收失效；两侧统一
+    /// 归一化后比较即可免疫。
+    pub fn mark_app_write(&self, text: &str) {
+        let mut slot = self.expected_write.lock().unwrap();
+        *slot = Some(ExpectedWrite {
+            text_hash: hash_text(&clipboard::normalize_text(text)),
+            at: Instant::now(),
+        });
+        tracing::info!("[MonitorController] mark_app_write() 已登记期望哈希");
     }
 
-    /// 撤销 mark_app_write：写剪贴板失败时调用，避免残留标志
-    /// 吞掉用户下一次真实复制（F5）。
+    /// 撤销登记：写剪贴板失败时调用，避免残留期望（F5）。
     pub fn unmark_app_write(&self) {
-        self.app_wrote_clipboard.store(false, Ordering::SeqCst);
+        *self.expected_write.lock().unwrap() = None;
         tracing::info!("[MonitorController] unmark_app_write() 已撤销（写入失败）");
+    }
+
+    /// 监控线程调用：当前内容（已归一化）是否匹配已登记的 app 写入。
+    /// 匹配 → 消费登记并返回 true（调用方应吸收该内容）；
+    /// 不匹配 → 保留登记（写入可能尚未落地），但超过 EXPECT_TTL 则丢弃
+    /// （写入已被用户复制覆盖，期望永远无法匹配）。
+    fn consume_if_expected(&self, current_normalized: &str) -> bool {
+        let mut slot = self.expected_write.lock().unwrap();
+        match *slot {
+            Some(exp) if exp.text_hash == hash_text(current_normalized) => {
+                *slot = None;
+                true
+            }
+            Some(exp) if exp.at.elapsed() > EXPECT_TTL => {
+                tracing::info!("[MonitorController] 期望登记超时丢弃（写入已被覆盖）");
+                *slot = None;
+                false
+            }
+            _ => false,
+        }
     }
 }
 
@@ -122,8 +170,9 @@ fn clipboard_monitor_thread(app: AppHandle, controller: Arc<MonitorController>) 
     };
 
     let mut last_text: Option<String> = None;
-    let mut pending_text: Option<String> = None;
-    let mut pending_timer: Option<std::time::Instant> = None;
+    // 防抖挂起项：(归一化文本, 入队时刻)。合并为单元组后，
+    // 各分支的重置从两行收敛为一次赋值（C6）
+    let mut pending: Option<(String, Instant)> = None;
     // 上次判定时的剪贴板序列号，用于识别"同一段文本被重新复制"
     let mut last_seq: u32 = clipboard_seq();
 
@@ -132,8 +181,7 @@ fn clipboard_monitor_thread(app: AppHandle, controller: Arc<MonitorController>) 
         if controller.is_suspended() {
             thread::sleep(Duration::from_millis(200));
             // 重置待处理内容，避免恢复时立即触发
-            pending_text = None;
-            pending_timer = None;
+            pending = None;
             continue;
         }
 
@@ -149,8 +197,7 @@ fn clipboard_monitor_thread(app: AppHandle, controller: Arc<MonitorController>) 
         if controller.reset_requested.swap(false, Ordering::SeqCst) {
             last_text = clipboard.get_text().ok();
             last_seq = clipboard_seq();
-            pending_text = None;
-            pending_timer = None;
+            pending = None;
             tracing::info!(
                 "[clipboard_monitor] hide_popup 触发：已吸收当前剪贴板内容 seq={}",
                 last_seq
@@ -161,8 +208,7 @@ fn clipboard_monitor_thread(app: AppHandle, controller: Arc<MonitorController>) 
 
         // 暂停检测（避免在 sleep 期间被暂停导致丢失一轮检测）
         if controller.is_suspended() {
-            pending_text = None;
-            pending_timer = None;
+            pending = None;
             continue;
         }
 
@@ -173,22 +219,22 @@ fn clipboard_monitor_thread(app: AppHandle, controller: Arc<MonitorController>) 
 
         let current_normalized = clipboard::normalize_text(&current);
 
-        // app 主动写入剪贴板（复制译文/原文）：静默吸收，不触发翻译
-        if controller.app_wrote_clipboard.swap(false, Ordering::SeqCst) {
-            tracing::info!("[clipboard_monitor] 检测到 app 写入，已吸收 len={}", current_normalized.len());
+        // app 主动写入剪贴板（复制译文/原文）：内容哈希匹配才吸收（F4）。
+        // 不匹配时登记保留 —— 写入可能尚未落地；用户抢先复制的新内容
+        // 因哈希不匹配会正常走翻译流程，不再被误吞。
+        if controller.consume_if_expected(&current_normalized) {
+            tracing::info!("[clipboard_monitor] 检测到 app 写入（哈希匹配），已吸收 len={}", current_normalized.len());
             last_text = Some(current);
             // 同步序列号：app 的写入本身会让序列号自增，若不同步则下一轮
             // 会因"文本相同但序列号变化"被误判成用户重新复制
             last_seq = clipboard_seq();
-            pending_text = None;
-            pending_timer = None;
+            pending = None;
             continue;
         }
 
         // 跳过空白或极短内容
         if current_normalized.trim().len() < 2 {
-            pending_text = None;
-            pending_timer = None;
+            pending = None;
             continue;
         }
 
@@ -207,15 +253,11 @@ fn clipboard_monitor_thread(app: AppHandle, controller: Arc<MonitorController>) 
         if is_new {
             last_text = Some(current);
             last_seq = current_seq;
-            pending_text = Some(current_normalized);
-            pending_timer = Some(std::time::Instant::now());
+            pending = Some((current_normalized, Instant::now()));
         } else {
             // 内容未变，检查防抖是否到期
-            if let (Some(text), Some(start)) = (&pending_text, pending_timer) {
-                if start.elapsed() >= DEBOUNCE_DELAY {
-                    let text_clone = text.clone();
-                    pending_text = None;
-                    pending_timer = None;
+            if pending.as_ref().is_some_and(|(_, start)| start.elapsed() >= DEBOUNCE_DELAY) {
+                if let Some((text_clone, _)) = pending.take() {
                     tracing::info!("[clipboard_monitor] 防抖到期，触发翻译 len={}", text_clone.len());
 
                     let app_clone = app.clone();
