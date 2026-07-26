@@ -46,14 +46,12 @@ export function PopupWindow() {
     hidePopup().catch(console.error);
   }, []);
 
-  // 折叠时立即压到标题栏高度；展开时交由下方 measure effect 重新量算内容高度
+  // 折叠切换：纯状态更新，窗口尺寸统一交由下方量高效应处理（F9）。
+  // 此前在 setCollapsed 的函数式 updater 内调 resizePopup —— StrictMode
+  // 会双调用 updater 导致重复 IPC，且与本仓库刚修过的同类问题矛盾。
   const handleToggleCollapse = useCallback(() => {
-    setCollapsed((prev) => {
-      const next = !prev;
-      if (next) resizePopup(width, COLLAPSED_H).catch(console.error);
-      return next;
-    });
-  }, [width]);
+    setCollapsed((prev) => !prev);
+  }, []);
 
   const handleToggleWide = useCallback(() => {
     setWide((prev) => !prev);
@@ -86,12 +84,16 @@ export function PopupWindow() {
   );
   useTauriEvent<TranslationErrorPayload>(EVENTS.TRANSLATION_ERROR, handleError);
 
-  // ── 内容/几何变化后，测量内容动态调整窗口大小 ──
+  // ── 窗口尺寸的唯一归属：内容/几何变化后统一在此调整 ──
+  // 折叠 → 固定压到标题栏高度；展开/内容变化 → 测量当前视图自然高度。
   // 不限定 result 存在：error/idle/loading 视图同样需要在展开时恢复高度。
   // 此前 `!result` 提前返回导致「折叠 → 展开」在非 success 状态下窗口
   // 永远卡在 COLLAPSED_H(44px)，内容被 overflow-hidden 裁切（F1）。
   useEffect(() => {
-    if (collapsed) return;
+    if (collapsed) {
+      resizePopup(width, COLLAPSED_H).catch(console.error);
+      return;
+    }
     const id = requestAnimationFrame(() => {
       const container = popupRef.current;
       if (!container) return;
