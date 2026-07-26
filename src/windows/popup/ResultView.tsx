@@ -70,8 +70,10 @@ export function ResultView({ result }: ResultViewProps) {
 
         {/* 右：meta 信息 */}
         <div className="flex items-center gap-2.5">
-          {/* 快捷键提示：让"空格关闭"可被发现 */}
-          <span className="hidden sm:flex items-center gap-1 text-[10px] text-[var(--text-tertiary)]">
+          {/* 快捷键提示：让"空格关闭"可被发现。
+              不加响应式前缀 —— sm: 断点是 640px，浮窗视口仅 280–520px，
+              `hidden sm:flex` 会让本提示永不渲染（F7） */}
+          <span className="flex items-center gap-1 text-[10px] text-[var(--text-tertiary)]">
             <kbd className="kbd-hint">空格</kbd>
             关闭
           </span>
