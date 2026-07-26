@@ -159,8 +159,9 @@ html, body, #root {
   border-radius: var(--radius-lg);
   box-shadow: var(--popup-shadow);
   overflow: hidden;
-  /* 宽度/高度切换时的平滑过渡 */
-  transition: width 260ms var(--ease-out-expo);
+  /* 注：不要给 width 加 transition —— 容器是 w-full（百分比），窗口级
+     resize 只改 used value 不触发 transition（死代码）；若真触发反而
+     会与 PopupWindow 的两段式量高（F6）互相打架 */
 }
 
 /* 液态玻璃质感强化：顶部内高光 + 极淡渐变，模拟玻璃边缘折射。

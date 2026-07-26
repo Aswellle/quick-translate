@@ -17,7 +17,7 @@ use crate::types::ToastPayload;
 #[tauri::command]
 pub async fn copy_to_clipboard(app: AppHandle, text: String) -> Result<(), AppError> {
     let state = app.state::<crate::state::AppState>();
-    state.clipboard_monitor.mark_app_write();
+    state.clipboard_monitor.mark_app_write(&text);
     let result = clipboard::write_clipboard_text(&text);
     if result.is_err() {
         state.clipboard_monitor.unmark_app_write();
