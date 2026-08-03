@@ -129,6 +129,7 @@ pub fn ensure_popup_window(app: &AppHandle) {
         WebviewUrl::App("index.html#popup".into()),
     )
     .title("QuickTranslate")
+    .additional_browser_args(crate::system::BROWSER_ARGS)
     .decorations(false)
     .transparent(true)
     .always_on_top(true)
@@ -155,6 +156,7 @@ pub async fn show_popup_loading(app: &AppHandle, position: &PopupPosition) {
             WebviewUrl::App("index.html#popup".into()),
         )
         .title("QuickTranslate")
+        .additional_browser_args(crate::system::BROWSER_ARGS)
         .decorations(false)
         .transparent(true)
         .always_on_top(true)

@@ -155,7 +155,7 @@ export function HistoryWindow() {
       <div className="px-5 pt-4 pb-3 bg-[var(--surface-primary)] dark:bg-[var(--surface-secondary)] border-b border-[var(--border-secondary)] flex items-center justify-between">
         <div>
           <h1
-            className="text-base font-semibold"
+            className="text-[15px] font-semibold tracking-tight"
             style={{ fontFamily: "var(--font-display)" }}
           >
             翻译历史
@@ -169,17 +169,17 @@ export function HistoryWindow() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {/* 格式选择 */}
-          <div className="flex rounded-lg border border-[var(--border-primary)] overflow-hidden text-[11px]">
+          {/* 格式选择 — 分段控件 */}
+          <div className="inline-flex rounded-lg bg-[var(--surface-tertiary)] dark:bg-[var(--surface-secondary)] p-0.5 gap-0.5 text-[11px]">
             {(["markdown", "html", "json"] as const).map((fmt) => (
               <button
                 key={fmt}
                 onClick={() => setExportFormat(fmt)}
                 className={[
-                  "px-2.5 py-1 transition-colors",
+                  "px-2 py-1 rounded-[5px] font-medium transition-colors",
                   exportFormat === fmt
-                    ? "bg-[var(--system-blue)] text-white"
-                    : "text-[var(--text-tertiary)] hover:bg-[var(--hover-bg)] hover:text-[var(--text-secondary)]",
+                    ? "bg-[var(--surface-primary)] dark:bg-[var(--surface-tertiary)] text-[var(--text-primary)] shadow-sm"
+                    : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]",
                 ].join(" ")}
               >
                 {fmt === "markdown" ? "MD" : fmt.toUpperCase()}
@@ -234,7 +234,7 @@ export function HistoryWindow() {
           className={[
             "flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] border transition-all",
             starredOnly
-              ? "border-yellow-400 text-yellow-500 bg-yellow-50 dark:bg-yellow-950/20"
+              ? "border-yellow-400/70 text-yellow-500 bg-yellow-50/80 dark:bg-yellow-950/20 shadow-sm"
               : "border-[var(--border-primary)] text-[var(--text-tertiary)] hover:bg-[var(--hover-bg)] hover:text-[var(--text-secondary)]",
           ].join(" ")}
         >
@@ -268,41 +268,41 @@ export function HistoryWindow() {
       {/* ── 分页控制 ── */}
       {total > pageSize && (
         <div className="px-5 py-3 border-t border-[var(--border-secondary)] bg-[var(--surface-primary)] dark:bg-[var(--surface-secondary)] flex items-center justify-between">
-          <button
-            disabled={!hasPrev || isLoading}
-            onClick={() => setPage(page - 1)}
-            className={[
-              "flex items-center gap-1 text-[12px] px-3.5 py-1.5 rounded-lg border transition-all",
-              hasPrev && !isLoading
-                ? "border-[var(--border-primary)] text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] active:scale-95"
-                : "border-[var(--border-primary)] text-[var(--text-tertiary)] opacity-40 cursor-not-allowed",
-            ].join(" ")}
-          >
-            <svg className="w-3 h-3" viewBox="0 0 12 12" fill="none">
-              <path d="M7 2L3 6l4 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            上一页
-          </button>
-
+          <div className="flex items-center gap-2">
+            <button
+              disabled={!hasPrev || isLoading}
+              onClick={() => setPage(page - 1)}
+              className={[
+                "flex items-center gap-1 text-[12px] px-3 py-1.5 rounded-lg border transition-all",
+                hasPrev && !isLoading
+                  ? "border-[var(--border-primary)] text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] active:scale-95"
+                  : "border-[var(--border-primary)] text-[var(--text-tertiary)] opacity-40 cursor-not-allowed",
+              ].join(" ")}
+            >
+              <svg className="w-3 h-3" viewBox="0 0 12 12" fill="none">
+                <path d="M7 2L3 6l4 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              上一页
+            </button>
+            <button
+              disabled={!hasNext || isLoading}
+              onClick={() => setPage(page + 1)}
+              className={[
+                "flex items-center gap-1 text-[12px] px-3 py-1.5 rounded-lg border transition-all",
+                hasNext && !isLoading
+                  ? "border-[var(--border-primary)] text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] active:scale-95"
+                  : "border-[var(--border-primary)] text-[var(--text-tertiary)] opacity-40 cursor-not-allowed",
+              ].join(" ")}
+            >
+              下一页
+              <svg className="w-3 h-3" viewBox="0 0 12 12" fill="none">
+                <path d="M5 2l4 4-4 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          </div>
           <span className="text-[11px] text-[var(--text-tertiary)] tabular-nums">
             {page + 1} / {totalPages}
           </span>
-
-          <button
-            disabled={!hasNext || isLoading}
-            onClick={() => setPage(page + 1)}
-            className={[
-              "flex items-center gap-1 text-[12px] px-3.5 py-1.5 rounded-lg border transition-all",
-              hasNext && !isLoading
-                ? "border-[var(--border-primary)] text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] active:scale-95"
-                : "border-[var(--border-primary)] text-[var(--text-tertiary)] opacity-40 cursor-not-allowed",
-            ].join(" ")}
-          >
-            下一页
-            <svg className="w-3 h-3" viewBox="0 0 12 12" fill="none">
-              <path d="M5 2l4 4-4 4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          </button>
         </div>
       )}
 
@@ -421,9 +421,12 @@ ${rows}
 
 function LoadingPlaceholder() {
   return (
-    <div className="p-5 space-y-3">
+    <div className="p-5 space-y-2.5">
       {[1, 2, 3, 4, 5].map((i) => (
-        <div key={i} className="space-y-2 p-3.5 rounded-xl border border-[var(--border-secondary)]">
+        <div
+          key={i}
+          className="space-y-2 p-3.5 rounded-xl border border-[var(--card-border)] bg-[var(--card-bg)]"
+        >
           <div className="skeleton h-3 w-3/4 rounded" />
           <div className="skeleton h-3 w-1/2 rounded" />
           <div className="skeleton h-2 w-1/3 rounded mt-1.5" />
@@ -441,27 +444,36 @@ function EmptyState({
   starredOnly: boolean;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center h-full gap-3 text-[var(--text-tertiary)]">
-      <svg className="w-14 h-14 opacity-20" viewBox="0 0 48 48" fill="none">
-        <rect x="8" y="14" width="32" height="22" rx="4" stroke="currentColor" strokeWidth="1.5" />
-        <path d="M16 22h16M16 28h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    <div className="flex flex-col items-center justify-center h-full gap-3 text-[var(--text-tertiary)] animate-fade-in">
+      <div className="w-16 h-16 rounded-2xl bg-[var(--surface-tertiary)] dark:bg-[var(--surface-secondary)] flex items-center justify-center shadow-sm">
+        <svg className="w-8 h-8 opacity-40" viewBox="0 0 48 48" fill="none">
+          <rect x="8" y="14" width="32" height="22" rx="4" stroke="currentColor" strokeWidth="1.6" />
+          <path d="M16 22h16M16 28h10" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          {hasSearch && (
+            <>
+              <circle cx="36" cy="12" r="7" stroke="currentColor" strokeWidth="1.6" />
+              <path d="M33 12h6M36 9v6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            </>
+          )}
+        </svg>
+      </div>
+      <div className="text-center space-y-1">
+        <p className="text-[13px] font-medium text-[var(--text-secondary)]">
+          {hasSearch
+            ? "没有找到匹配的记录"
+            : starredOnly
+            ? "暂无收藏记录"
+            : "暂无翻译历史"}
+        </p>
         {hasSearch && (
-          <>
-            <circle cx="36" cy="12" r="7" stroke="currentColor" strokeWidth="1.5" />
-            <path d="M33 12h6M36 9v6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-          </>
+          <p className="text-[11px] text-[var(--text-tertiary)]">试试其他关键词</p>
         )}
-      </svg>
-      <p className="text-sm font-medium text-[var(--text-secondary)]">
-        {hasSearch
-          ? "没有找到匹配的记录"
-          : starredOnly
-          ? "暂无收藏记录"
-          : "暂无翻译历史"}
-      </p>
-      {hasSearch && (
-        <p className="text-[11px]">试试其他关键词</p>
-      )}
+        {!hasSearch && !starredOnly && (
+          <p className="text-[11px] text-[var(--text-tertiary)]">
+            复制文字即翻译，记录会自动保存在这里
+          </p>
+        )}
+      </div>
     </div>
   );
 }
@@ -479,30 +491,30 @@ function ConfirmDialog({
       onClick={onCancel}
     >
       <div
-        className="mx-6 p-5 rounded-xl shadow-macos-lg w-full max-w-xs animate-scale-in bg-[var(--surface-primary)] dark:bg-[var(--surface-secondary)] border border-[var(--border-secondary)]"
+        className="mx-6 p-5 rounded-2xl shadow-macos-lg w-full max-w-xs animate-scale-in bg-[var(--surface-primary)] dark:bg-[var(--surface-secondary)] border border-[var(--border-secondary)]"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center gap-3 mb-3">
-          <div className="w-9 h-9 rounded-full bg-red-50 dark:bg-red-950/30 flex items-center justify-center shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-red-50 dark:bg-red-950/30 flex items-center justify-center shrink-0">
             <svg className="w-5 h-5 text-red-500" viewBox="0 0 20 20" fill="none">
               <path d="M9 11V7m0 6v.5M5.07 16h9.86A2 2 0 0016.8 13L11.9 4a2 2 0 00-3.8 0L3.2 13a2 2 0 001.87 3z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
             </svg>
           </div>
           <div>
-            <p className="text-sm font-semibold">清空所有历史？</p>
+            <p className="text-[13px] font-semibold text-[var(--text-primary)]">清空所有历史？</p>
             <p className="text-[11px] text-[var(--text-tertiary)] mt-0.5">此操作不可恢复</p>
           </div>
         </div>
         <div className="flex gap-2 justify-end mt-4">
           <button
             onClick={onCancel}
-            className="px-4 py-1.5 rounded-lg text-[13px] border border-[var(--border-primary)] text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] transition-colors"
+            className="px-4 py-1.5 rounded-lg text-[12.5px] font-medium border border-[var(--border-primary)] text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] transition-colors"
           >
             取消
           </button>
           <button
             onClick={onConfirm}
-            className="px-4 py-1.5 rounded-lg text-[13px] bg-[var(--system-red)] hover:bg-[#E62E24] text-white transition-colors active:scale-95"
+            className="px-4 py-1.5 rounded-lg text-[12.5px] font-medium bg-[var(--system-red)] hover:bg-[#E62E24] text-white transition-all active:scale-95 shadow-sm"
           >
             确认清空
           </button>

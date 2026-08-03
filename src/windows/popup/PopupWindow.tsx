@@ -74,16 +74,27 @@ export function PopupWindow() {
     hidePopup().catch(console.error);
   }, []);
 
+  // 折叠/宽度切换后主动 blur：点击按钮会让 DOM 焦点停留在按钮上，
+  // 之后按空格会被 isKeyConsumingTarget 判定为"按钮消费按键"而放行，
+  // 空格变成再次切换折叠/宽度而非关闭浮窗（只有点红色叉号能退出）。
+  // 切换完成后释放焦点，空格即恢复为关闭键。
+  const blurActive = useCallback(() => {
+    const el = document.activeElement;
+    if (el instanceof HTMLElement) el.blur();
+  }, []);
+
   // 折叠切换：纯状态更新，窗口尺寸统一交由下方量高效应处理（F9）。
   // 此前在 setCollapsed 的函数式 updater 内调 resizePopup —— StrictMode
   // 会双调用 updater 导致重复 IPC，且与本仓库刚修过的同类问题矛盾。
   const handleToggleCollapse = useCallback(() => {
     setCollapsed((prev) => !prev);
-  }, []);
+    blurActive();
+  }, [blurActive]);
 
   const handleToggleWide = useCallback(() => {
     setWide((prev) => !prev);
-  }, []);
+    blurActive();
+  }, [blurActive]);
 
   // ── 监听翻译 Loading 事件 ──
   // 新一轮翻译开始：复位折叠态（否则新结果会被压在紧凑条里看不见）

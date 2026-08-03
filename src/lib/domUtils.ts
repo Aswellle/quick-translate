@@ -42,7 +42,11 @@ export function isKeyConsumingTarget(target: EventTarget | null): boolean {
  * 那些本身不是控件、但内部承载控件的容器（如红绿灯分组）。
  */
 export function isDragBlockingTarget(target: EventTarget | null): boolean {
-  const el = toElement(target);
-  if (!el) return false;
-  return isKeyConsumingTarget(el) || el.closest("[data-no-drag]") !== null;
+  if (isKeyConsumingTarget(target)) return true;
+  // 命中元素可能是 SVG（红绿灯按钮内的字形是 svg/path）。SVGElement 不是
+  // HTMLElement，toElement() 会返回 null，走 Element.closest 才能找到
+  // data-no-drag 祖先。此前漏掉这条路径会让字形点击触发 startDragging()，
+  // 窗口进入 OS 拖拽、click 被吞，按钮看似失效（C5 回归）。
+  const el = target instanceof Element ? target : null;
+  return el !== null && el.closest("[data-no-drag]") !== null;
 }

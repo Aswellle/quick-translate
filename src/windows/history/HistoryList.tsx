@@ -75,8 +75,8 @@ const RecordCard = memo(function RecordCard({
         "rounded-xl overflow-hidden transition-all duration-150 cursor-pointer",
         "border",
         isExpanded
-          ? "bg-blue-50/30 dark:bg-blue-950/10 border-blue-200/60 dark:border-blue-800/40 shadow-sm"
-          : "bg-[var(--card-bg)] border-[var(--card-border)] hover:border-blue-200/60 dark:hover:border-blue-700/40 hover:shadow-sm",
+          ? "bg-[var(--surface-primary)] dark:bg-[var(--surface-secondary)] border-[var(--system-blue)]/25 dark:border-[var(--system-blue)]/40 shadow-sm"
+          : "bg-[var(--card-bg)] border-[var(--card-border)] hover:border-[var(--system-blue)]/25 dark:hover:border-[var(--system-blue)]/40 hover:shadow-sm",
       ].join(" ")}
       onClick={() => onToggle(record.id)}
     >
@@ -118,10 +118,10 @@ const RecordCard = memo(function RecordCard({
           <span className="text-[10px] text-[var(--text-tertiary)]">
             {getLangName(record.source_lang)} → {getLangName(record.target_lang)}
           </span>
-          <span className="text-[10px] text-[var(--text-tertiary)] bg-[var(--surface-tertiary)] px-1.5 py-px rounded-full">
+          <span className="text-[10px] text-[var(--text-tertiary)] bg-[var(--surface-tertiary)] dark:bg-[var(--surface-secondary)] px-1.5 py-px rounded-full">
             {PROVIDER_LABELS[record.provider] ?? record.provider}
           </span>
-          <span className="text-[10px] text-[var(--text-tertiary)] ml-auto">
+          <span className="text-[10px] text-[var(--text-tertiary)] ml-auto tabular-nums">
             {formatTime(record.created_at)}
           </span>
         </div>
@@ -134,7 +134,7 @@ const RecordCard = memo(function RecordCard({
           onClick={(e) => e.stopPropagation()}
         >
           <div>
-            <p className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wide mb-1">
+            <p className="text-[10px] font-medium text-[var(--text-tertiary)] uppercase tracking-wide mb-1">
               原文
             </p>
             <p className="selectable text-[12px] text-[var(--text-secondary)] leading-relaxed whitespace-pre-wrap break-words font-mono">
@@ -142,7 +142,7 @@ const RecordCard = memo(function RecordCard({
             </p>
           </div>
           <div>
-            <p className="text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wide mb-1">
+            <p className="text-[10px] font-medium text-[var(--text-tertiary)] uppercase tracking-wide mb-1">
               译文
             </p>
             <p className="selectable text-[13px] text-[var(--text-primary)] leading-relaxed whitespace-pre-wrap break-words">

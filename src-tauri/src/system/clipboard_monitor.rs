@@ -57,9 +57,9 @@ fn hash_text(text: &str) -> u64 {
 }
 
 /// 监控任务配置
-const POLL_INTERVAL: Duration = Duration::from_millis(500);
+const POLL_INTERVAL: Duration = Duration::from_millis(200);
 /// 防抖延迟：剪贴板内容变化后等待此时间再触发翻译
-const DEBOUNCE_DELAY: Duration = Duration::from_millis(400);
+const DEBOUNCE_DELAY: Duration = Duration::from_millis(300);
 
 /// 控制器句柄：可在运行时暂停/恢复监控，并请求重置 last_text
 #[derive(Clone)]
@@ -163,8 +163,8 @@ fn clipboard_monitor_thread(app: AppHandle, controller: Arc<MonitorController>) 
     tracing::info!("[clipboard_monitor_thread] 线程开始运行");
 
     // 创建一次剪贴板句柄并全程复用：
-    // 避免每 500ms 反复调用 arboard::Clipboard::new()（Windows 下每次
-    // 都打开/关闭系统剪贴板 API，约 120 次/分钟）
+    // 避免每 200ms 反复调用 arboard::Clipboard::new()（Windows 下每次
+    // 都打开/关闭系统剪贴板 API，约 300 次/分钟）
     let mut clipboard = match arboard::Clipboard::new() {
         Ok(cb) => cb,
         Err(e) => {

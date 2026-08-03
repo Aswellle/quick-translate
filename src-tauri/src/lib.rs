@@ -10,7 +10,7 @@ pub mod state;
 pub mod system;
 pub mod types;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::{Mutex, RwLock};
@@ -76,6 +76,14 @@ pub fn run() {
         })
         .setup(|app| {
             let app_handle = app.handle().clone();
+
+            // ── Step 0: WebView2 用户数据目录清理 ─────────────────────────────
+            // 必须在任何 webview 进程创建之前执行（否则缓存文件被锁定删不掉）。
+            // EBWebView 下 GPU/磁盘缓存无上限累积（Tauri#8145 / WebView2Feedback#4410），
+            // 长期使用可膨胀至数 GB；这些目录全部可再生，删除无损。
+            if let Ok(local_data_dir) = app.path().app_local_data_dir() {
+                cleanup_webview_cache(local_data_dir.join("EBWebView"));
+            }
 
             // ── Step 1: 初始化基础设施层 ──────────────────────────────────────
             let app_data_dir = app.path().app_data_dir().expect("无法获取 App Data 目录");
@@ -241,6 +249,37 @@ pub fn run() {
         .expect("QuickTranslate 启动失败");
 }
 
+/// 删除 WebView2 用户数据目录下可再生的缓存子目录（磁盘体积控制）。
+///
+/// 必须在任何 webview 创建之前调用；删除失败（文件被占用）只告警不阻塞启动。
+/// 保留 `Default/` 根目录下的 profile 数据（Local Storage 等），只清纯缓存。
+fn cleanup_webview_cache(ebwebview_dir: PathBuf) {
+    const VOLATILE_DIRS: &[&str] = &[
+        "GrShaderCache",
+        "ShaderCache",
+        "GPUCache",
+        "BrowserMetrics",
+        "GPUPersistentCache",
+        "DawnWebGPUCache",
+        "DawnGraphiteCache",
+        "Default/Cache",
+        "Default/Code Cache",
+        "Default/GPUCache",
+        "Default/DawnWebGPUCache",
+        "Default/DawnGraphiteCache",
+    ];
+    for rel in VOLATILE_DIRS {
+        let dir = ebwebview_dir.join(rel);
+        if !dir.exists() {
+            continue;
+        }
+        match std::fs::remove_dir_all(&dir) {
+            Ok(_) => tracing::info!("[cleanup_webview_cache] 已删除缓存目录: {}", rel),
+            Err(e) => tracing::warn!("[cleanup_webview_cache] 删除 {} 失败: {}", rel, e),
+        }
+    }
+}
+
 /// 初始化日志系统（stdout + 持久化滚动文件）
 fn init_logging(app_data_dir: &Path) {
     use tracing_appender::rolling;
@@ -249,7 +288,14 @@ fn init_logging(app_data_dir: &Path) {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     let logs_dir = app_data_dir.join("logs");
-    let file_appender = rolling::daily(&logs_dir, "quicktranslate.log");
+    // 用 Builder 显式限定 max_log_files：`rolling::daily()` 简写永不清理旧日志，
+    // 日滚动文件会无限累积。保留最近 14 天。
+    let file_appender = rolling::Builder::new()
+        .rotation(rolling::Rotation::DAILY)
+        .filename_prefix("quicktranslate.log")
+        .max_log_files(14)
+        .build(&logs_dir)
+        .expect("日志 appender 初始化失败");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
     // _guard must stay alive for the duration of the process;
