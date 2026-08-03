@@ -168,28 +168,35 @@ export function SettingsWindow() {
   return (
     <div className="flex flex-col h-screen bg-[var(--bg-secondary)] dark:bg-[var(--bg-primary)] text-[var(--text-primary)] select-none">
       {/* ── 标题栏 ── */}
-      <div className="px-6 py-4 bg-[var(--surface-primary)] dark:bg-[var(--surface-secondary)] border-b border-[var(--border-secondary)]">
-        <h1 className="text-base font-semibold tracking-wide" style={{ fontFamily: "var(--font-display)" }}>
-          设置
-        </h1>
+      <div className="px-6 pt-4 pb-3 bg-[var(--surface-primary)] dark:bg-[var(--surface-secondary)] border-b border-[var(--border-secondary)]">
+        <div className="flex items-center gap-2">
+          <h1 className="text-[15px] font-semibold tracking-tight" style={{ fontFamily: "var(--font-display)" }}>
+            设置
+          </h1>
+        </div>
+        <p className="text-[11px] text-[var(--text-tertiary)] mt-0.5">
+          QuickTranslate
+        </p>
       </div>
 
-      {/* ── macOS Tab ── */}
-      <div className="flex gap-1 px-6 pt-3 bg-[var(--bg-secondary)]">
-        {(["general", "provider"] as TabId[]).map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={[
-              "px-4 py-1.5 text-[13px] font-medium rounded-lg transition-all duration-150",
-              activeTab === tab
-                ? "bg-[var(--surface-primary)] dark:bg-[var(--surface-tertiary)] text-[var(--text-primary)] shadow-sm"
-                : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]",
-            ].join(" ")}
-          >
-            {tab === "general" ? "常规" : "翻译源"}
-          </button>
-        ))}
+      {/* ── macOS 分段 Tab ── */}
+      <div className="px-6 pt-3 bg-[var(--bg-secondary)]">
+        <div className="inline-flex rounded-lg bg-[var(--surface-tertiary)] dark:bg-[var(--surface-secondary)] p-0.5 gap-0.5">
+          {(["general", "provider"] as TabId[]).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => setActiveTab(tab)}
+              className={[
+                "px-4 py-1.5 text-[12.5px] font-medium rounded-[7px] transition-all duration-150",
+                activeTab === tab
+                  ? "bg-[var(--surface-primary)] dark:bg-[var(--surface-tertiary)] text-[var(--text-primary)] shadow-sm"
+                  : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]",
+              ].join(" ")}
+            >
+              {tab === "general" ? "常规" : "翻译源"}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* ── 内容区 ── */}
@@ -322,24 +329,38 @@ function GeneralTab({
               <StatCard label="近 30 天" value={String(stats.last_30_days)} unit="次" />
             </div>
             {Object.keys(stats.by_provider).length > 0 && (
-              <div className="macos-card p-3.5 space-y-2">
+              <div className="macos-card p-3.5 space-y-2.5">
                 <p className="text-[11px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wide">
                   按翻译源
                 </p>
-                <div className="space-y-1.5">
-                  {Object.entries(stats.by_provider)
-                    .sort(([, a], [, b]) => b - a)
-                    .map(([provider, count]) => (
-                      <div key={provider} className="flex items-center justify-between">
-                        <span className="text-[12px] text-[var(--text-secondary)]">
-                          {provider}
-                        </span>
-                        <span className="text-[12px] font-medium text-[var(--text-primary)]">
-                          {count} 次
-                        </span>
-                      </div>
-                    ))}
-                </div>
+                {(() => {
+                  const entries = Object.entries(stats.by_provider).sort(([, a], [, b]) => b - a);
+                  const max = Math.max(...entries.map(([, c]) => c), 1);
+                  return (
+                    <div className="space-y-2">
+                      {entries.map(([provider, count]) => (
+                        <div key={provider}>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-[12px] text-[var(--text-secondary)]">{provider}</span>
+                            <span className="text-[12px] font-medium text-[var(--text-primary)] tabular-nums">
+                              {count} 次
+                            </span>
+                          </div>
+                          <div className="h-1 rounded-full bg-[var(--surface-tertiary)] overflow-hidden">
+                            <div
+                              className="h-full rounded-full"
+                              style={{
+                                width: `${Math.max((count / max) * 100, 4)}%`,
+                                backgroundColor: "var(--system-blue)",
+                                opacity: 0.7,
+                              }}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </div>
@@ -355,7 +376,7 @@ function StatCard({ label, value, unit }: { label: string; value: string; unit: 
   return (
     <div className="macos-card p-3.5">
       <p className="text-[10px] text-[var(--text-tertiary)] uppercase tracking-wide">{label}</p>
-      <p className="text-xl font-semibold text-[var(--text-primary)] mt-0.5" style={{ fontFamily: "var(--font-display)" }}>
+      <p className="text-[22px] font-semibold text-[var(--text-primary)] mt-0.5 tabular-nums leading-none" style={{ fontFamily: "var(--font-display)", letterSpacing: "-0.02em" }}>
         {value}
         <span className="text-[11px] font-normal text-[var(--text-tertiary)] ml-1">{unit}</span>
       </p>
@@ -477,7 +498,7 @@ function ProviderCard({
         className="w-full px-4 py-3 flex items-center justify-between hover:bg-[var(--hover-bg)] transition-colors text-left"
       >
         <div className="flex items-center gap-2.5">
-          <span className="text-sm font-medium">{provider.name}</span>
+          <span className="text-[13px] font-medium text-[var(--text-primary)]">{provider.name}</span>
           <span
             className="text-[10px] text-white px-1.5 py-px rounded-full font-semibold"
             style={{ backgroundColor: provider.badgeColor.includes("purple") ? "#AF52DE" : provider.badgeColor.includes("orange") ? "#FF9500" : provider.badgeColor.includes("blue") ? "#007AFF" : "#5AC8FA" }}
@@ -499,7 +520,7 @@ function ProviderCard({
             <span className="text-[10px] text-red-500">验证失败</span>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2.5">
           <span className="text-[11px] text-[var(--text-tertiary)]">{provider.freeQuota}</span>
           <svg
             className={["w-3.5 h-3.5 text-[var(--text-tertiary)] transition-transform duration-200", expanded ? "rotate-180" : ""].join(" ")}
@@ -516,7 +537,7 @@ function ProviderCard({
         <div className="border-t border-[var(--border-secondary)] px-4 py-3.5 space-y-3 bg-[var(--surface-secondary)]/50">
           {/* 配置步骤 */}
           {provider.setupSteps.length > 0 && (
-            <div className="bg-[var(--surface-tertiary)] rounded-lg p-3 space-y-1.5">
+            <div className="bg-[var(--surface-tertiary)] rounded-lg p-3 space-y-1.5 border border-[var(--border-secondary)]">
               <p className="text-[10px] font-semibold text-[var(--text-secondary)] flex items-center gap-1">
                 <svg className="w-3 h-3" viewBox="0 0 16 16" fill="none">
                   <rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor" strokeWidth="1.3" />
@@ -597,11 +618,11 @@ function ProviderCard({
 
 function SettingsSection({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="space-y-2.5">
-      <p className="text-[11px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wider px-1">
+    <div className="space-y-2">
+      <p className="text-[11px] font-medium text-[var(--text-tertiary)] uppercase tracking-wide px-1">
         {label}
       </p>
-      <div className="macos-card divide-y divide-[var(--border-secondary)]">
+      <div className="macos-card divide-y divide-[var(--border-secondary)] overflow-hidden">
         {children}
       </div>
     </div>
@@ -620,7 +641,7 @@ function SettingsRow({
   return (
     <div className="px-4 py-3 flex items-center justify-between gap-4">
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-[var(--text-primary)]">{label}</p>
+        <p className="text-[13px] font-medium text-[var(--text-primary)]">{label}</p>
         {hint && <p className="text-[11px] text-[var(--text-tertiary)] mt-0.5 leading-snug">{hint}</p>}
       </div>
       <div className="shrink-0">{children}</div>
@@ -636,18 +657,22 @@ function Toggle({ value, onChange }: { value: boolean; onChange: (v: boolean) =>
       role="switch"
       aria-checked={value}
       className={[
-        "relative w-9 h-5 rounded-full transition-all duration-200",
+        "relative w-9 h-5 rounded-full transition-colors duration-200",
         value ? "bg-[var(--system-blue)]" : "bg-[var(--surface-tertiary)]",
       ].join(" ")}
-      style={{ boxShadow: value ? "0 0 0 0 rgba(0, 122, 255, 0)" : "inset 0 0 0 1px rgba(0,0,0,0.1)" }}
+      style={{
+        boxShadow: value
+          ? "0 0 0 0 rgba(0, 122, 255, 0)"
+          : "inset 0 0 0 1px rgba(0,0,0,0.08)",
+      }}
     >
       <span
         className={[
-          "absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full shadow-sm",
+          "absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full",
           "transition-transform duration-200",
+          "shadow-[0_1px_3px_rgba(0,0,0,0.2)]",
           value ? "translate-x-4" : "translate-x-0",
         ].join(" ")}
-        style={{ boxShadow: "0 1px 3px rgba(0,0,0,0.15)" }}
       />
     </button>
   );

@@ -63,7 +63,8 @@ export function SearchBar({ value, onChange, placeholder }: SearchBarProps) {
       {localValue && (
         <button
           onClick={handleClear}
-          className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 rounded text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] transition-colors"
+          aria-label="清除搜索"
+          className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-md text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] transition-colors"
         >
           <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none">
             <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
