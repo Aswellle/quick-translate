@@ -211,8 +211,6 @@ git push origin v0.2.4
 
 本项目为**专有软件**，仅供个人非商业使用。详细条款见 [LICENSE](LICENSE)。
 
-商业授权或合作请联系：WL_Oneace@163.com
-
 ---
 
 <div align="center">
