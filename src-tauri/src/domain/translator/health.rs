@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 
 use rand::Rng;
 
-use crate::util::jitter::with_jitter;
+use crate::util::backoff::with_jitter;
 
 use super::error_class::ErrorClass;
 

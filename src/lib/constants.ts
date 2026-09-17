@@ -150,6 +150,7 @@ export const ERROR_MESSAGES: Record<string, string> = {
   RATE_LIMIT:          "请求频率过高，请稍后重试",
   QUOTA_EXHAUSTED:     "翻译额度已用尽",
   TIMEOUT:             "翻译超时，请重试",
+  PROVIDER_REJECTED:   "翻译服务不支持该内容或语言",
   ALL_PROVIDERS_FAILED:"所有翻译源均不可用",
   CLIPBOARD_ERROR:     "剪贴板操作失败",
   HOTKEY_CONFLICT:     "快捷键冲突，请在设置中修改",

@@ -4,10 +4,12 @@
 // 计划第 54 节要求把 next_backoff / should_retry 一类逻辑做成纯函数：
 // 纯函数 → 不用启动 Tauri → 不用 Windows → 测试稳定。
 //
-// ±20% 抖动本身与剪贴板无关（Provider 熔断冷却也用同一套），已抽到
-// crate::util::jitter。
+// ±20% 抖动与指数退避本身与剪贴板无关（Provider 熔断冷却、请求重试也用
+// 同一套数学），已抽到 crate::util::backoff。
 
 use std::time::Duration;
+
+use crate::util::backoff::exponential_backoff;
 
 /// supervisor 重启退避表（计划第 5 节）：
 /// 250ms → 1s → 3s → 10s → 30s，此后封顶在 30s。
@@ -39,19 +41,6 @@ pub fn transient_backoff(consecutive_failures: u32, initial: Duration, max: Dura
     // 失败次数从 1 起，第 1 次失败应当用 initial 而非 2×initial
     let exp = consecutive_failures.saturating_sub(1);
     exponential_backoff(exp, initial, max)
-}
-
-/// 指数退避：`initial * 2^exp`，上限 `max`。
-///
-/// 用整数毫秒做位移而非浮点乘法，避免 Duration 的舍入让
-/// 「第 n 次恰好等于上限」这类边界断言变脆。
-pub fn exponential_backoff(exp: u32, initial: Duration, max: Duration) -> Duration {
-    let initial_ms = initial.as_millis() as u64;
-    let max_ms = max.as_millis() as u64;
-    // 先夹住指数：`1u64 << 64` 会溢出 panic
-    let shift = exp.min(63);
-    let scaled = initial_ms.saturating_mul(1u64 << shift);
-    Duration::from_millis(scaled.min(max_ms))
 }
 
 #[cfg(test)]
@@ -113,12 +102,5 @@ mod tests {
         for failures in 20..200 {
             assert_eq!(transient_backoff(failures, initial, max), max);
         }
-    }
-
-    /// 移位溢出防护：exp 很大时不能 panic
-    #[test]
-    fn exponential_backoff_does_not_overflow() {
-        let d = exponential_backoff(u32::MAX, Duration::from_millis(1), Duration::from_secs(30));
-        assert_eq!(d, Duration::from_secs(30));
     }
 }

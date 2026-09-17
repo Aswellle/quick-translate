@@ -24,7 +24,7 @@ use tauri::{AppHandle, Manager};
 use crate::state::AppState;
 
 use super::backend::{ArboardBackend, ClipboardBackend, ClipboardBackendError};
-use crate::util::jitter::with_jitter;
+use crate::util::backoff::with_jitter;
 
 use super::backoff::{restart_backoff, RESTART_BACKOFF_SCHEDULE};
 use super::controller::MonitorController;

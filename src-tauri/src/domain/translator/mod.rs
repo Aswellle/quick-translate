@@ -6,6 +6,7 @@ pub mod deepl;
 pub mod error_class;
 pub mod google;
 pub mod health;
+pub mod policy;
 pub mod tencent;
 pub mod youdao;
 
@@ -24,6 +25,7 @@ use deepl::DeepLProvider;
 use error_class::classify;
 use google::GoogleProvider;
 use health::{ProviderHealth, ProviderHealthState};
+use policy::{policy_for, TranslationBudget, TOTAL_BUDGET};
 use tencent::TencentProvider;
 use youdao::YoudaoProvider;
 
@@ -114,6 +116,175 @@ impl ProviderEntry {
     }
 }
 
+/// 依据 HTTP 状态码构造错误（计划第 14 节）。
+///
+/// 4xx（401/403/408/429 除外）意味着「这个请求被拒绝了」：换一家也一样，
+/// 所以归入 `ProviderRejected` —— 不重试、不 fallback、也不计入熔断。
+/// 408 与 5xx 是服务端暂态问题，仍走 `NetworkError`（Transient）。
+///
+/// 此前所有非 200 响应一律折进 `NetworkError`，于是「语种不支持」这类请求
+/// 本身的问题会被当成 provider 故障 —— 撞够三次就把一个完全正常的源
+/// 熔断十分钟。这是本次拆分要修的东西。
+pub fn http_status_error(provider: &str, status: u16, body: String) -> AppError {
+    match status {
+        401 | 403 => AppError::AuthError {
+            provider: provider.to_string(),
+        },
+        429 => AppError::RateLimit {
+            provider: provider.to_string(),
+        },
+        // 408 是服务端在等请求超时，属于暂态
+        408 => AppError::NetworkError(format!("{} HTTP 408: {}", provider, body)),
+        400..=499 => AppError::ProviderRejected {
+            provider: provider.to_string(),
+            status,
+        },
+        _ => AppError::NetworkError(format!("{} HTTP {}: {}", provider, status, body)),
+    }
+}
+
+/// 单个 provider 的尝试循环结局。
+enum AttemptOutcome {
+    Success(TranslationResult),
+    /// 该源已用尽（失败/超时/熔断中被跳过），换下一个
+    Exhausted,
+    /// 总预算耗尽 —— 整条链必须停下来
+    BudgetExhausted,
+    /// 同语言：不是失败，但也无需换源，直接终止整条链
+    SameLanguage(String),
+    /// Permanent：换一家也一样，把真实原因交给用户
+    Fatal(AppError),
+}
+
+/// 对**一个** provider 执行「尝试 → 判定 → 有限重试」的循环（计划第 8/13/30 节）。
+///
+/// Retry 与 Fallback 的分界线在这里：本函数只决定「同一个源要不要再试一次」，
+/// 换源是调用方的事。
+async fn try_provider(
+    entry: &ProviderEntry,
+    text: &str,
+    target_lang: &str,
+    budget: &TranslationBudget,
+    errors: &mut Vec<(String, String)>,
+) -> AttemptOutcome {
+    let provider_id = entry.provider.info().id;
+    let policy = policy_for(&provider_id);
+
+    for attempt in 1..=policy.max_attempts {
+        // ── 预算闸门：任何一次尝试之前都先看还剩多少 ──
+        if budget.is_exhausted() {
+            tracing::warn!(
+                event = "translation_budget_exhausted",
+                provider = %provider_id,
+                "[provider] 总预算已耗尽，停止 fallback 链"
+            );
+            errors.push((provider_id, "总预算已耗尽".to_string()));
+            return AttemptOutcome::BudgetExhausted;
+        }
+
+        // ── 熔断闸门：同步、短暂持锁，且不跨越下面的网络 await ──
+        //
+        // 每次尝试前都要过：上一次尝试可能刚把它推到熔断阈值。
+        {
+            let mut h = entry.lock_health();
+            if !h.try_acquire(Instant::now()) {
+                tracing::debug!(
+                    event = "provider_skipped_by_circuit",
+                    provider = %provider_id,
+                    "[provider] {} 处于熔断中，跳过本次请求",
+                    provider_id
+                );
+                errors.push((provider_id, "熔断中，已跳过".to_string()));
+                return AttemptOutcome::Exhausted;
+            }
+        }
+
+        // 单次尝试超时 = 策略值与剩余预算取小 —— 总预算真正生效的地方
+        let attempt_timeout = budget.attempt_timeout(policy);
+        let outcome =
+            tokio::time::timeout(attempt_timeout, entry.provider.translate(text, target_lang))
+                .await;
+
+        // 引擎施加的超时与 provider 自报的超时走同一条处理路径，
+        // 因此同样计入熔断、同样允许重试（计划第 8 节：Request timeout 重试 0~1 次）
+        let result = match outcome {
+            Ok(r) => r,
+            Err(_elapsed) => Err(AppError::Timeout {
+                timeout_secs: attempt_timeout.as_secs().max(1),
+            }),
+        };
+
+        match result {
+            Ok(result) => {
+                entry.lock_health().record_success(Instant::now());
+                tracing::info!(
+                    "翻译成功: provider={}, {}ms",
+                    provider_id,
+                    result.duration_ms
+                );
+                return AttemptOutcome::Success(result);
+            }
+            Err(AppError::SameLanguage { lang }) => {
+                // provider 正常回应了，只是这次源语言与目标语言相同。
+                // 这是一次成功的调用（它证明 provider 可达），因此记成功 ——
+                // 顺带正确归还半开探测名额。
+                entry.lock_health().record_success(Instant::now());
+                tracing::info!("检测到相同语言 ({})，跳过 fallback 链", lang);
+                return AttemptOutcome::SameLanguage(lang);
+            }
+            Err(e) => {
+                let class = classify(&e);
+                {
+                    let mut h = entry.lock_health();
+                    let mut rng = rand::thread_rng();
+                    h.record_failure(class, Instant::now(), &mut rng);
+                }
+
+                tracing::warn!(
+                    event = "provider_attempt_failed",
+                    provider = %provider_id,
+                    class = ?class,
+                    attempt,
+                    "[provider] {} 第 {} 次尝试失败: {}",
+                    provider_id,
+                    attempt,
+                    e
+                );
+
+                if !class.allows_fallback() {
+                    return AttemptOutcome::Fatal(e);
+                }
+
+                if attempt < policy.max_attempts && policy.should_retry(class) {
+                    let backoff = policy.backoff_after(attempt);
+                    if backoff >= budget.remaining() {
+                        // 连退避都睡不起，重试没有意义 —— 省下预算给别的源
+                        errors.push((provider_id, e.to_string()));
+                        return AttemptOutcome::Exhausted;
+                    }
+                    tracing::info!(
+                        event = "provider_retry_scheduled",
+                        provider = %provider_id,
+                        attempt,
+                        backoff_ms = backoff.as_millis() as u64,
+                        "[provider] {} 将在 {:?} 后重试",
+                        provider_id,
+                        backoff
+                    );
+                    tokio::time::sleep(backoff).await;
+                    continue;
+                }
+
+                errors.push((provider_id, e.to_string()));
+                return AttemptOutcome::Exhausted;
+            }
+        }
+    }
+
+    // 只在 max_attempts == 0 时可达；保住类型上的完整性
+    AttemptOutcome::Exhausted
+}
+
 pub struct TranslationEngine {
     providers: RwLock<Vec<ProviderEntry>>,
     active_provider_id: RwLock<String>,
@@ -139,10 +310,25 @@ impl TranslationEngine {
         });
     }
 
+    /// 翻译。使用计划第 13 节规定的 8 秒总预算。
     pub async fn translate(
         &self,
         text: &str,
         target_lang: &str,
+    ) -> Result<TranslationResult, AppError> {
+        self.translate_with_budget(text, target_lang, TranslationBudget::new(TOTAL_BUDGET))
+            .await
+    }
+
+    /// 带显式预算的翻译。
+    ///
+    /// 生产路径固定用 8 秒总预算；测试用这个入口构造「已耗尽」与「只剩一点」
+    /// 的情形 —— 否则验证预算生效就得让测试真的等满 8 秒。
+    pub async fn translate_with_budget(
+        &self,
+        text: &str,
+        target_lang: &str,
+        budget: TranslationBudget,
     ) -> Result<TranslationResult, AppError> {
         let active_id = self.active_provider_id.read().await.clone();
         let fallback = *self.fallback_enabled.read().await;
@@ -167,78 +353,34 @@ impl TranslationEngine {
                 continue;
             }
 
-            let provider_id = info.id.clone();
-
-            // ── 熔断闸门：同步、短暂持锁，且不跨越下面的网络 await ──
-            {
-                let mut h = entry.lock_health();
-                if !h.try_acquire(Instant::now()) {
-                    tracing::debug!(
-                        event = "provider_skipped_by_circuit",
-                        provider = %provider_id,
-                        "[provider] {} 处于熔断中，跳过本次请求",
-                        provider_id
-                    );
-                    errors.push((provider_id, "熔断中，已跳过".to_string()));
-                    continue;
-                }
-            }
-
-            match entry.provider.translate(text, target_lang).await {
-                Ok(result) => {
-                    entry.lock_health().record_success(Instant::now());
-                    tracing::info!(
-                        "翻译成功: provider={}, {}ms",
-                        provider_id,
-                        result.duration_ms
-                    );
-                    return Ok(result);
-                }
-                Err(AppError::SameLanguage { lang }) => {
-                    // provider 正常回应了，只是这次源语言与目标语言相同。
-                    // 这是一次成功的调用（它证明 provider 可达），因此记成功 ——
-                    // 顺带正确归还半开探测名额。
-                    entry.lock_health().record_success(Instant::now());
-                    tracing::info!("检测到相同语言 ({})，跳过 fallback 链", lang);
-                    return Err(AppError::SameLanguage { lang });
-                }
-                Err(e) => {
-                    let class = classify(&e);
-                    {
-                        let mut h = entry.lock_health();
-                        let mut rng = rand::thread_rng();
-                        h.record_failure(class, Instant::now(), &mut rng);
-                    }
-
-                    tracing::warn!(
-                        event = "provider_attempt_failed",
-                        provider = %provider_id,
-                        class = ?class,
-                        "翻译源 {} 失败: {}",
-                        provider_id,
-                        e
-                    );
-
-                    if !fallback {
-                        errors.push((provider_id, e.to_string()));
-                        return Err(AppError::AllProvidersFailed { errors });
-                    }
-
-                    if !class.allows_fallback() {
-                        // Permanent：换一家也是同样结果。直接把原因告诉用户，
-                        // 比统一报「所有翻译源均不可用」有用得多。
-                        return Err(e);
-                    }
-
-                    errors.push((provider_id, e.to_string()));
-                }
+            match try_provider(&entry, text, target_lang, &budget, &mut errors).await {
+                AttemptOutcome::Success(result) => return Ok(result),
+                AttemptOutcome::SameLanguage(lang) => return Err(AppError::SameLanguage { lang }),
+                // Permanent：换一家也是同样结果。直接把原因告诉用户，
+                // 比统一报「所有翻译源均不可用」有用得多。
+                AttemptOutcome::Fatal(e) => return Err(e),
+                // 预算耗尽：整条链必须停 —— 这正是「不让用户干等几十秒」的落点
+                AttemptOutcome::BudgetExhausted => break,
+                AttemptOutcome::Exhausted => continue,
             }
         }
 
         Err(AppError::AllProvidersFailed { errors })
     }
 
-    /// 计算本次请求的尝试顺序，并把需要的句柄克隆出来。
+    /// 计算本次请求的尝试顺序，并把需要的句柄克隆出来（计划第 10 节）。
+    ///
+    /// 排序依据是「静态优先级」与「健康度」两件事：
+    ///
+    ///   tier 0  active —— 用户明确选定的源，永远先试
+    ///   tier 1  Healthy —— 按 FALLBACK_PRIORITY 静态顺序
+    ///   tier 2  Degraded —— 有失败但还能用，排到健康源之后
+    ///   tier 3  Open / HalfOpen —— 排最后
+    ///
+    /// 把 Degraded 排在 Healthy 之后，是为了不再拿一个正在失败的源去浪费
+    /// 用户的预算。Open 的**不**在这里剔除：熔断闸门（`try_acquire`）才是
+    /// 唯一有权决定放不放行的地方，而冷却到期时正是它在发放半开探测名额 ——
+    /// 提前过滤掉就等于永远不探测，那个 provider 再也回不来。
     ///
     /// 读锁在这里拿、在这里放。返回之后调用方做网络 I/O 时，注册表锁已经
     /// 释放 —— 这是本模块要修的那个问题的核心（计划第 11 节）。
@@ -249,30 +391,46 @@ impl TranslationEngine {
             return Vec::new();
         }
 
-        let active_idx = entries
+        // active 未注册时退回注册表里的第一个（与重构前 unwrap_or(0) 一致）
+        let active = entries
             .iter()
-            .position(|e| e.provider.info().id == active_id)
-            .unwrap_or(0);
+            .find(|e| e.provider.info().id == active_id)
+            .map(|e| e.provider.info().id)
+            .unwrap_or_else(|| entries[0].provider.info().id);
 
-        let mut order: Vec<usize> = vec![active_idx];
-        if fallback {
-            // fallback 顺序：按优先级排列（跳过已选的 active）
-            for pid in &FALLBACK_PRIORITY {
-                if let Some(idx) = entries.iter().position(|e| e.provider.info().id == *pid) {
-                    if idx != active_idx {
-                        order.push(idx);
-                    }
-                }
-            }
-            // 兜底：其余未在 priority 中的 provider
-            for i in 0..entries.len() {
-                if !order.contains(&i) {
-                    order.push(i);
-                }
-            }
+        if !fallback {
+            return entries
+                .iter()
+                .find(|e| e.provider.info().id == active)
+                .cloned()
+                .into_iter()
+                .collect();
         }
 
-        order.into_iter().map(|i| entries[i].clone()).collect()
+        let mut ranked: Vec<(u8, usize, ProviderEntry)> = entries
+            .iter()
+            .map(|e| {
+                let id = e.provider.info().id;
+                let tier = if id == active {
+                    0
+                } else {
+                    match e.lock_health().state() {
+                        ProviderHealthState::Healthy => 1,
+                        ProviderHealthState::Degraded => 2,
+                        ProviderHealthState::Open | ProviderHealthState::HalfOpen => 3,
+                    }
+                };
+                // 不在 FALLBACK_PRIORITY 表里的（理论上没有）排在同 tier 最后
+                let rank = FALLBACK_PRIORITY
+                    .iter()
+                    .position(|p| *p == id)
+                    .unwrap_or(usize::MAX);
+                (tier, rank, e.clone())
+            })
+            .collect();
+
+        ranked.sort_by_key(|(tier, rank, _)| (*tier, *rank));
+        ranked.into_iter().map(|(_, _, e)| e).collect()
     }
 
     pub async fn set_active_provider(&self, provider_id: &str) -> Result<(), AppError> {
@@ -392,7 +550,9 @@ impl TranslationEngine {
 mod tests {
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
 
+    use super::error_class::ErrorClass;
     use super::*;
 
     /// 脚本化的翻译源（计划第 35 节要求）。
@@ -407,6 +567,10 @@ mod tests {
         ServerError,
         SameLanguage,
         UnsupportedInput,
+        /// 服务端以 4xx 拒绝（语种不支持等）
+        Rejected,
+        /// 慢响应：用于验证引擎施加的单次尝试超时
+        Slow(Duration),
     }
 
     struct MockProvider {
@@ -442,13 +606,17 @@ mod tests {
         ) -> Result<TranslationResult, AppError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
 
-            let mut script = self.script.lock().unwrap();
-            let outcome = if script.len() > 1 {
-                script.pop_front().unwrap()
-            } else {
-                script.front().copied().unwrap_or(Outcome::Ok("ok"))
+            // 用块作用域而不是 drop()：下面 Slow 分支里有 await，
+            // 而 MutexGuard 不是 Send —— 必须让编译器明确看到它在 await 前
+            // 就已经出作用域。
+            let outcome = {
+                let mut script = self.script.lock().unwrap();
+                if script.len() > 1 {
+                    script.pop_front().unwrap()
+                } else {
+                    script.front().copied().unwrap_or(Outcome::Ok("ok"))
+                }
             };
-            drop(script);
 
             match outcome {
                 Outcome::Ok(translated) => Ok(TranslationResult {
@@ -475,6 +643,19 @@ mod tests {
                     lang: "zh".to_string(),
                 }),
                 Outcome::UnsupportedInput => Err(AppError::NonTextContent),
+                Outcome::Rejected => Err(http_status_error(self.id, 400, String::new())),
+                Outcome::Slow(d) => {
+                    tokio::time::sleep(d).await;
+                    Ok(TranslationResult {
+                        source_text: text.to_string(),
+                        translated_text: "late".to_string(),
+                        detected_source_lang: "en".to_string(),
+                        target_lang: target_lang.to_string(),
+                        provider: self.id.to_string(),
+                        duration_ms: d.as_millis() as u64,
+                        truncated: false,
+                    })
+                }
             }
         }
 
@@ -543,7 +724,13 @@ mod tests {
 
         assert_eq!(r.provider, "google");
         assert_eq!(r.translated_text, "你好");
-        assert_eq!(a.calls(), 1, "A 应被尝试一次");
+        // Phase 5 起，暂态失败会先按 RequestPolicy 原地重试一次再换源
+        // （计划第 30 节：per-provider attempts <= 2）
+        assert_eq!(
+            a.calls(),
+            policy_for("deepl").max_attempts as usize,
+            "A 应被尝试 max_attempts 次"
+        );
         assert_eq!(b.calls(), 1, "B 应被尝试");
     }
 
@@ -797,6 +984,207 @@ mod tests {
 
         assert_eq!(r.provider, "google");
         assert_eq!(unconfigured.calls(), 0, "未配置凭证的源不该被调用");
+    }
+
+    // ── HTTP 状态映射（计划第 14 节）─────────────────────────────────────
+
+    #[test]
+    fn http_status_maps_4xx_to_rejection_and_5xx_to_transient() {
+        // 4xx（401/403/408/429 除外）→ 请求被拒绝，不是 provider 故障
+        for status in [400, 404, 413, 422] {
+            let e = http_status_error("deepl", status, String::new());
+            assert_eq!(e.error_code(), "PROVIDER_REJECTED", "HTTP {}", status);
+            assert_eq!(classify(&e), ErrorClass::Permanent);
+        }
+
+        assert_eq!(
+            http_status_error("x", 401, String::new()).error_code(),
+            "AUTH_ERROR"
+        );
+        assert_eq!(
+            http_status_error("x", 403, String::new()).error_code(),
+            "AUTH_ERROR"
+        );
+        assert_eq!(
+            http_status_error("x", 429, String::new()).error_code(),
+            "RATE_LIMIT"
+        );
+
+        // 408 与 5xx 是服务端暂态问题
+        assert_eq!(
+            http_status_error("x", 408, String::new()).error_code(),
+            "NETWORK_ERROR"
+        );
+        for status in [500, 502, 503, 504] {
+            let e = http_status_error("x", status, String::new());
+            assert_eq!(e.error_code(), "NETWORK_ERROR");
+            assert_eq!(classify(&e), ErrorClass::Transient);
+        }
+    }
+
+    /// 回归：语种不支持（4xx）此前被折进 NetworkError，撞三次就把一个
+    /// 完全正常的翻译源熔断十分钟。
+    #[tokio::test]
+    async fn rejected_request_never_opens_the_circuit() {
+        let a = MockProvider::new("deepl", vec![Outcome::Rejected]);
+        let b = MockProvider::new("google", vec![Outcome::Ok("ok")]);
+        let engine = engine_with(&[a.clone(), b.clone()], "deepl", true).await;
+
+        for _ in 0..(health::FAILURE_THRESHOLD * 2) {
+            let err = engine.translate("x", "zh").await.unwrap_err();
+            assert_eq!(err.error_code(), "PROVIDER_REJECTED");
+        }
+
+        assert_eq!(
+            engine.provider_health("deepl").await,
+            Some(ProviderHealthState::Healthy),
+            "语种不支持不是 DeepL 的健康问题"
+        );
+        assert_eq!(b.calls(), 0, "换一家也是同样结果，不该白白多等一个超时");
+    }
+
+    // ── 重试预算（计划第 30 节）──────────────────────────────────────────
+
+    #[tokio::test]
+    async fn transient_failure_retries_the_same_provider_up_to_the_limit() {
+        let a = MockProvider::new("deepl", vec![Outcome::Timeout]);
+        let engine = engine_with(&[a.clone()], "deepl", true).await;
+
+        let err = engine.translate("x", "zh").await.unwrap_err();
+
+        assert_eq!(err.error_code(), "ALL_PROVIDERS_FAILED");
+        assert_eq!(
+            a.calls(),
+            policy_for("deepl").max_attempts as usize,
+            "暂态失败应重试同一个源，但严格受 max_attempts 限制"
+        );
+    }
+
+    /// 非官方兜底源不重试（best_effort 策略）
+    #[tokio::test]
+    async fn best_effort_provider_is_never_retried() {
+        let g = MockProvider::new("google", vec![Outcome::Timeout]);
+        let engine = engine_with(&[g.clone()], "google", true).await;
+
+        let _ = engine.translate("x", "zh").await;
+
+        assert_eq!(
+            g.calls(),
+            1,
+            "Google 的 best_effort 策略是 max_attempts = 1"
+        );
+    }
+
+    /// 认证失败不重试（重试一万次也不会好），但仍换源
+    #[tokio::test]
+    async fn non_retryable_class_moves_on_immediately() {
+        let a = MockProvider::new("deepl", vec![Outcome::Auth]);
+        let b = MockProvider::new("google", vec![Outcome::Ok("ok")]);
+        let engine = engine_with(&[a.clone(), b.clone()], "deepl", true).await;
+
+        assert_eq!(
+            engine.translate("x", "zh").await.unwrap().provider,
+            "google"
+        );
+        assert_eq!(a.calls(), 1, "Auth 不该在原地重试");
+    }
+
+    // ── 总预算（计划第 13 节）────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn exhausted_budget_stops_before_calling_any_provider() {
+        let a = MockProvider::new("deepl", vec![Outcome::Ok("ok")]);
+        let engine = engine_with(&[a.clone()], "deepl", true).await;
+
+        let expired = TranslationBudget::starting_at(
+            Instant::now() - TOTAL_BUDGET - Duration::from_secs(1),
+            TOTAL_BUDGET,
+        );
+        let err = engine
+            .translate_with_budget("x", "zh", expired)
+            .await
+            .unwrap_err();
+
+        assert_eq!(err.error_code(), "ALL_PROVIDERS_FAILED");
+        assert_eq!(a.calls(), 0, "预算已耗尽时不该再发起任何网络请求");
+    }
+
+    /// 计划第 13 节的核心承诺：五个源都坏掉也不能让用户等几十秒
+    #[tokio::test]
+    async fn slow_provider_is_cut_off_by_the_remaining_budget() {
+        let a = MockProvider::new("deepl", vec![Outcome::Slow(Duration::from_secs(5))]);
+        let engine = engine_with(&[a.clone()], "deepl", true).await;
+
+        // 预算只有 80ms，单次尝试超时会被压到 80ms
+        let start = Instant::now();
+        let err = engine
+            .translate_with_budget("x", "zh", TranslationBudget::new(Duration::from_millis(80)))
+            .await
+            .unwrap_err();
+
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "被 5 秒的慢响应拖住了，实际 {:?}",
+            start.elapsed()
+        );
+        assert_eq!(err.error_code(), "ALL_PROVIDERS_FAILED");
+    }
+
+    // ── fallback 排序：健康优先（计划第 10 节）───────────────────────────
+
+    /// Degraded 的源必须排到 Healthy 之后 —— 不该拿一个正在失败的源去浪费预算。
+    ///
+    /// 反证：若排序只看静态优先级，deepl（FALLBACK_PRIORITY 首位）会排在
+    /// google 之前并被选中，本测试就会失败。
+    #[tokio::test]
+    async fn degraded_providers_are_tried_after_healthy_ones() {
+        let deepl = MockProvider::new("deepl", vec![Outcome::Timeout]);
+        let google = MockProvider::new("google", vec![Outcome::Ok("google-ok")]);
+        let youdao = MockProvider::new("youdao", vec![Outcome::Ok("youdao-ok")]);
+        let engine = engine_with(
+            &[deepl.clone(), google.clone(), youdao.clone()],
+            "deepl",
+            true,
+        )
+        .await;
+
+        // 让 deepl 降到 Degraded：以它为 active 失败一次（内部会按策略重试 2 次）
+        let _ = engine.translate("x", "zh").await;
+        assert_eq!(
+            engine.provider_health("deepl").await,
+            Some(ProviderHealthState::Degraded),
+            "两次失败应停在 Degraded（阈值 3）"
+        );
+
+        // 换成 youdao 做 active，并让它失败；deepl 改为成功脚本
+        engine.set_active_provider("youdao").await.unwrap();
+        *youdao.script.lock().unwrap() = VecDeque::from(vec![Outcome::Timeout]);
+        *deepl.script.lock().unwrap() = VecDeque::from(vec![Outcome::Ok("deepl-ok")]);
+
+        let r = engine.translate("x", "zh").await.unwrap();
+
+        assert_eq!(
+            r.provider, "google",
+            "健康源应优先于 Degraded 源：期望 google，若排序忽略健康度会得到 deepl"
+        );
+    }
+
+    /// active 永远第一，即使它已经 Degraded —— 用户明确选了它
+    #[tokio::test]
+    async fn active_provider_is_tried_first_even_when_degraded() {
+        let deepl = MockProvider::new("deepl", vec![Outcome::Timeout]);
+        let google = MockProvider::new("google", vec![Outcome::Ok("ok")]);
+        let engine = engine_with(&[deepl.clone(), google.clone()], "deepl", true).await;
+
+        let _ = engine.translate("x", "zh").await; // deepl → Degraded
+
+        let before = deepl.calls();
+        let _ = engine.translate("x", "zh").await;
+
+        assert!(
+            deepl.calls() > before,
+            "active 是用户选定的源，即使 Degraded 也要先试它"
+        );
     }
 
     // ── build_provider ──────────────────────────────────────────────────

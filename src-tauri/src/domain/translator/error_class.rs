@@ -86,8 +86,12 @@ pub fn classify(err: &AppError) -> ErrorClass {
         // 不是失败，是正常的空操作
         AppError::SameLanguage { .. } => ErrorClass::SameLanguage,
 
-        // 输入的锅，不是 provider 的锅
-        AppError::EmptyText | AppError::NonTextContent => ErrorClass::Permanent,
+        // 输入的锅，不是 provider 的锅。
+        // ProviderRejected 同理：4xx 表示「这个请求被拒绝了」，
+        // 换一家还是同样结果，而 provider 本身是健康的。
+        AppError::EmptyText | AppError::NonTextContent | AppError::ProviderRejected { .. } => {
+            ErrorClass::Permanent
+        }
 
         // 本地配置错误：换源也没用，得先修配置
         AppError::ConfigError(_) => ErrorClass::Permanent,

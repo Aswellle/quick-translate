@@ -196,10 +196,9 @@ impl TranslationProvider for TencentProvider {
         let duration_ms = start.elapsed().as_millis() as u64;
 
         if !response.status().is_success() {
-            return Err(AppError::NetworkError(format!(
-                "腾讯翻译 HTTP {}",
-                response.status().as_u16()
-            )));
+            let status = response.status().as_u16();
+            let body = response.text().await.unwrap_or_default();
+            return Err(super::http_status_error("tencent", status, body));
         }
 
         let resp: TencentResponse = response
