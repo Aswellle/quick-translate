@@ -60,6 +60,23 @@ pub enum ProviderHealthState {
     HalfOpen,
 }
 
+/// 全部翻译源的整体可用性。
+///
+/// 计划第 4 节：UI 不该自己推测状态（「因为翻译失败，所以认为网络断了」），
+/// 结论必须由健康层给出。这个枚举就是那条结论 —— 引擎算好，运行时层与
+/// 界面直接采用。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProvidersHealth {
+    /// 一个能用的源都没有：要么没配凭证，要么全被熔断
+    Unavailable,
+    /// 至少一个可用，但有的在失败或熔断中
+    Degraded,
+    /// 所有可用的源都健康
+    Healthy,
+    /// 一个可用的源都没注册（用户还没配任何凭证）
+    Unconfigured,
+}
+
 /// 单个 provider 的健康状态。
 ///
 /// 方法都接收 `now: Instant` 而不是自己读时钟，因此整个状态机是确定性的：

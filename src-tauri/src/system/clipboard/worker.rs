@@ -152,7 +152,7 @@ pub fn run_worker(
 
         let current = match backend.get_text() {
             Ok(ClipboardRead::Text(t)) => {
-                if controller.health_mut().note_success() {
+                if controller.note_success() {
                     tracing::info!(
                         event = "clipboard_worker_recovered",
                         "[clipboard] 剪贴板读取已恢复"
@@ -164,22 +164,18 @@ pub fn run_worker(
             // 不计入失败、不触发退避；pending 保持不动，与重构前
             // `Err(_) => continue` 的语义一致，避免「复制图片把监控打进退避」。
             Ok(ClipboardRead::Empty) => {
-                controller.health_mut().note_success();
+                controller.note_success();
                 continue;
             }
             Err(e) => {
                 let kind = e.kind;
                 let code = e.code;
-                let failures = {
-                    let mut h = controller.health_mut();
-                    h.note_failure(code);
-                    h.consecutive_failures
-                };
+                let failures = controller.note_failure(code);
 
                 if kind == ClipboardErrorKind::Fatal {
                     // 致命错误不在这里空转：退出，把重建句柄的职责交还 supervisor。
                     // 这正是重构前缺失的一环 —— 那时这里直接 return，没人观察。
-                    controller.health_mut().note_worker_exit(code);
+                    controller.note_worker_exit(code);
                     tracing::error!(
                         event = "clipboard_worker_failed",
                         code,

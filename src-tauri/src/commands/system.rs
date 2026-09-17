@@ -59,6 +59,18 @@ pub fn get_popup_geometry() -> crate::system::popup_geometry::PopupGeometry {
     crate::system::popup_geometry::PopupGeometry::current()
 }
 
+/// 读取统一运行时状态（计划第 50 节）。
+///
+/// 界面用它回答「应用现在怎么样」，而不是从各种失败迹象自行推测。
+/// 需要事件时监听 `runtime-status-changed` —— 那个事件只在状态**变化**时
+/// 发出，不会按固定频率推送。
+#[tauri::command]
+pub async fn get_runtime_status(
+    app: AppHandle,
+) -> Result<crate::runtime::RuntimeStatusSnapshot, AppError> {
+    Ok(app.state::<crate::state::AppState>().runtime.snapshot())
+}
+
 /// 获取应用版本号
 #[tauri::command]
 pub fn get_app_version(app: AppHandle) -> String {
@@ -164,7 +176,10 @@ pub async fn set_clipboard_monitor_enabled(app: AppHandle, enabled: bool) -> Res
         .config
         .write()
         .await
-        .set("clipboard_monitor_enabled", if enabled { "true" } else { "false" })
+        .set(
+            "clipboard_monitor_enabled",
+            if enabled { "true" } else { "false" },
+        )
         .await?;
 
     // 更新监控线程状态

@@ -101,7 +101,7 @@ pub(crate) fn run_supervisor<R: Rng>(
         let backend = match (deps.make_backend)() {
             Ok(backend) => {
                 let is_restart = attempt > 0;
-                controller.health_mut().note_worker_started(is_restart);
+                controller.note_worker_started(is_restart);
                 if is_restart {
                     tracing::info!(
                         event = "clipboard_worker_recovered",
@@ -161,11 +161,8 @@ fn announce_restart(
     rng: &mut impl Rng,
 ) -> Duration {
     let delay = with_jitter(restart_backoff(attempt, schedule), rng);
-    {
-        let mut h = controller.health_mut();
-        h.note_worker_exit(error.code);
-        h.note_worker_restart();
-    }
+    controller.note_worker_exit(error.code);
+    controller.note_worker_restart();
     tracing::error!(
         event = "clipboard_worker_restart_scheduled",
         code = error.code,

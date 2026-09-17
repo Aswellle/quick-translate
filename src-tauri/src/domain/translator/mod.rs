@@ -24,7 +24,7 @@ use baidu::BaiduProvider;
 use deepl::DeepLProvider;
 use error_class::classify;
 use google::GoogleProvider;
-use health::{ProviderHealth, ProviderHealthState};
+use health::{ProviderHealth, ProviderHealthState, ProvidersHealth};
 use policy::{policy_for, TranslationBudget, TOTAL_BUDGET};
 use tencent::TencentProvider;
 use youdao::YoudaoProvider;
@@ -465,6 +465,45 @@ impl TranslationEngine {
             .iter()
             .map(|e| e.provider.info())
             .collect()
+    }
+
+    /// 全部翻译源的整体可用性结论（计划第 4 节）。
+    ///
+    /// 只统计**可用**的源：需要凭证却没配的那些既不是健康也不是故障，
+    /// 它们根本没参与调度，把它们算进来会让「配了 DeepL 但没配百度」
+    /// 显示成「有问题」。
+    pub async fn providers_health(&self) -> ProvidersHealth {
+        let entries = self.providers.read().await;
+
+        let mut total = 0usize;
+        let mut healthy = 0usize;
+        let mut usable = 0usize;
+
+        for e in entries.iter() {
+            let info = e.provider.info();
+            if info.requires_api_key && !info.is_available {
+                continue;
+            }
+            total += 1;
+            match e.lock_health().state() {
+                ProviderHealthState::Healthy => {
+                    healthy += 1;
+                    usable += 1;
+                }
+                ProviderHealthState::Degraded => usable += 1,
+                ProviderHealthState::Open | ProviderHealthState::HalfOpen => {}
+            }
+        }
+
+        if total == 0 {
+            ProvidersHealth::Unconfigured
+        } else if usable == 0 {
+            ProvidersHealth::Unavailable
+        } else if healthy == total {
+            ProvidersHealth::Healthy
+        } else {
+            ProvidersHealth::Degraded
+        }
     }
 
     /// 读取某个翻译源的健康状态（供诊断与后续的 Tray/设置页状态展示）

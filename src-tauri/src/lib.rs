@@ -6,6 +6,7 @@ pub mod commands;
 pub mod domain;
 pub mod error;
 pub mod infra;
+pub mod runtime;
 pub mod state;
 pub mod system;
 pub mod types;
@@ -101,11 +102,6 @@ pub fn run() {
             // 无外层 Mutex：HistoryRepository 内部已有 Arc<Mutex<Connection>>，双重加锁无益
             let history = Arc::new(HistoryRepository::new(db.clone()));
             let cache = Arc::new(domain::cache::TranslationCache::new(db.clone()));
-            // 历史与缓存的写入统一走这一条有界队列 + 单 worker（计划第 24 节）
-            let persistence = Arc::new(system::persistence::PersistenceWriter::spawn(
-                history.clone(),
-                cache.clone(),
-            ));
 
             // ── Step 3: 注册翻译源 ────────────────────────────────────────────
             let translator = TranslationEngine::new(http_client.clone());
@@ -164,11 +160,30 @@ pub fn run() {
                 .map(|v| v == "true")
                 .unwrap_or(true);
             tracing::info!("[setup] clipboard_monitor_enabled={} (from config)", clipboard_monitor_enabled);
-            let monitor = system::clipboard::start_monitor(app_handle.clone());
+            let monitor = Arc::new(system::clipboard::start_monitor(app_handle.clone()));
             if !clipboard_monitor_enabled {
                 tracing::info!("[setup] 调用 monitor.suspend()（config 为 false）");
                 monitor.suspend();
             }
+
+            // ── Step 4.5: 运行时状态层（计划第 4 节）────────────────────────
+            // 构造顺序有依赖：runtime 需要 controller 才能派生剪贴板健康，
+            // 而 controller 需要在 runtime 建好之后才能接上（二者互相引用）。
+            let runtime = runtime::RuntimeStatus::new(monitor.clone(), {
+                let handle = app_handle.clone();
+                Arc::new(move |snapshot: &runtime::RuntimeStatusSnapshot| {
+                    use tauri::Emitter;
+                    let _ = handle.emit("runtime-status-changed", snapshot);
+                })
+            });
+            monitor.attach_runtime(runtime.clone());
+
+            // 历史与缓存的写入统一走这一条有界队列 + 单 worker（计划第 24 节）
+            let persistence = Arc::new(system::persistence::PersistenceWriter::spawn(
+                history.clone(),
+                cache.clone(),
+                runtime.clone(),
+            ));
 
             let app_state = AppState {
                 translator,
@@ -176,9 +191,10 @@ pub fn run() {
                 history,
                 cache,
                 persistence,
+                runtime,
                 http_client,
                 coordinator: Arc::new(system::translation::TranslationCoordinator::new()),
-                clipboard_monitor: Arc::new(monitor),
+                clipboard_monitor: monitor,
             };
             app.manage(app_state);
 
@@ -238,6 +254,7 @@ pub fn run() {
             commands::system::open_url,
             commands::system::set_clipboard_monitor_enabled,
             commands::system::get_popup_geometry,
+            commands::system::get_runtime_status,
         ])
         .run(tauri::generate_context!())
         .expect("QuickTranslate 启动失败");

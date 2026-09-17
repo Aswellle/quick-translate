@@ -24,6 +24,7 @@ use tracing::{error, info, warn};
 
 use crate::domain::cache::{CacheEntry, TranslationCache};
 use crate::domain::history::HistoryRepository;
+use crate::runtime::{ComponentState, RuntimeStatus};
 use crate::types::TranslationRecord;
 
 /// 队列容量。
@@ -74,14 +75,19 @@ pub struct PersistenceWriter {
 }
 
 impl PersistenceWriter {
-    pub fn spawn(history: Arc<HistoryRepository>, cache: Arc<TranslationCache>) -> Self {
-        Self::with_capacity(history, cache, QUEUE_CAPACITY)
+    pub fn spawn(
+        history: Arc<HistoryRepository>,
+        cache: Arc<TranslationCache>,
+        runtime: Arc<RuntimeStatus>,
+    ) -> Self {
+        Self::with_capacity(history, cache, runtime, QUEUE_CAPACITY)
     }
 
     /// 可指定容量的构造，供测试构造「队列满」的情形。
     pub fn with_capacity(
         history: Arc<HistoryRepository>,
         cache: Arc<TranslationCache>,
+        runtime: Arc<RuntimeStatus>,
         capacity: usize,
     ) -> Self {
         let (tx, mut rx) = mpsc::channel::<PersistJob>(capacity);
@@ -89,7 +95,7 @@ impl PersistenceWriter {
         tauri::async_runtime::spawn(async move {
             info!("[persistence] worker 已启动");
             while let Some(job) = rx.recv().await {
-                process(&history, &cache, job).await;
+                process(&history, &cache, &runtime, job).await;
             }
             // 所有 sender 都 drop 了（进程退出路径）
             info!("[persistence] 队列已关闭，worker 退出");
@@ -128,12 +134,19 @@ impl PersistenceWriter {
 /// **刻意不做重试**：连接已设 `busy_timeout = 5000`，SQLite 的锁竞争由它
 /// 兜住；再叠一层重试只会把同样的等待做两遍。剩下的失败是真实错误
 /// （磁盘满、库损坏），重试也修不好，如实记录即可。
-async fn process(history: &HistoryRepository, cache: &TranslationCache, job: PersistJob) {
+async fn process(
+    history: &HistoryRepository,
+    cache: &TranslationCache,
+    runtime: &RuntimeStatus,
+    job: PersistJob,
+) {
     let PersistJob {
         record,
         history_limit,
         cache_entry,
     } = job;
+
+    let mut storage_error: Option<&'static str> = None;
 
     match history.insert(&record).await {
         Ok(()) => {
@@ -143,6 +156,7 @@ async fn process(history: &HistoryRepository, cache: &TranslationCache, job: Per
         }
         Err(e) => {
             error!(event = "history_write_failed", "历史记录写入失败: {}", e);
+            storage_error = Some("HISTORY_WRITE_FAILED");
         }
     }
 
@@ -155,7 +169,14 @@ async fn process(history: &HistoryRepository, cache: &TranslationCache, job: Per
         Err(e) => {
             // 缓存写失败对用户完全无感：下次联网时照常翻译
             warn!(event = "cache_write_failed", "本地缓存写入失败: {}", e);
+            storage_error.get_or_insert("CACHE_WRITE_FAILED");
         }
+    }
+
+    // 存储健康上报给运行时层：界面不该从「历史里没这条」去推断数据库坏了
+    match storage_error {
+        Some(code) => runtime.report_storage(ComponentState::Degraded, Some(code)),
+        None => runtime.report_storage(ComponentState::Healthy, None),
     }
 }
 
@@ -177,6 +198,14 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         crate::infra::database::run_migrations(&conn).unwrap();
         Arc::new(Mutex::new(conn))
+    }
+
+    /// 运行时层不依赖 Tauri，因此测试里可以正常构造
+    fn test_runtime() -> Arc<RuntimeStatus> {
+        RuntimeStatus::new(
+            Arc::new(crate::system::clipboard::MonitorController::new()),
+            crate::runtime::status::no_notifier(),
+        )
     }
 
     fn job(text: &str) -> PersistJob {
@@ -227,7 +256,8 @@ mod tests {
         let db = migrated_db();
         let history = Arc::new(HistoryRepository::new(db.clone()));
         let cache = Arc::new(TranslationCache::new(db.clone()));
-        let writer = PersistenceWriter::spawn(history.clone(), cache.clone());
+        let runtime = test_runtime();
+        let writer = PersistenceWriter::spawn(history.clone(), cache.clone(), runtime.clone());
 
         assert!(writer.enqueue(job("hello")), "队列应有空位");
 
@@ -253,7 +283,8 @@ mod tests {
         let db = migrated_db();
         let history = Arc::new(HistoryRepository::new(db.clone()));
         let cache = Arc::new(TranslationCache::new(db.clone()));
-        let writer = PersistenceWriter::spawn(history.clone(), cache.clone());
+        let runtime = test_runtime();
+        let writer = PersistenceWriter::spawn(history.clone(), cache.clone(), runtime.clone());
 
         for i in 0..10 {
             assert!(writer.enqueue(job(&format!("text-{}", i))));

@@ -51,6 +51,10 @@ pub struct MonitorController {
     shutdown: Arc<AtomicBool>,
     /// 健康快照。worker 线程写、任意线程读，故用 Mutex 而非原子量。
     health: Arc<Mutex<ClipboardHealth>>,
+    /// 运行时层句柄。构造顺序上 runtime 需要 controller 才能建，
+    /// 因此这里是先建后 `attach_runtime()` 接上，用 OnceLock 表达「只设一次」。
+    /// 包一层 Arc 是为了让 MonitorController 仍然可 Clone。
+    runtime: Arc<std::sync::OnceLock<Arc<crate::runtime::RuntimeStatus>>>,
 }
 
 impl MonitorController {
@@ -62,6 +66,7 @@ impl MonitorController {
             absorb_pending: Arc::new(AtomicBool::new(false)),
             shutdown: Arc::new(AtomicBool::new(false)),
             health: Arc::new(Mutex::new(ClipboardHealth::default())),
+            runtime: Arc::new(std::sync::OnceLock::new()),
         }
     }
 
@@ -169,19 +174,73 @@ impl MonitorController {
         self.absorb_pending.load(Ordering::SeqCst)
     }
 
-    // ── 健康快照 ──────────────────────────────────────────────────────────
+    // ── 健康状态 ──────────────────────────────────────────────────────────
+    //
+    // 健康变更**只能**经由下面这些方法。刻意不暴露 `health_mut()`：
+    // 一旦外部能直接改状态，就会有人绕过运行时层，导致
+    // `runtime-status-changed` 少发一次、界面看到的状态与实际不符。
+    // 每个方法改完都调 `publish_runtime()`。
 
-    pub(crate) fn health_mut(&self) -> std::sync::MutexGuard<'_, ClipboardHealth> {
-        self.health.lock().unwrap()
+    fn health(&self) -> std::sync::MutexGuard<'_, ClipboardHealth> {
+        self.health.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// 读取健康快照（供 tray / settings / 诊断页使用，Phase 2 先备好接口）
+    /// 一次暂时性失败。返回累计的连续失败次数（调用方据此算退避）。
+    pub(crate) fn note_failure(&self, code: &'static str) -> u32 {
+        let failures = {
+            let mut h = self.health();
+            h.note_failure(code);
+            h.consecutive_failures
+        };
+        self.publish_runtime();
+        failures
+    }
+
+    /// 一次成功读取。返回 true 表示这是一次「从失败中恢复」。
+    pub(crate) fn note_success(&self) -> bool {
+        let recovered = self.health().note_success();
+        if recovered {
+            self.publish_runtime();
+        }
+        recovered
+    }
+
+    /// worker 因致命错误退出，supervisor 即将重建
+    pub(crate) fn note_worker_exit(&self, code: &'static str) {
+        self.health().note_worker_exit(code);
+        self.publish_runtime();
+    }
+
+    pub(crate) fn note_worker_restart(&self) {
+        self.health().note_worker_restart();
+        self.publish_runtime();
+    }
+
+    pub(crate) fn note_worker_started(&self, is_restart: bool) {
+        self.health().note_worker_started(is_restart);
+        self.publish_runtime();
+    }
+
+    /// 把健康快照交给运行时层重新评估并广播（若状态确有变化）。
+    fn publish_runtime(&self) {
+        if let Some(rt) = self.runtime.get() {
+            rt.publish();
+        }
+    }
+
+    /// 绑定运行时层。由 `start_monitor` 在构造完 RuntimeStatus 之后调用 ——
+    /// 二者互相引用，只能分两步接上。
+    pub fn attach_runtime(&self, runtime: Arc<crate::runtime::RuntimeStatus>) {
+        let _ = self.runtime.set(runtime);
+    }
+
+    /// 读取健康快照（供 tray / settings / 诊断页与运行时层使用）
     pub fn health_snapshot(&self) -> ClipboardHealth {
-        self.health.lock().unwrap().clone()
+        self.health().clone()
     }
 
     pub fn health_state(&self) -> HealthState {
-        self.health.lock().unwrap().state
+        self.health().state
     }
 }
 

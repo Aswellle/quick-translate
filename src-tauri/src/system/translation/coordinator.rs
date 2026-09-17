@@ -150,7 +150,21 @@ pub async fn execute_at_position(app: &AppHandle, cursor_x: f64, cursor_y: f64, 
     let request = TranslationRequest::new(id, text, target_lang, (cursor_x, cursor_y));
 
     let position = translation_flow::compute_popup_position_dpi(app, cursor_x, cursor_y);
-    translation_flow::show_popup_loading(app, &position).await;
+    // 浮窗建不起来（WebView2 异常等）是真实的故障模式，上报给运行时层，
+    // 让界面能如实显示，而不是让用户面对一个「什么都没发生」的复制操作
+    let shown = translation_flow::show_popup_loading(app, &position).await;
+    state.runtime.report_popup(
+        if shown {
+            crate::runtime::ComponentState::Healthy
+        } else {
+            crate::runtime::ComponentState::Degraded
+        },
+        if shown {
+            None
+        } else {
+            Some("POPUP_SHOW_FAILED")
+        },
+    );
 
     let app_clone = app.clone();
     let task = tauri::async_runtime::spawn(async move {
@@ -183,11 +197,19 @@ async fn run_translation(app: &AppHandle, request: TranslationRequest) {
         "[coordinator] 开始翻译"
     );
 
-    match state
+    let outcome = state
         .translator
         .translate(&request.text, &request.target_lang)
-        .await
-    {
+        .await;
+
+    // 网络组件的结论由**翻译源的整体健康**给出，而不是让界面从「刚才翻译
+    // 失败了」去推断网络断了（计划第 4 节）。引擎知道每个源的真实状态，
+    // 界面不知道。
+    state
+        .runtime
+        .report_providers_health(state.translator.providers_health().await);
+
+    match outcome {
         Ok(mut result) => {
             result.truncated = request.truncated;
             result.duration_ms = (now_unix_ms() - start_ms) as u64;

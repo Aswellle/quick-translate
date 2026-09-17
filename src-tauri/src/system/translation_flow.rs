@@ -49,8 +49,10 @@ pub fn ensure_popup_window(app: &AppHandle) {
         .build();
 }
 
-/// 创建或复用浮窗，发送 loading 事件
-pub(crate) async fn show_popup_loading(app: &AppHandle, position: &PopupPosition) {
+/// 创建或复用浮窗，发送 loading 事件。
+///
+/// 返回 false 表示浮窗没能显示出来 —— 调用方据此上报浮窗组件的健康状态。
+pub(crate) async fn show_popup_loading(app: &AppHandle, position: &PopupPosition) -> bool {
     if let Some(window) = app.get_webview_window(POPUP_LABEL) {
         tracing::info!(
             "[show_popup_loading] 找到 popup，设置位置={:?}，调用 show()+focus()",
@@ -85,7 +87,7 @@ pub(crate) async fn show_popup_loading(app: &AppHandle, position: &PopupPosition
             }
             Err(e) => {
                 tracing::error!("[show_popup_loading] 创建浮窗失败: {}", e);
-                return;
+                return false;
             }
         }
     }
@@ -96,6 +98,7 @@ pub(crate) async fn show_popup_loading(app: &AppHandle, position: &PopupPosition
             position: position.clone(),
         },
     );
+    true
 }
 
 /// 下发翻译结果。**调用方必须已通过 coordinator 的代际闸门** ——

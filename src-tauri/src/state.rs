@@ -9,6 +9,7 @@ use crate::domain::config::ConfigService;
 use crate::domain::history::HistoryRepository;
 use crate::domain::translator::TranslationEngine;
 use crate::infra::http_client::HttpClient;
+use crate::runtime::RuntimeStatus;
 use crate::system::clipboard::MonitorController;
 use crate::system::persistence::PersistenceWriter;
 use crate::system::translation::TranslationCoordinator;
@@ -32,6 +33,9 @@ pub struct AppState {
     /// 历史与缓存的落盘入口。有界队列 + 单 worker（计划第 24/41 节），
     /// 调用方只入队、不等数据库。
     pub persistence: Arc<PersistenceWriter>,
+    /// 统一的运行时状态：应用「现在到底怎么样」的唯一权威答案（计划第 4 节）。
+    /// 界面读它，而不是自己从各种失败迹象去推测。
+    pub runtime: Arc<RuntimeStatus>,
     pub http_client: Arc<HttpClient>,
     /// 翻译请求的编排与代际闸门。
     /// 取代此前的 `current_translation: Arc<Mutex<Option<JoinHandle>>>` ——
