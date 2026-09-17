@@ -1,13 +1,13 @@
 // src-tauri/src/system/clipboard/backoff.rs
-// 退避策略的纯函数部分。
+// 剪贴板退避策略的纯函数部分。
 //
 // 计划第 54 节要求把 next_backoff / should_retry 一类逻辑做成纯函数：
 // 纯函数 → 不用启动 Tauri → 不用 Windows → 测试稳定。
-// 随机抖动依赖注入的 Rng，因此连抖动路径也是确定可测的。
+//
+// ±20% 抖动本身与剪贴板无关（Provider 熔断冷却也用同一套），已抽到
+// crate::util::jitter。
 
 use std::time::Duration;
-
-use rand::Rng;
 
 /// supervisor 重启退避表（计划第 5 节）：
 /// 250ms → 1s → 3s → 10s → 30s，此后封顶在 30s。
@@ -54,20 +54,8 @@ pub fn exponential_backoff(exp: u32, initial: Duration, max: Duration) -> Durati
     Duration::from_millis(scaled.min(max_ms))
 }
 
-/// 施加 ±20% 抖动。
-///
-/// 目的不是「看起来更随机」，而是避免多个后台组件在同一个故障事件后
-/// 同步重试形成尖峰（计划第 5 节）。
-pub fn with_jitter(base: Duration, rng: &mut impl Rng) -> Duration {
-    let factor: f64 = rng.gen_range(0.8_f64..=1.2_f64);
-    let ms = (base.as_millis() as f64 * factor).round().max(1.0) as u64;
-    Duration::from_millis(ms)
-}
-
 #[cfg(test)]
 mod tests {
-    use rand::rngs::StdRng;
-    use rand::SeedableRng;
 
     use super::*;
 
@@ -132,51 +120,5 @@ mod tests {
     fn exponential_backoff_does_not_overflow() {
         let d = exponential_backoff(u32::MAX, Duration::from_millis(1), Duration::from_secs(30));
         assert_eq!(d, Duration::from_secs(30));
-    }
-
-    #[test]
-    fn jitter_stays_within_twenty_percent() {
-        let base = Duration::from_millis(1_000);
-        let mut rng = StdRng::seed_from_u64(42);
-        let mut saw_below = false;
-        let mut saw_above = false;
-
-        for _ in 0..1_000 {
-            let d = with_jitter(base, &mut rng);
-            let ms = d.as_millis();
-            assert!(
-                (800..=1200).contains(&ms),
-                "抖动越界: {}ms 不在 800..=1200 内",
-                ms
-            );
-            if ms < 1_000 {
-                saw_below = true;
-            }
-            if ms > 1_000 {
-                saw_above = true;
-            }
-        }
-
-        // 抖动必须双向，否则它只是把退避整体拉长/缩短，起不到去同步的作用
-        assert!(saw_below && saw_above, "抖动应当双向分布");
-    }
-
-    #[test]
-    fn jitter_is_reproducible_for_a_given_seed() {
-        let base = Duration::from_millis(500);
-        let mut a = StdRng::seed_from_u64(7);
-        let mut b = StdRng::seed_from_u64(7);
-        for _ in 0..50 {
-            assert_eq!(with_jitter(base, &mut a), with_jitter(base, &mut b));
-        }
-    }
-
-    #[test]
-    fn jitter_never_returns_zero() {
-        let base = Duration::from_millis(1);
-        let mut rng = StdRng::seed_from_u64(1);
-        for _ in 0..500 {
-            assert!(with_jitter(base, &mut rng) >= Duration::from_millis(1));
-        }
     }
 }

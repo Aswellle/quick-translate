@@ -7,7 +7,6 @@ use async_trait::async_trait;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -265,23 +264,6 @@ impl TranslationProvider for TencentProvider {
             Ok(_) => Ok(true),
             Err(AppError::AuthError { .. }) => Ok(false),
             Err(e) => Err(e),
-        }
-    }
-
-    fn update_api_key(&mut self, api_key: String) {
-        // api_key 格式："secret_id:secret_key"
-        if let Some((id, key)) = api_key.split_once(':') {
-            self.secret_id = id.to_string();
-            self.secret_key = key.to_string();
-        }
-    }
-
-    fn update_credentials(&mut self, creds: HashMap<String, String>) {
-        if let Some(id) = creds.get("tencent_secret_id") {
-            self.secret_id = id.clone();
-        }
-        if let Some(key) = creds.get("tencent_secret_key") {
-            self.secret_key = key.clone();
         }
     }
 }

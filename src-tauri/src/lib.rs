@@ -9,6 +9,7 @@ pub mod infra;
 pub mod state;
 pub mod system;
 pub mod types;
+pub mod util;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -17,10 +18,7 @@ use tokio::sync::{Mutex, RwLock};
 
 use domain::config::ConfigService;
 use domain::history::HistoryRepository;
-use domain::translator::{
-    baidu::BaiduProvider, deepl::DeepLProvider, google::GoogleProvider, tencent::TencentProvider,
-    youdao::YoudaoProvider, TranslationEngine,
-};
+use domain::translator::{build_provider, TranslationEngine, CREDENTIAL_KEYS};
 use infra::{database, http_client::HttpClient};
 use state::AppState;
 
@@ -106,45 +104,33 @@ pub fn run() {
             // ── Step 3: 注册翻译源 ────────────────────────────────────────────
             let translator = TranslationEngine::new(http_client.clone());
 
-            let deepl_api_key = config.blocking_read().get_credential("deepl_api_key");
-            let tencent_secret_id = config.blocking_read().get_credential("tencent_secret_id");
-            let tencent_secret_key = config.blocking_read().get_credential("tencent_secret_key");
-            let baidu_app_id = config.blocking_read().get_credential("baidu_app_id");
-            let baidu_secret_key = config.blocking_read().get_credential("baidu_secret_key");
-            let youdao_app_key = config.blocking_read().get_credential("youdao_app_key");
-            let youdao_app_secret = config.blocking_read().get_credential("youdao_app_secret");
+            // 凭证按 CREDENTIAL_KEYS 统一取；注册顺序即 fallback 默认优先级。
+            // 与设置面板改 Key 的路径共用同一份字段定义，不会出现「加了字段
+            // 却只改了一处」。CREDENTIAL_KEYS 的字段名就是配置 key。
+            let creds_by_provider: Vec<(String, std::collections::HashMap<String, String>)> = {
+                let cfg = config.blocking_read();
+                CREDENTIAL_KEYS
+                    .iter()
+                    .map(|(id, keys)| {
+                        let creds = keys
+                            .iter()
+                            .map(|k| ((*k).to_string(), cfg.get_credential(k)))
+                            .collect();
+                        ((*id).to_string(), creds)
+                    })
+                    .collect()
+            };
 
             tauri::async_runtime::block_on(async {
-                translator
-                    .register_provider(Box::new(DeepLProvider::new(
-                        http_client.clone(),
-                        deepl_api_key,
-                    )))
-                    .await;
-                translator
-                    .register_provider(Box::new(TencentProvider::new(
-                        http_client.clone(),
-                        tencent_secret_id,
-                        tencent_secret_key,
-                    )))
-                    .await;
-                translator
-                    .register_provider(Box::new(BaiduProvider::new(
-                        http_client.clone(),
-                        baidu_app_id,
-                        baidu_secret_key,
-                    )))
-                    .await;
-                translator
-                    .register_provider(Box::new(YoudaoProvider::new(
-                        http_client.clone(),
-                        youdao_app_key,
-                        youdao_app_secret,
-                    )))
-                    .await;
-                translator
-                    .register_provider(Box::new(GoogleProvider::new(http_client.clone())))
-                    .await;
+                for (id, creds) in creds_by_provider {
+                    match build_provider(&id, &creds, http_client.clone()) {
+                        Ok(provider) => translator.register_provider(provider).await,
+                        Err(e) => {
+                            // 单个翻译源构造失败不该拖垮启动：跳过它，其余照常注册
+                            tracing::error!("翻译源 {} 构造失败，已跳过: {}", id, e);
+                        }
+                    }
+                }
 
                 let active_provider = config
                     .read()

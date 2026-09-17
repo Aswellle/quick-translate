@@ -203,6 +203,4 @@ impl TranslationProvider for GoogleProvider {
     async fn validate_credentials(&self) -> Result<bool, AppError> {
         Ok(true)
     }
-
-    fn update_api_key(&mut self, _api_key: String) {}
 }

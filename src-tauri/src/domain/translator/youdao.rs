@@ -4,7 +4,6 @@
 
 use async_trait::async_trait;
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
@@ -213,23 +212,6 @@ impl TranslationProvider for YoudaoProvider {
             Ok(_) => Ok(true),
             Err(AppError::AuthError { .. }) => Ok(false),
             Err(e) => Err(e),
-        }
-    }
-
-    fn update_api_key(&mut self, api_key: String) {
-        // 格式 "app_key:app_secret"
-        if let Some((k, s)) = api_key.split_once(':') {
-            self.app_key = k.to_string();
-            self.app_secret = s.to_string();
-        }
-    }
-
-    fn update_credentials(&mut self, creds: HashMap<String, String>) {
-        if let Some(k) = creds.get("youdao_app_key") {
-            self.app_key = k.clone();
-        }
-        if let Some(s) = creds.get("youdao_app_secret") {
-            self.app_secret = s.clone();
         }
     }
 }

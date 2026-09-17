@@ -167,8 +167,4 @@ impl TranslationProvider for DeepLProvider {
             Err(e) => Err(e),
         }
     }
-
-    fn update_api_key(&mut self, api_key: String) {
-        self.api_key = api_key;
-    }
 }
