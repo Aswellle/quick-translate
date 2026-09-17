@@ -172,7 +172,7 @@ pub fn run() {
                 .map(|v| v == "true")
                 .unwrap_or(true);
             tracing::info!("[setup] clipboard_monitor_enabled={} (from config)", clipboard_monitor_enabled);
-            let monitor = system::clipboard_monitor::start_monitor(app_handle.clone());
+            let monitor = system::clipboard::start_monitor(app_handle.clone());
             if !clipboard_monitor_enabled {
                 tracing::info!("[setup] 调用 monitor.suspend()（config 为 false）");
                 monitor.suspend();

@@ -8,7 +8,7 @@ use crate::domain::config::ConfigService;
 use crate::domain::history::HistoryRepository;
 use crate::domain::translator::TranslationEngine;
 use crate::infra::http_client::HttpClient;
-use crate::system::clipboard_monitor::MonitorController;
+use crate::system::clipboard::MonitorController;
 
 /// Tauri managed state
 ///
