@@ -9,6 +9,7 @@ import {
   hidePopup,
   resizePopup,
   getPopupGeometry,
+  activatePopup,
   type PopupGeometry,
 } from "@/lib/commands";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
@@ -258,14 +259,52 @@ export function PopupWindow() {
     };
   }, []);
 
+  // ── 点击 → 转为可交互（Phase 8b / 计划第 19 节）─────────────────────
+  //
+  // 浮窗默认是**非激活**窗口：显示时不抢焦点，代价是它也收不到键盘事件 ——
+  // Esc / 空格 / Enter 全部失效。只有用户真的点了它才转回可交互。
+  //
+  // 用「按下与抬起之间几乎没移动」来区分点击与拖拽。整块浮窗都可拖拽，
+  // 若 mousedown 就激活，用户只是把浮窗挪个位置也会被夺走焦点 ——
+  // 那正是这一片要消除的东西。
+  const pressOrigin = useRef<{ x: number; y: number } | null>(null);
+  const CLICK_SLOP_PX = 4;
+
+  useEffect(() => {
+    const handlePressEnd = (e: MouseEvent) => {
+      const origin = pressOrigin.current;
+      pressOrigin.current = null;
+      if (!origin) return;
+
+      const moved = Math.hypot(e.clientX - origin.x, e.clientY - origin.y);
+      if (moved > CLICK_SLOP_PX) return; // 是拖拽，不是点击
+
+      activatePopup().catch((err) =>
+        console.error("[PopupWindow] 转入交互态失败:", err)
+      );
+    };
+
+    document.addEventListener("mouseup", handlePressEnd);
+    return () => document.removeEventListener("mouseup", handlePressEnd);
+  }, []);
+
   // ── 点击窗体内部时阻止默认行为（防止失去焦点导致自动关闭）──────────
   const handlePopupMouseDown = useCallback((e: React.MouseEvent) => {
     e.stopPropagation();
+    // 记下按下的起点，供上面区分点击与拖拽
+    pressOrigin.current = { x: e.clientX, y: e.clientY };
   }, []);
 
   // ── 窗口失焦到其他应用时关闭（点击其他 app 窗口时）───────────────
-  // 守卫：拖拽进行中（isDragging=true）时跳过关闭，
+  //
+  // 守卫一：拖拽进行中（isDragging=true）时跳过关闭，
   //   因为 startDragging() 会导致 OS 层短暂 blur，不应触发 hidePopup。
+  //
+  // 守卫二（Phase 8b）：**从未聚焦过就不关**。
+  //   非激活浮窗永远不获得焦点，因此也永远不会「失去」焦点 —— 这条路径
+  //   在被动态下本就不该生效（被动态的关闭由后台看守按前台窗口变化负责）。
+  //   不加重这个标志的话，一旦 Tauri 在注册时补发一次 focused=false，
+  //   浮窗会在刚显示出来的瞬间就被关掉。
   useEffect(() => {
     const appWindow = getCurrentWebviewWindow();
     // cancelled 标志修复注册竞态：onFocusChanged() 异步注册，若 cleanup 在
@@ -273,10 +312,15 @@ export function PopupWindow() {
     // 首个监听器永久泄漏，失焦时 hidePopup 被重复调用两次。
     let unlisten: (() => void) | undefined;
     let cancelled = false;
+    let hasBeenFocused = false;
 
     appWindow
       .onFocusChanged(({ payload: focused }) => {
-        if (!focused && !isDragging.current) {
+        if (focused) {
+          hasBeenFocused = true;
+          return;
+        }
+        if (hasBeenFocused && !isDragging.current) {
           hidePopup().catch(console.error);
         }
       })

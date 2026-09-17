@@ -153,6 +153,13 @@ pub async fn execute_at_position(app: &AppHandle, cursor_x: f64, cursor_y: f64, 
     // 浮窗建不起来（WebView2 异常等）是真实的故障模式，上报给运行时层，
     // 让界面能如实显示，而不是让用户面对一个「什么都没发生」的复制操作
     let shown = translation_flow::show_popup_loading(app, &position).await;
+
+    // 浮窗已显示才记录基线：被动态的关闭看守要拿「浮窗出现时用户正在用谁」
+    // 当参照物（Phase 8b）
+    if shown {
+        state.popup_watch.begin();
+    }
+
     state.runtime.report_popup(
         if shown {
             crate::runtime::ComponentState::Healthy

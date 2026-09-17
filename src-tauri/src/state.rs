@@ -36,6 +36,9 @@ pub struct AppState {
     /// 统一的运行时状态：应用「现在到底怎么样」的唯一权威答案（计划第 4 节）。
     /// 界面读它，而不是自己从各种失败迹象去推测。
     pub runtime: Arc<RuntimeStatus>,
+    /// 被动态浮窗的关闭看守（Phase 8b）。浮窗不抢焦点，因此失去了
+    /// `onFocusChanged` 这条关闭路径，由它按前台窗口变化补上。
+    pub popup_watch: Arc<crate::system::popup_watch::PopupWatch>,
     pub http_client: Arc<HttpClient>,
     /// 翻译请求的编排与代际闸门。
     /// 取代此前的 `current_translation: Arc<Mutex<Option<JoinHandle>>>` ——

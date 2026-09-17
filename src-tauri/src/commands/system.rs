@@ -26,17 +26,43 @@ pub async fn copy_to_clipboard(app: AppHandle, text: String) -> Result<(), AppEr
 }
 
 /// 隐藏翻译浮窗，并重置剪贴板监控的 last_text
-/// 重置确保下次复制相同文本时仍能触发翻译（否则监控线程认为内容未变化）
+///
+/// 与看守线程共用同一条关闭路径（`hide_popup_now`）—— 那条路径里的每一步
+/// （复位 focusable、停看守、重置 last_text）漏掉任何一步都有具体后果，
+/// 见其文档注释。
 #[tauri::command]
 pub async fn hide_popup(app: AppHandle) -> Result<(), AppError> {
-    if let Some(window) = app.get_webview_window("popup") {
-        window
-            .hide()
-            .map_err(|e: tauri::Error| AppError::WindowError(e.to_string()))?;
-    }
-    app.state::<crate::state::AppState>()
-        .clipboard_monitor
-        .reset_last_text();
+    crate::system::popup_watch::hide_popup_now(&app);
+    Ok(())
+}
+
+/// 用户点击浮窗后把它转为可交互（Phase 8b / 计划第 19 节）。
+///
+/// 浮窗默认是**非激活**窗口：显示不抢焦点，但代价是它也收不到键盘事件，
+/// Esc / 空格 / Enter 全部失效。只有用户真的点了它，才把窗口设为可激活
+/// 并聚焦，这批快捷键才重新可用。
+///
+/// 同时停掉被动态看守 —— 此刻浮窗自己成了前台窗口，看守会把它
+/// 误判成「用户切走了」而立刻关掉。
+#[tauri::command]
+pub async fn activate_popup(app: AppHandle) -> Result<(), AppError> {
+    app.state::<crate::state::AppState>().popup_watch.stop();
+
+    let Some(window) = app.get_webview_window("popup") else {
+        return Ok(());
+    };
+
+    window
+        .set_focusable(true)
+        .map_err(|e: tauri::Error| AppError::WindowError(e.to_string()))?;
+    window
+        .set_focus()
+        .map_err(|e: tauri::Error| AppError::WindowError(e.to_string()))?;
+
+    tracing::info!(
+        event = "popup_activated_by_user",
+        "[popup] 用户点击，进入交互态"
+    );
     Ok(())
 }
 

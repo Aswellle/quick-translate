@@ -17,7 +17,7 @@ use crate::types::{
     TranslationResultPayload,
 };
 
-const POPUP_LABEL: &str = "popup";
+pub(crate) const POPUP_LABEL: &str = "popup";
 
 /// 浮窗初始逻辑尺寸 —— 取自 popup_geometry（尺寸契约唯一来源，C3）
 const POPUP_LOGICAL_W: f64 = popup_geometry::WIDTH_NORMAL;
@@ -26,10 +26,10 @@ const POPUP_LOGICAL_H: f64 = popup_geometry::HEIGHT_INITIAL;
 /// 确保 popup 浮窗已创建（onboarding 关闭后调用，此时 popup 可能从未被创建）
 pub fn ensure_popup_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(POPUP_LABEL) {
-        // popup 已存在但可能被隐藏，重新显示
-        tracing::info!("[ensure_popup] popup 已存在，调用 show() + set_focus()");
+        // popup 已存在但可能被隐藏，重新显示。
+        // 不 set_focus()：浮窗默认不抢焦点（Phase 8b）。
+        tracing::info!("[ensure_popup] popup 已存在，调用 show()");
         let _ = window.show();
-        let _ = window.set_focus();
         return;
     }
     // 不存在，创建新的
@@ -42,6 +42,9 @@ pub fn ensure_popup_window(app: &AppHandle) {
         .transparent(true)
         .always_on_top(true)
         .skip_taskbar(true)
+        // 非激活窗口（Windows 上即 WS_EX_NOACTIVATE）：显示时不抢焦点，
+        // 不把用户从正在编辑的地方带走（Phase 8b / 计划第 19 节）
+        .focusable(false)
         .visible(true)
         .resizable(false)
         .inner_size(POPUP_LOGICAL_W, POPUP_LOGICAL_H)
@@ -54,13 +57,12 @@ pub fn ensure_popup_window(app: &AppHandle) {
 /// 返回 false 表示浮窗没能显示出来 —— 调用方据此上报浮窗组件的健康状态。
 pub(crate) async fn show_popup_loading(app: &AppHandle, position: &PopupPosition) -> bool {
     if let Some(window) = app.get_webview_window(POPUP_LABEL) {
-        tracing::info!(
-            "[show_popup_loading] 找到 popup，设置位置={:?}，调用 show()+focus()",
-            position
-        );
+        tracing::info!("[show_popup_loading] 找到 popup，设置位置={:?}", position);
         let _ = window.set_position(tauri::LogicalPosition::new(position.x, position.y));
+        // 每次显示都复位为非激活：用户上一次点过浮窗的话，窗口仍是可激活的，
+        // 不复位就会在这一轮直接抢走焦点（Phase 8b）
+        let _ = window.set_focusable(false);
         let _ = window.show();
-        let _ = window.set_focus();
     } else {
         tracing::info!("[show_popup_loading] popup 不存在，创建新窗口并立即 show()");
         match WebviewWindowBuilder::new(
@@ -74,6 +76,7 @@ pub(crate) async fn show_popup_loading(app: &AppHandle, position: &PopupPosition
         .transparent(true)
         .always_on_top(true)
         .skip_taskbar(true)
+        .focusable(false)
         .visible(false)
         .resizable(false)
         .inner_size(POPUP_LOGICAL_W, POPUP_LOGICAL_H)
@@ -81,9 +84,8 @@ pub(crate) async fn show_popup_loading(app: &AppHandle, position: &PopupPosition
         .build()
         {
             Ok(window) => {
-                tracing::info!("[show_popup_loading] 新窗口创建成功，调用 show()+focus()");
+                tracing::info!("[show_popup_loading] 新窗口创建成功，调用 show()");
                 let _ = window.show();
-                let _ = window.set_focus();
             }
             Err(e) => {
                 tracing::error!("[show_popup_loading] 创建浮窗失败: {}", e);

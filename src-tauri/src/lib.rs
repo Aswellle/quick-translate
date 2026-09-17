@@ -185,6 +185,11 @@ pub fn run() {
                 runtime.clone(),
             ));
 
+            // 被动态浮窗的关闭看守（Phase 8b）：浮窗不抢焦点后就失去了
+            // onFocusChanged 这条关闭路径，由它按前台窗口变化补上。
+            // 一条常驻线程，未显示浮窗时不动作。
+            let popup_watch = system::popup_watch::PopupWatch::start(app_handle.clone());
+
             let app_state = AppState {
                 translator,
                 config: config.clone(),
@@ -192,6 +197,7 @@ pub fn run() {
                 cache,
                 persistence,
                 runtime,
+                popup_watch,
                 http_client,
                 coordinator: Arc::new(system::translation::TranslationCoordinator::new()),
                 clipboard_monitor: monitor,
@@ -242,6 +248,7 @@ pub fn run() {
             commands::history::get_stats,
             commands::system::copy_to_clipboard,
             commands::system::hide_popup,
+            commands::system::activate_popup,
             commands::system::resize_popup,
             commands::system::get_app_version,
             commands::system::notify_toast,
