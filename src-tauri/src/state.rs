@@ -2,13 +2,14 @@
 // 全局共享状态容器，通过 app.manage() 注入，command handler 通过 tauri::State<AppState> 获取
 
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 
 use crate::domain::config::ConfigService;
 use crate::domain::history::HistoryRepository;
 use crate::domain::translator::TranslationEngine;
 use crate::infra::http_client::HttpClient;
 use crate::system::clipboard::MonitorController;
+use crate::system::translation::TranslationCoordinator;
 
 /// Tauri managed state
 ///
@@ -24,7 +25,11 @@ pub struct AppState {
     pub config: Arc<RwLock<ConfigService>>,
     pub history: Arc<HistoryRepository>,
     pub http_client: Arc<HttpClient>,
-    pub current_translation: Arc<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>>,
+    /// 翻译请求的编排与代际闸门。
+    /// 取代此前的 `current_translation: Arc<Mutex<Option<JoinHandle>>>` ——
+    /// 单个 JoinHandle 无法回答「这个迟到的结果还属于当前请求吗」，
+    /// 因此旧结果可以覆盖新结果。详见 system::translation::coordinator。
+    pub coordinator: Arc<TranslationCoordinator>,
     pub clipboard_monitor: Arc<MonitorController>,
 }
 

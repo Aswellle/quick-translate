@@ -1,5 +1,6 @@
 pub mod clipboard;
 pub mod popup_geometry;
+pub mod translation;
 pub mod translation_flow;
 pub mod tray;
 pub mod updater;

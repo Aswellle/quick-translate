@@ -57,7 +57,7 @@ impl TranslationSink for TauriSink {
             }
 
             let (cx, cy) = super::get_cursor_position();
-            crate::system::translation_flow::execute_at_position(&app, cx, cy, text).await;
+            crate::system::translation::execute_at_position(&app, cx, cy, text).await;
         });
     }
 }

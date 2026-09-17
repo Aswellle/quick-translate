@@ -183,7 +183,7 @@ pub fn run() {
                 config: config.clone(),
                 history,
                 http_client,
-                current_translation: Arc::new(Mutex::new(None)),
+                coordinator: Arc::new(system::translation::TranslationCoordinator::new()),
                 clipboard_monitor: Arc::new(monitor),
             };
             app.manage(app_state);
