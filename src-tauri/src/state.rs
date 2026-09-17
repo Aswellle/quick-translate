@@ -10,6 +10,7 @@ use crate::domain::history::HistoryRepository;
 use crate::domain::translator::TranslationEngine;
 use crate::infra::http_client::HttpClient;
 use crate::system::clipboard::MonitorController;
+use crate::system::persistence::PersistenceWriter;
 use crate::system::translation::TranslationCoordinator;
 
 /// Tauri managed state
@@ -28,6 +29,9 @@ pub struct AppState {
     /// 翻译结果的精确缓存：只在所有翻译源都不可用时才查（计划第 15/16 节），
     /// 让用户在离线时仍能看到之前译过的内容。
     pub cache: Arc<TranslationCache>,
+    /// 历史与缓存的落盘入口。有界队列 + 单 worker（计划第 24/41 节），
+    /// 调用方只入队、不等数据库。
+    pub persistence: Arc<PersistenceWriter>,
     pub http_client: Arc<HttpClient>,
     /// 翻译请求的编排与代际闸门。
     /// 取代此前的 `current_translation: Arc<Mutex<Option<JoinHandle>>>` ——

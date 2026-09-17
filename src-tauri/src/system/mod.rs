@@ -1,4 +1,5 @@
 pub mod clipboard;
+pub mod persistence;
 pub mod popup_geometry;
 pub mod translation;
 pub mod translation_flow;

@@ -27,9 +27,9 @@ use std::sync::Mutex;
 use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Manager};
 
-use crate::domain::cache::CacheEntry;
 use crate::error::AppError;
 use crate::state::AppState;
+use crate::system::persistence::{OwnedCacheEntry, PersistJob};
 use crate::system::translation_flow;
 use crate::types::{now_unix_ms, TranslationRecord, TranslationResult};
 
@@ -318,51 +318,35 @@ async fn lookup_cache(state: &AppState, request: &TranslationRequest) -> Option<
     }
 }
 
-/// 成功的翻译落盘：历史记录 + 本地缓存。
+/// 成功的翻译落盘：交给有界队列 + 单 worker（计划第 24 节）。
 ///
-/// 与主链路解耦：写失败只记录，绝不影响已经 emit 出去的结果。
-/// （Phase 7 会把历史部分换成有界队列 + 单 worker，此处保持既有行为。）
+/// 这里只做入队 —— 不 spawn、不等数据库。调用方此刻已经把结果 emit 给
+/// 用户了，落盘快慢、甚至队列溢出，都不影响用户已经看到的东西。
 async fn persist_success(
     state: &AppState,
     result: &TranslationResult,
     request: &TranslationRequest,
 ) {
-    let history = state.history.clone();
-    let cache = state.cache.clone();
-    let record = TranslationRecord::from_result(result, &request.text, &request.target_lang);
-    let limit = state.config.read().await.cache_history_limit();
+    let history_limit = state.config.read().await.cache_history_limit();
 
-    // CacheEntry 借用 &str，而 spawn 需要 'static，所以在进任务前取到拥有值
-    let source_text = request.text.clone();
-    let target_lang = request.target_lang.clone();
-    let translated_text = result.translated_text.clone();
-    let source_lang = result.detected_source_lang.clone();
-    let provider = result.provider.clone();
+    let job = PersistJob {
+        record: TranslationRecord::from_result(result, &request.text, &request.target_lang),
+        history_limit,
+        cache_entry: OwnedCacheEntry {
+            source_text: request.text.clone(),
+            target_lang: request.target_lang.clone(),
+            translated_text: result.translated_text.clone(),
+            source_lang: result.detected_source_lang.clone(),
+            provider: result.provider.clone(),
+        },
+    };
 
-    tauri::async_runtime::spawn(async move {
-        if let Err(e) = history.insert(&record).await {
-            tracing::error!("历史记录写入失败: {}", e);
-        }
-        if let Err(e) = history.enforce_limit(limit).await {
-            tracing::error!("历史清理失败: {}", e);
-        }
-
-        if let Err(e) = cache
-            .put(CacheEntry {
-                source_text: &source_text,
-                target_lang: &target_lang,
-                translated_text: &translated_text,
-                source_lang: &source_lang,
-                provider: &provider,
-            })
-            .await
-        {
-            // 缓存写失败对用户无感 —— 下次联网时照常翻译
-            tracing::warn!("本地缓存写入失败: {}", e);
-        } else if let Err(e) = cache.enforce_limits().await {
-            tracing::warn!("本地缓存清理失败: {}", e);
-        }
-    });
+    if !state.persistence.enqueue(job) {
+        tracing::warn!(
+            event = "persistence_queue_full",
+            "[persistence] 落盘队列已满，本次历史与缓存写入被丢弃（翻译结果不受影响）"
+        );
+    }
 }
 
 /// 供 `run_translation` 读取历史条数上限

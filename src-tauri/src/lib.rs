@@ -101,6 +101,11 @@ pub fn run() {
             // 无外层 Mutex：HistoryRepository 内部已有 Arc<Mutex<Connection>>，双重加锁无益
             let history = Arc::new(HistoryRepository::new(db.clone()));
             let cache = Arc::new(domain::cache::TranslationCache::new(db.clone()));
+            // 历史与缓存的写入统一走这一条有界队列 + 单 worker（计划第 24 节）
+            let persistence = Arc::new(system::persistence::PersistenceWriter::spawn(
+                history.clone(),
+                cache.clone(),
+            ));
 
             // ── Step 3: 注册翻译源 ────────────────────────────────────────────
             let translator = TranslationEngine::new(http_client.clone());
@@ -170,6 +175,7 @@ pub fn run() {
                 config: config.clone(),
                 history,
                 cache,
+                persistence,
                 http_client,
                 coordinator: Arc::new(system::translation::TranslationCoordinator::new()),
                 clipboard_monitor: Arc::new(monitor),
