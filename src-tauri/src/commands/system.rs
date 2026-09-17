@@ -49,6 +49,16 @@ pub async fn resize_popup(app: AppHandle, width: f64, height: f64) -> Result<(),
         window
             .set_size(tauri::LogicalSize::new(w, h))
             .map_err(|e: tauri::Error| AppError::WindowError(e.to_string()))?;
+
+        // 记下真实尺寸：定位必须以它为准，而不是一个估算常数（Phase 8a）。
+        let previous = crate::system::popup_geometry::actual_size();
+        crate::system::popup_geometry::record_actual_size(w, h);
+
+        // 尺寸变了就必须重新定位。此前只 resize 不重定位，于是
+        // Loading→Result 变高时浮窗下半截会直接跑出屏幕。
+        if (w - previous.0).abs() > 0.5 || (h - previous.1).abs() > 0.5 {
+            crate::system::translation_flow::reposition_popup(&app, w, h);
+        }
     }
     Ok(())
 }
