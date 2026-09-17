@@ -174,6 +174,15 @@ pub fn run() {
                 Arc::new(move |snapshot: &runtime::RuntimeStatusSnapshot| {
                     use tauri::Emitter;
                     let _ = handle.emit("runtime-status-changed", snapshot);
+
+                    // 托盘菜单一旦设定就是静态的，状态变了必须重建 ——
+                    // 否则用户看到的永远是上一次重建时的状态。
+                    // 这里只会在状态**真的变了**时被调到（RuntimeStatus
+                    // 内部有指纹去重），所以不会变成高频重建。
+                    let tray_handle = handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        system::tray::refresh_menu(&tray_handle).await;
+                    });
                 })
             });
             monitor.attach_runtime(runtime.clone());
