@@ -146,6 +146,7 @@ pub fn run_migrations(conn: &Connection) -> Result<(), AppError> {
             (3, migrate_v3),
             (4, migrate_v4),
             (5, migrate_v5),
+            (6, migrate_v6),
         ];
 
     for &(version, migration_fn) in migrations {
@@ -340,3 +341,35 @@ INSERT OR IGNORE INTO app_config (key, value, updated_at) VALUES
     ('onboarding_completed',  '"false"',         strftime('%s','now')*1000),
     ('clipboard_monitor_enabled', '"true"',      strftime('%s','now')*1000);
 "#;
+
+/// 翻译缓存的建表语句（schema v6）。
+///
+/// 导出给 `domain::cache` 的测试共用 —— 让测试建的表与真实表结构不可能漂移。
+pub(crate) const CACHE_TABLE_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS translation_cache (
+    -- 归一化文本 + 目标语言。刻意不含 provider：同一段文本换个源译出来的
+    -- 意思是一样的，离线时能命中远比「必须是同一个源」有用。
+    cache_key       TEXT PRIMARY KEY,
+    source_text     TEXT NOT NULL,
+    translated_text TEXT NOT NULL,
+    -- 检测到的源语言：结果视图要显示"原文语言 → 目标语言"的方向标签，
+    -- 缓存命中时没有 provider 帮我们重新检测，只能存下来
+    source_lang     TEXT NOT NULL DEFAULT '',
+    provider        TEXT NOT NULL,
+    created_at      INTEGER NOT NULL,
+    -- LRU 记账：淘汰时按此列升序
+    last_hit_at     INTEGER NOT NULL,
+    hit_count       INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_translation_cache_last_hit
+    ON translation_cache(last_hit_at);
+"#;
+
+/// v6：新增翻译缓存表（计划第 16 节）。
+///
+/// 独立于 translation_records：历史受 history_limit（默认 200）约束，
+/// 且用户「清空历史」会把它整个删掉 —— 离线缓存不该被这两件事影响。
+fn migrate_v6(tx: &Transaction) -> Result<(), AppError> {
+    tx.execute_batch(CACHE_TABLE_SQL)
+        .map_err(|e| AppError::DatabaseError(format!("Schema v6 迁移失败: {}", e)))
+}

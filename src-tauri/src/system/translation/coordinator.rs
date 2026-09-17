@@ -27,6 +27,7 @@ use std::sync::Mutex;
 use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Manager};
 
+use crate::domain::cache::CacheEntry;
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::system::translation_flow;
@@ -208,9 +209,9 @@ async fn run_translation(app: &AppHandle, request: TranslationRequest) {
                 "[coordinator] 翻译完成"
             );
 
-            // 历史入队放在 emit 之后：它是 await，会开出新的交错窗口，
-            // 不能让它插在闸门与 emit 之间。迟到结果也不会写进历史。
-            enqueue_history(&state, &result, &request).await;
+            // 落盘放在 emit 之后：它是 await，会开出新的交错窗口，
+            // 不能让它插在闸门与 emit 之间。迟到结果也不会落盘。
+            persist_success(&state, &result, &request).await;
         }
         // 源语言与目标语言相同：显示原文而非报错，与重构前保持一致
         Err(AppError::SameLanguage { lang }) => {
@@ -232,6 +233,28 @@ async fn run_translation(app: &AppHandle, request: TranslationRequest) {
             }
         }
         Err(e) => {
+            // ── 本地缓存回退 ──────────────────────────────────────────────
+            //
+            // 计划第 15 节划的产品边界：本项目依赖云端翻译源，「离线也能翻译
+            // 任何新文本」是做不到的承诺。能做的是——译过的内容仍然显示得出来。
+            // 这是整条链路里唯一读缓存的地方，因此在线时结果永远是新鲜的。
+            if should_fall_back_to_cache(&e) {
+                if let Some(cached) = lookup_cache(&state, &request).await {
+                    if coordinator.run_if_current(id, || {
+                        translation_flow::emit_result(app, &cached);
+                    }) {
+                        tracing::info!(
+                            event = "translation_served_from_cache",
+                            request_id = %id,
+                            "[coordinator] 翻译源均不可用，改用本地缓存"
+                        );
+                    } else {
+                        log_stale_result(id);
+                    }
+                    return;
+                }
+            }
+
             tracing::error!(
                 event = "translation_request_failed",
                 request_id = %id,
@@ -257,16 +280,64 @@ fn log_stale_result(id: RequestId) {
     );
 }
 
-/// 历史写入与翻译主链路解耦：写失败只记录，绝不影响已经 emit 出去的结果。
-/// （Phase 7 会把它换成有界队列 + 单 worker，此处保持既有行为。）
-async fn enqueue_history(
+/// 缓存来源的 provider 标识。
+///
+/// 前端 `PROVIDER_LABELS` 里对应「本地缓存」。复用 provider 字段而不是给
+/// `TranslationResult` 加一个 `from_cache` 标志：既有的 SameLanguage 路径
+/// 已经在用非 provider 取值（"none"），说明这个字段本就是「来源」而非
+/// 「翻译商」，加字段会连带改动前端类型与组件。
+const CACHE_PROVIDER: &str = "cache";
+
+/// 是否该回退到本地缓存。
+///
+/// 只在「所有翻译源都用不了」时回退 —— 那才是信号。Permanent 不回退：
+/// 换谁都一样，缓存里也不会有更对的东西；SameLanguage 根本不是失败。
+/// 这两种情况把真实原因告诉用户，比递一个来源不明的旧译文有用。
+fn should_fall_back_to_cache(err: &AppError) -> bool {
+    matches!(err, AppError::AllProvidersFailed { .. })
+}
+
+/// 查缓存并组装成一次正常的翻译结果。
+async fn lookup_cache(state: &AppState, request: &TranslationRequest) -> Option<TranslationResult> {
+    match state.cache.get(&request.text, &request.target_lang).await {
+        Ok(Some(hit)) => Some(TranslationResult {
+            source_text: request.text.clone(),
+            translated_text: hit.translated_text,
+            detected_source_lang: hit.source_lang,
+            target_lang: request.target_lang.clone(),
+            provider: CACHE_PROVIDER.to_string(),
+            duration_ms: 0,
+            truncated: request.truncated,
+        }),
+        Ok(None) => None,
+        Err(e) => {
+            // 缓存读失败不该把主链路也带下水 —— 它本来只是最后一根稻草
+            tracing::warn!("[coordinator] 读取本地缓存失败: {}", e);
+            None
+        }
+    }
+}
+
+/// 成功的翻译落盘：历史记录 + 本地缓存。
+///
+/// 与主链路解耦：写失败只记录，绝不影响已经 emit 出去的结果。
+/// （Phase 7 会把历史部分换成有界队列 + 单 worker，此处保持既有行为。）
+async fn persist_success(
     state: &AppState,
     result: &TranslationResult,
     request: &TranslationRequest,
 ) {
     let history = state.history.clone();
+    let cache = state.cache.clone();
     let record = TranslationRecord::from_result(result, &request.text, &request.target_lang);
     let limit = state.config.read().await.cache_history_limit();
+
+    // CacheEntry 借用 &str，而 spawn 需要 'static，所以在进任务前取到拥有值
+    let source_text = request.text.clone();
+    let target_lang = request.target_lang.clone();
+    let translated_text = result.translated_text.clone();
+    let source_lang = result.detected_source_lang.clone();
+    let provider = result.provider.clone();
 
     tauri::async_runtime::spawn(async move {
         if let Err(e) = history.insert(&record).await {
@@ -274,6 +345,22 @@ async fn enqueue_history(
         }
         if let Err(e) = history.enforce_limit(limit).await {
             tracing::error!("历史清理失败: {}", e);
+        }
+
+        if let Err(e) = cache
+            .put(CacheEntry {
+                source_text: &source_text,
+                target_lang: &target_lang,
+                translated_text: &translated_text,
+                source_lang: &source_lang,
+                provider: &provider,
+            })
+            .await
+        {
+            // 缓存写失败对用户无感 —— 下次联网时照常翻译
+            tracing::warn!("本地缓存写入失败: {}", e);
+        } else if let Err(e) = cache.enforce_limits().await {
+            tracing::warn!("本地缓存清理失败: {}", e);
         }
     });
 }
@@ -415,6 +502,31 @@ mod tests {
             vec![7],
             "8 次突发复制后只应显示最后一次的结果"
         );
+    }
+
+    // ── 缓存回退的判定（计划第 15/16 节）────────────────────────────────
+
+    /// 只有「所有翻译源都用不了」才回退缓存 —— 那才是离线的信号。
+    /// 其他失败把真实原因告诉用户，比递一个来源不明的旧译文有用。
+    #[test]
+    fn cache_fallback_is_only_for_total_provider_failure() {
+        assert!(should_fall_back_to_cache(&AppError::AllProvidersFailed {
+            errors: vec![("deepl".into(), "timeout".into())],
+        }));
+
+        for err in [
+            AppError::SameLanguage { lang: "zh".into() },
+            AppError::NonTextContent,
+            AppError::ProviderRejected {
+                provider: "deepl".into(),
+                status: 400,
+            },
+            AppError::AuthError {
+                provider: "deepl".into(),
+            },
+        ] {
+            assert!(!should_fall_back_to_cache(&err), "{:?} 不该回退缓存", err);
+        }
     }
 
     /// 闸门为 false 时 f 绝不能被执行（副作用不能泄漏）

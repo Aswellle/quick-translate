@@ -4,6 +4,7 @@
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use crate::domain::cache::TranslationCache;
 use crate::domain::config::ConfigService;
 use crate::domain::history::HistoryRepository;
 use crate::domain::translator::TranslationEngine;
@@ -24,6 +25,9 @@ pub struct AppState {
     pub translator: Arc<TranslationEngine>,
     pub config: Arc<RwLock<ConfigService>>,
     pub history: Arc<HistoryRepository>,
+    /// 翻译结果的精确缓存：只在所有翻译源都不可用时才查（计划第 15/16 节），
+    /// 让用户在离线时仍能看到之前译过的内容。
+    pub cache: Arc<TranslationCache>,
     pub http_client: Arc<HttpClient>,
     /// 翻译请求的编排与代际闸门。
     /// 取代此前的 `current_translation: Arc<Mutex<Option<JoinHandle>>>` ——

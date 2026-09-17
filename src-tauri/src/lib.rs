@@ -100,6 +100,7 @@ pub fn run() {
             let config = Arc::new(RwLock::new(config));
             // 无外层 Mutex：HistoryRepository 内部已有 Arc<Mutex<Connection>>，双重加锁无益
             let history = Arc::new(HistoryRepository::new(db.clone()));
+            let cache = Arc::new(domain::cache::TranslationCache::new(db.clone()));
 
             // ── Step 3: 注册翻译源 ────────────────────────────────────────────
             let translator = TranslationEngine::new(http_client.clone());
@@ -168,6 +169,7 @@ pub fn run() {
                 translator,
                 config: config.clone(),
                 history,
+                cache,
                 http_client,
                 coordinator: Arc::new(system::translation::TranslationCoordinator::new()),
                 clipboard_monitor: Arc::new(monitor),
