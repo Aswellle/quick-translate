@@ -19,6 +19,14 @@ pub enum AppError {
     #[error("翻译请求超时（{timeout_secs}s）")]
     Timeout { timeout_secs: u64 },
 
+    /// 翻译源以 4xx 拒绝了这次请求（401/403/408/429 已归入更具体的变体）。
+    ///
+    /// 与 NetworkError 分开是必要的：此前 4xx 也被折进 NetworkError，于是
+    /// 「语种不支持」这类请求本身的问题会被当成 provider 故障 ——
+    /// 撞够三次就把一个完全正常的翻译源熔断十分钟。
+    #[error("翻译源拒绝了该请求：{provider}（HTTP {status}）")]
+    ProviderRejected { provider: String, status: u16 },
+
     #[error("所有翻译源均不可用")]
     AllProvidersFailed { errors: Vec<(String, String)> },
 
@@ -77,6 +85,7 @@ impl AppError {
             Self::RateLimit { .. } => "RATE_LIMIT",
             Self::QuotaExhausted { .. } => "QUOTA_EXHAUSTED",
             Self::Timeout { .. } => "TIMEOUT",
+            Self::ProviderRejected { .. } => "PROVIDER_REJECTED",
             Self::AllProvidersFailed { .. } => "ALL_PROVIDERS_FAILED",
             Self::EmptyText => "EMPTY_TEXT",
             Self::NonTextContent => "NON_TEXT_CONTENT",

@@ -8,6 +8,7 @@ use tauri::{
 };
 
 use crate::error::AppError;
+use crate::runtime::{ComponentState, RuntimeHealth, RuntimeStatusSnapshot};
 use crate::state::AppState;
 use crate::types::ProviderInfo;
 
@@ -173,9 +174,38 @@ fn build_menu(
     let lang_submenu = Submenu::with_items(app, "目标语言", true, &lang_items_ref)
         .map_err(|e| AppError::WindowError(e.to_string()))?;
 
+    // ---- 状态区（计划第 27 节）----
+    //
+    // 只读本地运行时状态。托盘菜单里绝不发网络请求 —— 打开菜单是个
+    // 高频动作，而状态早就在内存里了。
+    let status = app.state::<AppState>().runtime.snapshot();
+    let status_item = MenuItem::with_id(
+        app,
+        "runtime_status",
+        status_headline(status.overall),
+        false,
+        None::<&str>,
+    )
+    .map_err(|e| AppError::WindowError(e.to_string()))?;
+
+    let mut status_items: Vec<Box<dyn tauri::menu::IsMenuItem<tauri::Wry>>> =
+        vec![Box::new(status_item)];
+    for line in status_details(&status) {
+        status_items.push(Box::new(
+            MenuItem::with_id(app, "runtime_detail", line, false, None::<&str>)
+                .map_err(|e| AppError::WindowError(e.to_string()))?,
+        ));
+    }
+    let status_separator =
+        PredefinedMenuItem::separator(app).map_err(|e| AppError::WindowError(e.to_string()))?;
+
     // ---- 剪贴板监控开关 ----
     let clip_check = if clipboard_monitor_enabled { "✓" } else { "  " };
-    let clip_label = format!("{} 剪贴板监控", clip_check);
+    let clip_label = format!(
+        "{} 剪贴板监控{}",
+        clip_check,
+        clipboard_suffix(status.clipboard.state)
+    );
     let clipboard_item =
         MenuItem::with_id(app, "clipboard_monitor_toggle", clip_label, true, None::<&str>)
             .map_err(|e| AppError::WindowError(e.to_string()))?;
@@ -198,20 +228,61 @@ fn build_menu(
     let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)
         .map_err(|e| AppError::WindowError(e.to_string()))?;
 
-    Menu::with_items(
-        app,
-        &[
-            &provider_submenu,
-            &lang_submenu,
-            &history_item,
-            &settings_item,
-            &clipboard_item,
-            &separator,
-            &about_item,
-            &quit_item,
-        ],
-    )
-    .map_err(|e| AppError::WindowError(e.to_string()))
+    let mut items: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = Vec::new();
+    for item in &status_items {
+        items.push(item.as_ref());
+    }
+    items.push(&status_separator);
+    items.push(&provider_submenu);
+    items.push(&lang_submenu);
+    items.push(&history_item);
+    items.push(&settings_item);
+    items.push(&clipboard_item);
+    items.push(&separator);
+    items.push(&about_item);
+    items.push(&quit_item);
+
+    Menu::with_items(app, &items).map_err(|e| AppError::WindowError(e.to_string()))
+}
+
+/// 托盘顶部那一行总状态（计划第 27 节）。
+///
+/// 用「部分功能异常」而不是「已损坏」之类的词：故障的 provider 只该
+/// 影响它自己那一行，不该让整个应用看起来像坏了（计划第 28 节的同一条原则）。
+fn status_headline(health: RuntimeHealth) -> &'static str {
+    match health {
+        RuntimeHealth::Healthy => "● 正常运行",
+        RuntimeHealth::Degraded => "● 部分功能异常",
+        RuntimeHealth::Recovering => "● 正在恢复…",
+    }
+}
+
+/// 剪贴板开关项上的状态后缀。健康时不加任何字，保持菜单干净。
+fn clipboard_suffix(state: ComponentState) -> &'static str {
+    match state {
+        ComponentState::Degraded => "  ⚠ 暂时异常",
+        ComponentState::Recovering => "  ⚠ 自动恢复中…",
+        // Disabled 由前面的 ✓ 空格已经表达，健康则无需提示
+        ComponentState::Healthy | ComponentState::Disabled => "",
+    }
+}
+
+/// 出问题时才追加的说明行。健康时返回空 —— 一个正常的应用不该在托盘里
+/// 铺满「一切正常」的噪音。
+fn status_details(status: &RuntimeStatusSnapshot) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    if status.network.state == ComponentState::Degraded {
+        lines.push("  ⚠ 翻译服务暂时不可用，将自动恢复".to_string());
+    }
+    if status.storage.state == ComponentState::Degraded {
+        lines.push("  ⚠ 历史记录暂时无法写入".to_string());
+    }
+    if status.popup.state == ComponentState::Degraded {
+        lines.push("  ⚠ 浮窗显示异常".to_string());
+    }
+
+    lines
 }
 
 /// 处理托盘菜单点击事件
@@ -382,4 +453,126 @@ fn toggle_clipboard_monitor(app: AppHandle) {
 
         refresh_menu(&app_for_menu).await;
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::ComponentHealth;
+
+    fn comp(state: ComponentState) -> ComponentHealth {
+        ComponentHealth {
+            state,
+            ..ComponentHealth::default()
+        }
+    }
+
+    fn snapshot(
+        overall: RuntimeHealth,
+        network: ComponentState,
+        storage: ComponentState,
+        popup: ComponentState,
+    ) -> RuntimeStatusSnapshot {
+        RuntimeStatusSnapshot {
+            overall,
+            uptime_ms: 0,
+            clipboard: comp(ComponentState::Healthy),
+            network: comp(network),
+            popup: comp(popup),
+            storage: comp(storage),
+        }
+    }
+
+    fn healthy() -> RuntimeStatusSnapshot {
+        snapshot(
+            RuntimeHealth::Healthy,
+            ComponentState::Healthy,
+            ComponentState::Healthy,
+            ComponentState::Healthy,
+        )
+    }
+
+    // ── 顶部状态行 ───────────────────────────────────────────────────────
+
+    #[test]
+    fn headline_covers_every_health_level() {
+        assert_eq!(status_headline(RuntimeHealth::Healthy), "● 正常运行");
+        assert_eq!(status_headline(RuntimeHealth::Degraded), "● 部分功能异常");
+        assert_eq!(status_headline(RuntimeHealth::Recovering), "● 正在恢复…");
+    }
+
+    // ── 剪贴板开关的后缀 ─────────────────────────────────────────────────
+
+    /// 健康时不加任何字样 —— 菜单要干净，正常不需要被反复告知
+    #[test]
+    fn healthy_clipboard_adds_no_noise() {
+        assert_eq!(clipboard_suffix(ComponentState::Healthy), "");
+    }
+
+    /// 用户自己关掉的，前面那个 ✓ 空格已经说明了，不必再写一遍
+    #[test]
+    fn disabled_clipboard_adds_no_noise() {
+        assert_eq!(clipboard_suffix(ComponentState::Disabled), "");
+    }
+
+    #[test]
+    fn degraded_and_recovering_clipboard_are_flagged() {
+        assert!(clipboard_suffix(ComponentState::Degraded).contains("异常"));
+        assert!(clipboard_suffix(ComponentState::Recovering).contains("恢复中"));
+    }
+
+    // ── 说明行 ───────────────────────────────────────────────────────────
+
+    /// 一切正常时不该在托盘里铺满「一切正常」的噪音
+    #[test]
+    fn a_healthy_snapshot_has_no_detail_lines() {
+        assert!(status_details(&healthy()).is_empty());
+    }
+
+    #[test]
+    fn only_the_faulty_components_get_a_line() {
+        let s = snapshot(
+            RuntimeHealth::Degraded,
+            ComponentState::Degraded,
+            ComponentState::Healthy,
+            ComponentState::Healthy,
+        );
+        let lines = status_details(&s);
+
+        assert_eq!(lines.len(), 1, "只该有网络那一行：{:?}", lines);
+        assert!(lines[0].contains("翻译服务"));
+        assert!(
+            !lines.iter().any(|l| l.contains("历史")),
+            "存储是健康的，不该出现它的说明行"
+        );
+    }
+
+    /// 计划第 28 节的原则：故障的 provider 不该让整个应用看起来像坏了。
+    /// 对应到托盘 —— 说明行只描述出问题的那个组件，不扩散。
+    #[test]
+    fn one_broken_component_does_not_produce_a_wall_of_warnings() {
+        let s = snapshot(
+            RuntimeHealth::Degraded,
+            ComponentState::Degraded,
+            ComponentState::Degraded,
+            ComponentState::Healthy,
+        );
+        let lines = status_details(&s);
+
+        assert_eq!(lines.len(), 2, "只有两个组件有问题：{:?}", lines);
+        for line in &lines {
+            assert!(line.starts_with("  ⚠ "), "说明行格式应一致: {}", line);
+        }
+    }
+
+    #[test]
+    fn every_faulty_component_gets_exactly_one_line() {
+        let s = snapshot(
+            RuntimeHealth::Degraded,
+            ComponentState::Degraded,
+            ComponentState::Degraded,
+            ComponentState::Degraded,
+        );
+        assert_eq!(status_details(&s).len(), 3);
+    }
 }

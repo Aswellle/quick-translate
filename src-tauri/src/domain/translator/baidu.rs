@@ -5,7 +5,6 @@
 use async_trait::async_trait;
 use md5::{Digest, Md5};
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -117,10 +116,9 @@ impl TranslationProvider for BaiduProvider {
         let duration_ms = start.elapsed().as_millis() as u64;
 
         if !response.status().is_success() {
-            return Err(AppError::NetworkError(format!(
-                "百度翻译 HTTP {}",
-                response.status().as_u16()
-            )));
+            let status = response.status().as_u16();
+            let body = response.text().await.unwrap_or_default();
+            return Err(super::http_status_error("baidu", status, body));
         }
 
         let resp: BaiduResponse = response
@@ -210,23 +208,6 @@ impl TranslationProvider for BaiduProvider {
             Ok(_) => Ok(true),
             Err(AppError::AuthError { .. }) => Ok(false),
             Err(e) => Err(e),
-        }
-    }
-
-    fn update_api_key(&mut self, api_key: String) {
-        // 格式 "app_id:secret_key"
-        if let Some((id, key)) = api_key.split_once(':') {
-            self.app_id = id.to_string();
-            self.secret_key = key.to_string();
-        }
-    }
-
-    fn update_credentials(&mut self, creds: HashMap<String, String>) {
-        if let Some(id) = creds.get("baidu_app_id") {
-            self.app_id = id.clone();
-        }
-        if let Some(key) = creds.get("baidu_secret_key") {
-            self.secret_key = key.clone();
         }
     }
 }

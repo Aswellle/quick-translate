@@ -24,6 +24,12 @@ fn is_encrypted(key: &str) -> bool {
     ENCRYPTED_KEYS.contains(&key)
 }
 
+/// history_limit 的有效范围（含端点）。
+/// 低于下限会导致 enforce_limit 删除全部非收藏记录；
+/// 过大的值会削弱 FIFO 清理意义并占用内存。
+pub const HISTORY_LIMIT_MIN: i64 = 1;
+pub const HISTORY_LIMIT_MAX: i64 = 100_000;
+
 pub struct ConfigService {
     db: Arc<Mutex<Connection>>,
     cache: AppConfig,
@@ -144,10 +150,9 @@ impl ConfigService {
             "auto_start" => self.cache.auto_start = value == "true",
             "history_limit" => {
                 if let Ok(n) = value.parse::<i64>() {
-                    self.cache.history_limit = n;
+                    self.cache.history_limit = n.clamp(HISTORY_LIMIT_MIN, HISTORY_LIMIT_MAX);
                 }
             }
-            "theme" => self.cache.theme = value.to_string(),
             "fallback_enabled" => self.cache.fallback_enabled = value == "true",
             "onboarding_completed" => self.cache.onboarding_completed = value == "true",
             "clipboard_monitor_enabled" => self.cache.clipboard_monitor_enabled = value == "true",
@@ -167,11 +172,35 @@ fn load_config_from_db(conn: &Connection) -> Result<AppConfig, AppError> {
         })
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
-    for row in rows {
-        let (key, raw) = row.map_err(|e| AppError::DatabaseError(e.to_string()))?;
+    // 先读取全部行，避免在 query_map 迭代中借用冲突
+    let rows: Vec<(String, String)> = rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+    // 记录需要从旧密钥迁移到的新密钥的条目 (key, plaintext)
+    let mut to_migrate: Vec<(String, String)> = Vec::new();
+
+    for (key, raw) in rows {
         match key.as_str() {
             k if is_encrypted(k) => {
-                let plain = crypto::decrypt(&raw).unwrap_or_default();
+                // 优先尝试新版密钥解密
+                let plain = crypto::decrypt(&raw).unwrap_or_else(|_| {
+                    // 新版密钥失败：尝试旧版密钥（迁移兼容）
+                    let mut found = String::new();
+                    for old_key in crypto::old_key_candidates() {
+                        if let Ok(pt) = crypto::decrypt_with_key(&raw, &old_key) {
+                            found = pt;
+                            break;
+                        }
+                    }
+                    found
+                });
+                if plain.is_empty() && !raw.is_empty() {
+                    // 新旧密钥均无法解密：可能是损坏数据，保留空值
+                    tracing::warn!("凭证 {} 无法解密，已重置为空", k);
+                } else if crypto::decrypt(&raw).is_err() && !plain.is_empty() {
+                    // 旧密钥解密成功 → 需要迁移到新版密钥
+                    to_migrate.push((k.to_string(), plain.clone()));
+                }
                 match k {
                     "deepl_api_key" => config.deepl_api_key = plain,
                     "tencent_secret_id" => config.tencent_secret_id = plain,
@@ -193,9 +222,19 @@ fn load_config_from_db(conn: &Connection) -> Result<AppConfig, AppError> {
                 config.auto_start = decode(&raw) == "true";
             }
             "history_limit" => {
-                if let Ok(n) = decode(&raw).parse::<i64>() {
-                    config.history_limit = n;
-                }
+                let parsed = decode(&raw).parse::<i64>();
+                config.history_limit = match parsed {
+                    Ok(n) if n >= HISTORY_LIMIT_MIN && n <= HISTORY_LIMIT_MAX => n,
+                    Ok(n) => {
+                        // 越界值（含 0/负数）钳制到安全范围，避免全部删除
+                        tracing::warn!(
+                            "history_limit {} 越界，钳制到 [{}, {}]",
+                            n, HISTORY_LIMIT_MIN, HISTORY_LIMIT_MAX
+                        );
+                        n.clamp(HISTORY_LIMIT_MIN, HISTORY_LIMIT_MAX)
+                    }
+                    Err(_) => config.history_limit,
+                };
             }
             "theme" => {
                 config.theme = ps(&raw).unwrap_or(config.theme);
@@ -211,6 +250,25 @@ fn load_config_from_db(conn: &Connection) -> Result<AppConfig, AppError> {
             }
             _ => {}
         }
+    }
+
+    // 迁移：将旧密钥加密的凭证用新版密钥重新加密并持久化
+    if !to_migrate.is_empty() {
+        let now = now_unix_ms();
+        for (key, plain) in &to_migrate {
+            match crypto::encrypt(plain) {
+                Ok(new_value) => {
+                    if let Err(e) = conn.execute(
+                        "UPDATE app_config SET value = ?1, updated_at = ?2 WHERE key = ?3",
+                        rusqlite::params![new_value, now, key],
+                    ) {
+                        tracing::warn!("迁移凭证 {} 写入失败: {}", key, e);
+                    }
+                }
+                Err(e) => tracing::warn!("迁移凭证 {} 加密失败: {}", key, e),
+            }
+        }
+        tracing::info!("已迁移 {} 条凭证到新版加密密钥", to_migrate.len());
     }
     Ok(config)
 }

@@ -1,153 +1,68 @@
 // src-tauri/src/system/translation_flow.rs
-// 翻译主流程编排：
-// - clipboard_monitor 触发 → 调用 do_translate() → 推送结果事件
-// - popup 窗口复用时也可调用 execute_text()
+// 浮窗的呈现层：建窗、定位、loading / result / error 事件。
+//
+// Phase 3 起，请求编排（代际、取消、结果闸门、历史入队）已移入
+// `system::translation::coordinator`。本模块现在只回答「显示在哪里」，
+// 不再回答「这个结果还该不该显示」—— 后者的答案只有一个地方能给，
+// 就是 coordinator 的代际闸门。
+//
+// 依赖方向单向：coordinator → translation_flow，反向没有任何引用。
+// Phase 8 会重构本模块的窗口激活策略与几何计算。
 
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
-use crate::state::AppState;
 use crate::system::popup_geometry;
 use crate::types::{
-    now_unix_ms, PopupPosition, TranslationErrorPayload, TranslationLoadingPayload,
-    TranslationRecord, TranslationResult, TranslationResultPayload,
+    PopupPosition, TranslationErrorPayload, TranslationLoadingPayload, TranslationResult,
+    TranslationResultPayload,
 };
 
-const POPUP_LABEL: &str = "popup";
+pub(crate) const POPUP_LABEL: &str = "popup";
 
 /// 浮窗初始逻辑尺寸 —— 取自 popup_geometry（尺寸契约唯一来源，C3）
 const POPUP_LOGICAL_W: f64 = popup_geometry::WIDTH_NORMAL;
 const POPUP_LOGICAL_H: f64 = popup_geometry::HEIGHT_INITIAL;
 
-/// 在指定光标位置执行翻译（clipboard_monitor 直接调用，传入已捕获的文本）
-pub async fn execute_at_position(app: &AppHandle, cursor_x: f64, cursor_y: f64, text: String) {
-    cancel_current_translation(app).await;
-
-    if text.trim().is_empty() {
-        emit_error(app, "EMPTY_TEXT", "未检测到选中文本");
-        return;
-    }
-
-    let truncated = text.chars().count() > 5000;
-    let text_to_translate = if truncated {
-        text.chars().take(5000).collect::<String>()
-    } else {
-        text.clone()
-    };
-
-    let state = app.state::<AppState>();
-    let target_lang = state
-        .config
-        .read()
-        .await
-        .get("target_lang")
-        .unwrap_or_else(|| "zh".to_string());
-
-    let position = compute_popup_position_dpi(app, cursor_x, cursor_y);
-
-    show_popup_loading(app, &position).await;
-
-    let app_clone = app.clone();
-    let text_clone = text_to_translate.clone();
-    let target_clone = target_lang.clone();
-
-    let task = tauri::async_runtime::spawn(async move {
-        do_translate(&app_clone, &text_clone, &target_clone, truncated).await;
-    });
-
-    *state.current_translation.lock().await = Some(task);
-}
-
-async fn do_translate(app: &AppHandle, text: &str, target_lang: &str, truncated: bool) {
-    let state = app.state::<AppState>();
-    let start_ms = now_unix_ms();
-
-    match state.translator.translate(text, target_lang).await {
-        Ok(mut result) => {
-            result.truncated = truncated;
-            result.duration_ms = (now_unix_ms() - start_ms) as u64;
-
-            let history = state.history.clone();
-            let record = TranslationRecord::from_result(&result, text, target_lang);
-            let limit = state.config.read().await.cache_history_limit();
-            let record_clone = record.clone();
-
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = history.insert(&record_clone).await {
-                    tracing::error!("历史记录写入失败: {}", e);
-                }
-                if let Err(e) = history.enforce_limit(limit).await {
-                    tracing::error!("历史清理失败: {}", e);
-                }
-            });
-
-            let _ = app.emit("translation-result", TranslationResultPayload { result });
-        }
-        // 源语言与目标语言相同：显示原文而非报错，与 clipboard_monitor 路径保持一致
-        Err(crate::error::AppError::SameLanguage { lang }) => {
-            tracing::info!("[do_translate] 源语言与目标语言相同（{}），显示原文", lang);
-            let original_result = TranslationResult {
-                source_text: text.to_string(),
-                translated_text: text.to_string(),
-                detected_source_lang: lang,
-                target_lang: target_lang.to_string(),
-                provider: "none".to_string(),
-                duration_ms: 0,
-                truncated,
-            };
-            let _ = app.emit("translation-result", TranslationResultPayload { result: original_result });
-        }
-        Err(e) => {
-            tracing::error!("翻译失败: {}", e);
-            emit_error(app, e.error_code(), &e.to_string());
-        }
-    }
-}
-
-async fn cancel_current_translation(app: &AppHandle) {
-    let state = app.state::<AppState>();
-    let mut current = state.current_translation.lock().await;
-    if let Some(handle) = current.take() {
-        handle.abort();
-    }
-}
-
 /// 确保 popup 浮窗已创建（onboarding 关闭后调用，此时 popup 可能从未被创建）
 pub fn ensure_popup_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(POPUP_LABEL) {
-        // popup 已存在但可能被隐藏，重新显示
-        tracing::info!("[ensure_popup] popup 已存在，调用 show() + set_focus()");
+        // popup 已存在但可能被隐藏，重新显示。
+        // 不 set_focus()：浮窗默认不抢焦点（Phase 8b）。
+        tracing::info!("[ensure_popup] popup 已存在，调用 show()");
         let _ = window.show();
-        let _ = window.set_focus();
         return;
     }
     // 不存在，创建新的
     tracing::info!("[ensure_popup] popup 不存在，创建新窗口");
     let fallback_pos = compute_popup_position_dpi(app, 400.0, 400.0);
-    let _ = WebviewWindowBuilder::new(
-        app,
-        POPUP_LABEL,
-        WebviewUrl::App("index.html#popup".into()),
-    )
-    .title("QuickTranslate")
-    .additional_browser_args(crate::system::BROWSER_ARGS)
-    .decorations(false)
-    .transparent(true)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .visible(true)
-    .resizable(false)
-    .inner_size(POPUP_LOGICAL_W, POPUP_LOGICAL_H)
-    .position(fallback_pos.x, fallback_pos.y)
-    .build();
+    let _ = WebviewWindowBuilder::new(app, POPUP_LABEL, WebviewUrl::App("index.html#popup".into()))
+        .title("QuickTranslate")
+        .additional_browser_args(crate::system::BROWSER_ARGS)
+        .decorations(false)
+        .transparent(true)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        // 非激活窗口（Windows 上即 WS_EX_NOACTIVATE）：显示时不抢焦点，
+        // 不把用户从正在编辑的地方带走（Phase 8b / 计划第 19 节）
+        .focusable(false)
+        .visible(true)
+        .resizable(false)
+        .inner_size(POPUP_LOGICAL_W, POPUP_LOGICAL_H)
+        .position(fallback_pos.x, fallback_pos.y)
+        .build();
 }
 
-/// 创建或复用浮窗，发送 loading 事件
-pub async fn show_popup_loading(app: &AppHandle, position: &PopupPosition) {
+/// 创建或复用浮窗，发送 loading 事件。
+///
+/// 返回 false 表示浮窗没能显示出来 —— 调用方据此上报浮窗组件的健康状态。
+pub(crate) async fn show_popup_loading(app: &AppHandle, position: &PopupPosition) -> bool {
     if let Some(window) = app.get_webview_window(POPUP_LABEL) {
-        tracing::info!("[show_popup_loading] 找到 popup，设置位置={:?}，调用 show()+focus()", position);
+        tracing::info!("[show_popup_loading] 找到 popup，设置位置={:?}", position);
         let _ = window.set_position(tauri::LogicalPosition::new(position.x, position.y));
+        // 每次显示都复位为非激活：用户上一次点过浮窗的话，窗口仍是可激活的，
+        // 不复位就会在这一轮直接抢走焦点（Phase 8b）
+        let _ = window.set_focusable(false);
         let _ = window.show();
-        let _ = window.set_focus();
     } else {
         tracing::info!("[show_popup_loading] popup 不存在，创建新窗口并立即 show()");
         match WebviewWindowBuilder::new(
@@ -161,6 +76,7 @@ pub async fn show_popup_loading(app: &AppHandle, position: &PopupPosition) {
         .transparent(true)
         .always_on_top(true)
         .skip_taskbar(true)
+        .focusable(false)
         .visible(false)
         .resizable(false)
         .inner_size(POPUP_LOGICAL_W, POPUP_LOGICAL_H)
@@ -168,13 +84,12 @@ pub async fn show_popup_loading(app: &AppHandle, position: &PopupPosition) {
         .build()
         {
             Ok(window) => {
-                tracing::info!("[show_popup_loading] 新窗口创建成功，调用 show()+focus()");
+                tracing::info!("[show_popup_loading] 新窗口创建成功，调用 show()");
                 let _ = window.show();
-                let _ = window.set_focus();
             }
             Err(e) => {
                 tracing::error!("[show_popup_loading] 创建浮窗失败: {}", e);
-                return;
+                return false;
             }
         }
     }
@@ -185,115 +100,21 @@ pub async fn show_popup_loading(app: &AppHandle, position: &PopupPosition) {
             position: position.clone(),
         },
     );
+    true
 }
 
-/// DPI 感知的浮窗位置计算（公开，供 clipboard_monitor 调用）
-///
-/// cursor_x/y 是 OS 原生物理像素坐标（GetCursorPos 返回物理像素）。
-/// Tauri WebviewWindowBuilder.position() 接受逻辑像素。
-/// 必须除以 scale_factor 才能在高 DPI 屏幕（150%/200%）上正确定位。
-///
-/// 定位策略：计算光标四周可用空间，选择面积最大的方向放置浮窗，
-/// 避免遮挡光标附近的目标文本。
-pub fn compute_popup_position_dpi(app: &AppHandle, cursor_x: f64, cursor_y: f64) -> PopupPosition {
-    const OFFSET: f64 = 14.0;
-    const POPUP_H: f64 = 300.0; // 估算高度（实际由前端动态调整）
-
-    let monitor = app.available_monitors().ok().and_then(|monitors| {
-        monitors.into_iter().find(|m| {
-            let pos = m.position();
-            let size = m.size();
-            let mx = pos.x as f64;
-            let my = pos.y as f64;
-            let mw = size.width as f64;
-            let mh = size.height as f64;
-            cursor_x >= mx && cursor_x < mx + mw && cursor_y >= my && cursor_y < my + mh
-        })
-    });
-
-    let (scale, phys_w, phys_h, mon_x, mon_y) = monitor
-        .as_ref()
-        .map(|m| {
-            let s = m.scale_factor();
-            let sz = m.size();
-            let ps = m.position();
-            (
-                s,
-                sz.width as f64,
-                sz.height as f64,
-                ps.x as f64,
-                ps.y as f64,
-            )
-        })
-        .unwrap_or((1.0, 1920.0, 1080.0, 0.0, 0.0));
-
-    let cx = cursor_x / scale;  // 光标逻辑 x
-    let cy = cursor_y / scale; // 光标逻辑 y
-    let mon_w = phys_w / scale;
-    let mon_h = phys_h / scale;
-    let mon_min_x = mon_x / scale;
-    let mon_min_y = mon_y / scale;
-    let mon_max_x = mon_min_x + mon_w;
-    let mon_max_y = mon_min_y + mon_h;
-
-    // 计算四个方向的可用空间
-    let space_right  = mon_max_x - (cx + OFFSET);              // 右侧可用宽度
-    let space_left   = cx - OFFSET - mon_min_x;                  // 左侧可用宽度
-    let space_below  = mon_max_y - (cy + OFFSET);                 // 下方可用高度
-    let space_above  = cy - OFFSET - mon_min_y;                  // 上方可用高度
-
-    // 判断各方向是否能容纳浮窗
-    let can_right  = space_right  >= POPUP_LOGICAL_W;
-    let can_left   = space_left   >= POPUP_LOGICAL_W;
-    let can_below  = space_below  >= POPUP_H;
-    let can_above  = space_above  >= POPUP_H;
-
-    // 优先方向：右下 → 右上方 → 左下方 → 左上方 → 下方 → 上方 → 右方 → 左方
-    let (lx, ly) = if can_right && can_below {
-        (cx + OFFSET, cy + OFFSET)                                    // 右下（最佳）
-    } else if can_right && can_above {
-        (cx + OFFSET, cy - OFFSET - POPUP_H)                          // 右上方
-    } else if can_left && can_below {
-        (cx - OFFSET - POPUP_LOGICAL_W, cy + OFFSET)                  // 左下方
-    } else if can_left && can_above {
-        (cx - OFFSET - POPUP_LOGICAL_W, cy - OFFSET - POPUP_H)         // 左上方
-    } else if can_below {
-        // 下方空间足够，水平居中于光标
-        let lx_center = (cx - POPUP_LOGICAL_W / 2.0).clamp(mon_min_x, mon_max_x - POPUP_LOGICAL_W);
-        (lx_center, cy + OFFSET)
-    } else if can_above {
-        let lx_center = (cx - POPUP_LOGICAL_W / 2.0).clamp(mon_min_x, mon_max_x - POPUP_LOGICAL_W);
-        (lx_center, cy - OFFSET - POPUP_H)
-    } else if can_right {
-        // 右侧空间足够，垂直居中于光标
-        let ly_center = (cy - POPUP_H / 2.0).clamp(mon_min_y, mon_max_y - POPUP_H);
-        (cx + OFFSET, ly_center)
-    } else if can_left {
-        let ly_center = (cy - POPUP_H / 2.0).clamp(mon_min_y, mon_max_y - POPUP_H);
-        (cx - OFFSET - POPUP_LOGICAL_W, ly_center)
-    } else {
-        // 所有方向都不够，强制放在左上角
-        (mon_min_x + 10.0, mon_min_y + 10.0)
-    };
-
-    // 最终边界钳制（确保完全在屏幕内）
-    let final_x = lx.clamp(mon_min_x, (mon_max_x - POPUP_LOGICAL_W).max(mon_min_x));
-    let final_y = ly.clamp(mon_min_y, (mon_max_y - 60.0).max(mon_min_y));
-
-    tracing::info!(
-        "[compute_popup_position] cursor=({:.0},{:.0}) mon=({:.0},{:.0},{:.0}x{:.0}) space_right={:.0} below={:.0} → pos=({:.0},{:.0})",
-        cx, cy, mon_min_x, mon_min_y, mon_w, mon_h, space_right, space_below, final_x, final_y
+/// 下发翻译结果。**调用方必须已通过 coordinator 的代际闸门** ——
+/// 本函数不做任何「该不该显示」的判断。
+pub(crate) fn emit_result(app: &AppHandle, result: &TranslationResult) {
+    let _ = app.emit(
+        "translation-result",
+        TranslationResultPayload {
+            result: result.clone(),
+        },
     );
-
-    PopupPosition {
-        x: final_x,
-        y: final_y,
-        monitor_width: mon_w as u32,
-        monitor_height: mon_h as u32,
-    }
 }
 
-fn emit_error(app: &AppHandle, code: &str, message: &str) {
+pub(crate) fn emit_error(app: &AppHandle, code: &str, message: &str) {
     let _ = app.emit(
         "translation-error",
         TranslationErrorPayload {
@@ -303,14 +124,137 @@ fn emit_error(app: &AppHandle, code: &str, message: &str) {
     );
 }
 
-pub trait ConfigExt {
-    fn cache_history_limit(&self) -> i64;
+/// DPI 感知的浮窗位置计算（公开，供 coordinator 调用）
+///
+/// cursor_x/y 是 OS 原生物理像素坐标（GetCursorPos 返回物理像素）。
+/// Tauri WebviewWindowBuilder.position() 接受逻辑像素。
+/// 必须除以 scale_factor 才能在高 DPI 屏幕（150%/200%）上正确定位。
+///
+/// 定位策略：计算光标四周可用空间，选择面积最大的方向放置浮窗，
+/// 避免遮挡光标附近的目标文本。
+///
+/// 边界保证全部交给 `popup_geometry::place_popup` —— 那是个纯函数，
+/// 多显示器负坐标、任务栏在四边、浮窗比工作区还大都在那里被穷举测试过。
+/// 本函数只做三件事：找显示器、把物理坐标换成逻辑坐标、取出工作区。
+pub(crate) fn compute_popup_position_dpi(
+    app: &AppHandle,
+    cursor_x: f64,
+    cursor_y: f64,
+) -> PopupPosition {
+    // 记住锚点：resize 之后要按同一个锚点重新定位，否则结果变高时
+    // 窗口只会往下长、下半截跑出屏幕
+    popup_geometry::remember_anchor((cursor_x, cursor_y));
+
+    let (scale, monitor_logical, work_area) = desktop_for(app, (cursor_x, cursor_y));
+    let popup = popup_geometry::actual_size();
+
+    let (x, y) =
+        popup_geometry::place_popup((cursor_x / scale, cursor_y / scale), work_area, popup);
+
+    tracing::info!(
+        "[compute_popup_position] cursor=({:.0},{:.0}) work=({:.0},{:.0},{:.0}x{:.0}) popup={:.0}x{:.0} → ({:.0},{:.0})",
+        cursor_x / scale,
+        cursor_y / scale,
+        work_area.x,
+        work_area.y,
+        work_area.width,
+        work_area.height,
+        popup.0,
+        popup.1,
+        x,
+        y
+    );
+
+    PopupPosition {
+        x,
+        y,
+        monitor_width: monitor_logical.0 as u32,
+        monitor_height: monitor_logical.1 as u32,
+    }
 }
 
-impl ConfigExt for crate::domain::config::ConfigService {
-    fn cache_history_limit(&self) -> i64 {
-        self.get("history_limit")
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(200)
+/// 找出光标所在显示器，返回 (scale_factor, 显示器逻辑尺寸, 工作区逻辑矩形)。
+///
+/// 用 `work_area()` 而不是 `size()`：工作区已经扣掉任务栏等保留区域。
+/// 拿整块屏幕定位，浮窗就会压在任务栏底下 —— 这正是此前那个
+/// `mon_max_y - 60.0` 想兜住、但只对「底部任务栏 + 100% DPI」成立的场景。
+fn desktop_for(app: &AppHandle, cursor: (f64, f64)) -> (f64, (f64, f64), popup_geometry::Rect) {
+    let (cursor_x, cursor_y) = cursor;
+
+    let monitor = app.available_monitors().ok().and_then(|monitors| {
+        monitors.into_iter().find(|m| {
+            let pos = m.position();
+            let size = m.size();
+            let (mx, my) = (pos.x as f64, pos.y as f64);
+            let (mw, mh) = (size.width as f64, size.height as f64);
+            cursor_x >= mx && cursor_x < mx + mw && cursor_y >= my && cursor_y < my + mh
+        })
+    });
+
+    match monitor.as_ref() {
+        Some(m) => {
+            let s = m.scale_factor();
+            let size = m.size();
+            let wa = m.work_area();
+            (
+                s,
+                (size.width as f64 / s, size.height as f64 / s),
+                popup_geometry::Rect::new(
+                    wa.position.x as f64 / s,
+                    wa.position.y as f64 / s,
+                    wa.size.width as f64 / s,
+                    wa.size.height as f64 / s,
+                ),
+            )
+        }
+        // 取不到显示器信息（理论上不会发生）：退回一个保守的主屏工作区，
+        // 而不是让整条翻译流程失败
+        None => (
+            1.0,
+            (1920.0, 1080.0),
+            popup_geometry::Rect::new(0.0, 0.0, 1920.0, 1080.0),
+        ),
     }
+}
+
+/// 尺寸变化后按原锚点重新定位。
+///
+/// 前端量高 → resize_popup → 窗口变高，此时**必须重新定位**：
+///
+///     Loading（160px，位置合适）
+///       ↓
+///     Result（480px，位置没动）
+///       ↓
+///     下半截跑到屏幕外
+///
+/// 返回 false 表示没有可用锚点（浮窗还没因翻译显示过），此时不动作。
+pub(crate) fn reposition_popup(app: &AppHandle, width: f64, height: f64) -> bool {
+    let Some(cursor) = popup_geometry::anchor() else {
+        return false;
+    };
+    let Some(window) = app.get_webview_window(POPUP_LABEL) else {
+        return false;
+    };
+
+    let (scale, _, work_area) = desktop_for(app, cursor);
+    let (x, y) = popup_geometry::place_popup(
+        (cursor.0 / scale, cursor.1 / scale),
+        work_area,
+        (width, height),
+    );
+
+    if let Err(e) = window.set_position(tauri::LogicalPosition::new(x, y)) {
+        tracing::warn!("[reposition_popup] 重新定位失败: {}", e);
+        return false;
+    }
+
+    tracing::info!(
+        event = "popup_repositioned",
+        "[reposition_popup] 尺寸 {:.0}x{:.0} → 位置 ({:.0},{:.0})",
+        width,
+        height,
+        x,
+        y
+    );
+    true
 }

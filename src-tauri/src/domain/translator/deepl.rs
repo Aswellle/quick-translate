@@ -138,10 +138,7 @@ impl TranslationProvider for DeepLProvider {
             }),
             code => {
                 let body = response.text().await.unwrap_or_default();
-                Err(AppError::NetworkError(format!(
-                    "DeepL API 错误 {}: {}",
-                    code, body
-                )))
+                Err(super::http_status_error("deepl", code, body))
             }
         }
     }
@@ -166,9 +163,5 @@ impl TranslationProvider for DeepLProvider {
             Err(AppError::AuthError { .. }) => Ok(false),
             Err(e) => Err(e),
         }
-    }
-
-    fn update_api_key(&mut self, api_key: String) {
-        self.api_key = api_key;
     }
 }

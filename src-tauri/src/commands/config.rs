@@ -74,9 +74,14 @@ async fn handle_side_effect(
             tray::refresh_menu(app).await;
         }
         "deepl_api_key" => {
+            // 与下面三家走同一条「完整凭证集 → 重建实例」路径。
+            // 此前 DeepL 走的是单独的就地 mutate 分支，是唯一一个特例。
+            let cfg = state.config.read().await;
+            let creds = build_creds_map(&cfg, &[("deepl_api_key", "deepl_api_key")], key, value);
+            drop(cfg);
             state
                 .translator
-                .update_provider_config("deepl", Some(value.to_string()))
+                .update_provider_credentials("deepl", creds)
                 .await?;
         }
         "tencent_secret_id" | "tencent_secret_key" => {

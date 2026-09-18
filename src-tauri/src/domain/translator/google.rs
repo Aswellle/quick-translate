@@ -22,9 +22,6 @@ const USER_AGENTS: &[&str] = &[
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
 ];
 
-/// 最大重试次数（超时或 429 时）
-const MAX_RETRIES: usize = 2;
-
 pub struct GoogleProvider {
     http_client: Arc<HttpClient>,
     /// 简单计数器，用于 UA 轮换（无需原子，每次请求都通过 &self 调用）
@@ -129,10 +126,7 @@ impl GoogleProvider {
             429 => Err(AppError::RateLimit {
                 provider: "google".into(),
             }),
-            code => Err(AppError::NetworkError(format!(
-                "Google Translate HTTP {}",
-                code
-            ))),
+            code => Err(super::http_status_error("google", code, String::new())),
         }
     }
 }
@@ -145,50 +139,36 @@ impl TranslationProvider for GoogleProvider {
         target_lang: &str,
     ) -> Result<TranslationResult, AppError> {
         let tl = Self::to_google_lang(target_lang);
-        let mut last_err = AppError::NetworkError("未知错误".into());
 
-        // 最多重试 MAX_RETRIES 次（超时或 429 触发重试）
-        for attempt in 0..=MAX_RETRIES {
-            if attempt > 0 {
-                // 重试前等待，时间随重试次数线性增长（500ms, 1000ms）
-                tokio::time::sleep(std::time::Duration::from_millis(500 * attempt as u64)).await;
-                tracing::warn!("Google Translate 第 {} 次重试", attempt);
-            }
+        // 这里**不再**自己重试。
+        //
+        // 此前本函数内置一轮最多 3 次的重试循环，而引擎在 Phase 5 也开始按
+        // RequestPolicy 重试 —— 两者相乘会让一次 Google 请求实际打出 6 次
+        // HTTP 调用，轻易吃掉整次翻译的时间预算。重试策略现在只有一个归属地：
+        // 引擎的 RequestPolicy（Google 的 best_effort 策略 max_attempts = 1，
+        // 即不重试）。
+        let (translated_text, detected_lang, duration_ms) = self.do_request(text, tl).await?;
 
-            match self.do_request(text, tl).await {
-                Ok((translated_text, detected_lang, duration_ms)) => {
-                    // 检查源语言与目标语言是否相同
-                    let target_lower = target_lang.to_lowercase();
-                    let detected_lower = detected_lang.to_lowercase();
-                    if detected_lower == target_lower
-                        || (detected_lower.starts_with("zh") && target_lower.starts_with("zh"))
-                    {
-                        return Err(AppError::SameLanguage {
-                            lang: detected_lang,
-                        });
-                    }
-
-                    return Ok(TranslationResult {
-                        source_text: text.to_string(),
-                        translated_text,
-                        detected_source_lang: detected_lang,
-                        target_lang: target_lang.to_string(),
-                        provider: "google".to_string(),
-                        duration_ms,
-                        truncated: false,
-                    });
-                }
-                // 超时和限流可重试
-                Err(e @ AppError::Timeout { .. }) | Err(e @ AppError::RateLimit { .. }) => {
-                    last_err = e;
-                    continue;
-                }
-                // 其他错误不重试
-                Err(e) => return Err(e),
-            }
+        // 检查源语言与目标语言是否相同
+        let target_lower = target_lang.to_lowercase();
+        let detected_lower = detected_lang.to_lowercase();
+        if detected_lower == target_lower
+            || (detected_lower.starts_with("zh") && target_lower.starts_with("zh"))
+        {
+            return Err(AppError::SameLanguage {
+                lang: detected_lang,
+            });
         }
 
-        Err(last_err)
+        Ok(TranslationResult {
+            source_text: text.to_string(),
+            translated_text,
+            detected_source_lang: detected_lang,
+            target_lang: target_lang.to_string(),
+            provider: "google".to_string(),
+            duration_ms,
+            truncated: false,
+        })
     }
 
     fn info(&self) -> ProviderInfo {
@@ -203,6 +183,4 @@ impl TranslationProvider for GoogleProvider {
     async fn validate_credentials(&self) -> Result<bool, AppError> {
         Ok(true)
     }
-
-    fn update_api_key(&mut self, _api_key: String) {}
 }

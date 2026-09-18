@@ -1,6 +1,8 @@
 pub mod clipboard;
-pub mod clipboard_monitor;
+pub mod persistence;
 pub mod popup_geometry;
+pub mod popup_watch;
+pub mod translation;
 pub mod translation_flow;
 pub mod tray;
 pub mod updater;

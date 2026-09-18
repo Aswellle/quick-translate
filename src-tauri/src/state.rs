@@ -2,13 +2,17 @@
 // 全局共享状态容器，通过 app.manage() 注入，command handler 通过 tauri::State<AppState> 获取
 
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 
+use crate::domain::cache::TranslationCache;
 use crate::domain::config::ConfigService;
 use crate::domain::history::HistoryRepository;
 use crate::domain::translator::TranslationEngine;
 use crate::infra::http_client::HttpClient;
-use crate::system::clipboard_monitor::MonitorController;
+use crate::runtime::RuntimeStatus;
+use crate::system::clipboard::MonitorController;
+use crate::system::persistence::PersistenceWriter;
+use crate::system::translation::TranslationCoordinator;
 
 /// Tauri managed state
 ///
@@ -23,8 +27,24 @@ pub struct AppState {
     pub translator: Arc<TranslationEngine>,
     pub config: Arc<RwLock<ConfigService>>,
     pub history: Arc<HistoryRepository>,
+    /// 翻译结果的精确缓存：只在所有翻译源都不可用时才查（计划第 15/16 节），
+    /// 让用户在离线时仍能看到之前译过的内容。
+    pub cache: Arc<TranslationCache>,
+    /// 历史与缓存的落盘入口。有界队列 + 单 worker（计划第 24/41 节），
+    /// 调用方只入队、不等数据库。
+    pub persistence: Arc<PersistenceWriter>,
+    /// 统一的运行时状态：应用「现在到底怎么样」的唯一权威答案（计划第 4 节）。
+    /// 界面读它，而不是自己从各种失败迹象去推测。
+    pub runtime: Arc<RuntimeStatus>,
+    /// 被动态浮窗的关闭看守（Phase 8b）。浮窗不抢焦点，因此失去了
+    /// `onFocusChanged` 这条关闭路径，由它按前台窗口变化补上。
+    pub popup_watch: Arc<crate::system::popup_watch::PopupWatch>,
     pub http_client: Arc<HttpClient>,
-    pub current_translation: Arc<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>>,
+    /// 翻译请求的编排与代际闸门。
+    /// 取代此前的 `current_translation: Arc<Mutex<Option<JoinHandle>>>` ——
+    /// 单个 JoinHandle 无法回答「这个迟到的结果还属于当前请求吗」，
+    /// 因此旧结果可以覆盖新结果。详见 system::translation::coordinator。
+    pub coordinator: Arc<TranslationCoordinator>,
     pub clipboard_monitor: Arc<MonitorController>,
 }
 

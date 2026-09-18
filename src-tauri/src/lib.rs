@@ -6,9 +6,11 @@ pub mod commands;
 pub mod domain;
 pub mod error;
 pub mod infra;
+pub mod runtime;
 pub mod state;
 pub mod system;
 pub mod types;
+pub mod util;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -17,11 +19,8 @@ use tokio::sync::{Mutex, RwLock};
 
 use domain::config::ConfigService;
 use domain::history::HistoryRepository;
-use domain::translator::{
-    baidu::BaiduProvider, deepl::DeepLProvider, google::GoogleProvider, tencent::TencentProvider,
-    youdao::YoudaoProvider, TranslationEngine,
-};
-use infra::{database, http_client::HttpClient};
+use domain::translator::{build_provider, TranslationEngine, CREDENTIAL_KEYS};
+use infra::{crypto, database, http_client::HttpClient};
 use state::AppState;
 
 /// 应用主入口，由 main.rs 的 fn main() 调用
@@ -94,6 +93,12 @@ pub fn run() {
             tracing::info!("App Data 目录: {:?}", app_data_dir);
 
             let conn = database::init_db(&app_data_dir).expect("数据库初始化失败");
+
+            // 初始化机器绑定随机密钥（必须在 ConfigService::load 之前，确保
+            // 加解密使用新版密钥；旧密钥数据会在 load 中自动迁移）
+            crypto::init_per_install_secret(&app_data_dir)
+                .expect("机器密钥初始化失败");
+
             let db = Arc::new(Mutex::new(conn));
             let http_client = Arc::new(HttpClient::new());
 
@@ -102,49 +107,38 @@ pub fn run() {
             let config = Arc::new(RwLock::new(config));
             // 无外层 Mutex：HistoryRepository 内部已有 Arc<Mutex<Connection>>，双重加锁无益
             let history = Arc::new(HistoryRepository::new(db.clone()));
+            let cache = Arc::new(domain::cache::TranslationCache::new(db.clone()));
 
             // ── Step 3: 注册翻译源 ────────────────────────────────────────────
             let translator = TranslationEngine::new(http_client.clone());
 
-            let deepl_api_key = config.blocking_read().get_credential("deepl_api_key");
-            let tencent_secret_id = config.blocking_read().get_credential("tencent_secret_id");
-            let tencent_secret_key = config.blocking_read().get_credential("tencent_secret_key");
-            let baidu_app_id = config.blocking_read().get_credential("baidu_app_id");
-            let baidu_secret_key = config.blocking_read().get_credential("baidu_secret_key");
-            let youdao_app_key = config.blocking_read().get_credential("youdao_app_key");
-            let youdao_app_secret = config.blocking_read().get_credential("youdao_app_secret");
+            // 凭证按 CREDENTIAL_KEYS 统一取；注册顺序即 fallback 默认优先级。
+            // 与设置面板改 Key 的路径共用同一份字段定义，不会出现「加了字段
+            // 却只改了一处」。CREDENTIAL_KEYS 的字段名就是配置 key。
+            let creds_by_provider: Vec<(String, std::collections::HashMap<String, String>)> = {
+                let cfg = config.blocking_read();
+                CREDENTIAL_KEYS
+                    .iter()
+                    .map(|(id, keys)| {
+                        let creds = keys
+                            .iter()
+                            .map(|k| ((*k).to_string(), cfg.get_credential(k)))
+                            .collect();
+                        ((*id).to_string(), creds)
+                    })
+                    .collect()
+            };
 
             tauri::async_runtime::block_on(async {
-                translator
-                    .register_provider(Box::new(DeepLProvider::new(
-                        http_client.clone(),
-                        deepl_api_key,
-                    )))
-                    .await;
-                translator
-                    .register_provider(Box::new(TencentProvider::new(
-                        http_client.clone(),
-                        tencent_secret_id,
-                        tencent_secret_key,
-                    )))
-                    .await;
-                translator
-                    .register_provider(Box::new(BaiduProvider::new(
-                        http_client.clone(),
-                        baidu_app_id,
-                        baidu_secret_key,
-                    )))
-                    .await;
-                translator
-                    .register_provider(Box::new(YoudaoProvider::new(
-                        http_client.clone(),
-                        youdao_app_key,
-                        youdao_app_secret,
-                    )))
-                    .await;
-                translator
-                    .register_provider(Box::new(GoogleProvider::new(http_client.clone())))
-                    .await;
+                for (id, creds) in creds_by_provider {
+                    match build_provider(&id, &creds, http_client.clone()) {
+                        Ok(provider) => translator.register_provider(provider).await,
+                        Err(e) => {
+                            // 单个翻译源构造失败不该拖垮启动：跳过它，其余照常注册
+                            tracing::error!("翻译源 {} 构造失败，已跳过: {}", id, e);
+                        }
+                    }
+                }
 
                 let active_provider = config
                     .read()
@@ -172,19 +166,56 @@ pub fn run() {
                 .map(|v| v == "true")
                 .unwrap_or(true);
             tracing::info!("[setup] clipboard_monitor_enabled={} (from config)", clipboard_monitor_enabled);
-            let monitor = system::clipboard_monitor::start_monitor(app_handle.clone());
+            let monitor = Arc::new(system::clipboard::start_monitor(app_handle.clone()));
             if !clipboard_monitor_enabled {
                 tracing::info!("[setup] 调用 monitor.suspend()（config 为 false）");
                 monitor.suspend();
             }
 
+            // ── Step 4.5: 运行时状态层（计划第 4 节）────────────────────────
+            // 构造顺序有依赖：runtime 需要 controller 才能派生剪贴板健康，
+            // 而 controller 需要在 runtime 建好之后才能接上（二者互相引用）。
+            let runtime = runtime::RuntimeStatus::new(monitor.clone(), {
+                let handle = app_handle.clone();
+                Arc::new(move |snapshot: &runtime::RuntimeStatusSnapshot| {
+                    use tauri::Emitter;
+                    let _ = handle.emit("runtime-status-changed", snapshot);
+
+                    // 托盘菜单一旦设定就是静态的，状态变了必须重建 ——
+                    // 否则用户看到的永远是上一次重建时的状态。
+                    // 这里只会在状态**真的变了**时被调到（RuntimeStatus
+                    // 内部有指纹去重），所以不会变成高频重建。
+                    let tray_handle = handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        system::tray::refresh_menu(&tray_handle).await;
+                    });
+                })
+            });
+            monitor.attach_runtime(runtime.clone());
+
+            // 历史与缓存的写入统一走这一条有界队列 + 单 worker（计划第 24 节）
+            let persistence = Arc::new(system::persistence::PersistenceWriter::spawn(
+                history.clone(),
+                cache.clone(),
+                runtime.clone(),
+            ));
+
+            // 被动态浮窗的关闭看守（Phase 8b）：浮窗不抢焦点后就失去了
+            // onFocusChanged 这条关闭路径，由它按前台窗口变化补上。
+            // 一条常驻线程，未显示浮窗时不动作。
+            let popup_watch = system::popup_watch::PopupWatch::start(app_handle.clone());
+
             let app_state = AppState {
                 translator,
                 config: config.clone(),
                 history,
+                cache,
+                persistence,
+                runtime,
+                popup_watch,
                 http_client,
-                current_translation: Arc::new(Mutex::new(None)),
-                clipboard_monitor: Arc::new(monitor),
+                coordinator: Arc::new(system::translation::TranslationCoordinator::new()),
+                clipboard_monitor: monitor,
             };
             app.manage(app_state);
 
@@ -219,6 +250,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::translate::translate_text,
             commands::translate::list_providers,
+            commands::translate::get_provider_status,
             commands::translate::validate_provider,
             commands::config::get_config,
             commands::config::set_config,
@@ -232,6 +264,7 @@ pub fn run() {
             commands::history::get_stats,
             commands::system::copy_to_clipboard,
             commands::system::hide_popup,
+            commands::system::activate_popup,
             commands::system::resize_popup,
             commands::system::get_app_version,
             commands::system::notify_toast,
@@ -244,6 +277,7 @@ pub fn run() {
             commands::system::open_url,
             commands::system::set_clipboard_monitor_enabled,
             commands::system::get_popup_geometry,
+            commands::system::get_runtime_status,
         ])
         .run(tauri::generate_context!())
         .expect("QuickTranslate 启动失败");

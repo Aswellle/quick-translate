@@ -26,17 +26,43 @@ pub async fn copy_to_clipboard(app: AppHandle, text: String) -> Result<(), AppEr
 }
 
 /// 隐藏翻译浮窗，并重置剪贴板监控的 last_text
-/// 重置确保下次复制相同文本时仍能触发翻译（否则监控线程认为内容未变化）
+///
+/// 与看守线程共用同一条关闭路径（`hide_popup_now`）—— 那条路径里的每一步
+/// （复位 focusable、停看守、重置 last_text）漏掉任何一步都有具体后果，
+/// 见其文档注释。
 #[tauri::command]
 pub async fn hide_popup(app: AppHandle) -> Result<(), AppError> {
-    if let Some(window) = app.get_webview_window("popup") {
-        window
-            .hide()
-            .map_err(|e: tauri::Error| AppError::WindowError(e.to_string()))?;
-    }
-    app.state::<crate::state::AppState>()
-        .clipboard_monitor
-        .reset_last_text();
+    crate::system::popup_watch::hide_popup_now(&app);
+    Ok(())
+}
+
+/// 用户点击浮窗后把它转为可交互（Phase 8b / 计划第 19 节）。
+///
+/// 浮窗默认是**非激活**窗口：显示不抢焦点，但代价是它也收不到键盘事件，
+/// Esc / 空格 / Enter 全部失效。只有用户真的点了它，才把窗口设为可激活
+/// 并聚焦，这批快捷键才重新可用。
+///
+/// 同时停掉被动态看守 —— 此刻浮窗自己成了前台窗口，看守会把它
+/// 误判成「用户切走了」而立刻关掉。
+#[tauri::command]
+pub async fn activate_popup(app: AppHandle) -> Result<(), AppError> {
+    app.state::<crate::state::AppState>().popup_watch.stop();
+
+    let Some(window) = app.get_webview_window("popup") else {
+        return Ok(());
+    };
+
+    window
+        .set_focusable(true)
+        .map_err(|e: tauri::Error| AppError::WindowError(e.to_string()))?;
+    window
+        .set_focus()
+        .map_err(|e: tauri::Error| AppError::WindowError(e.to_string()))?;
+
+    tracing::info!(
+        event = "popup_activated_by_user",
+        "[popup] 用户点击，进入交互态"
+    );
     Ok(())
 }
 
@@ -49,6 +75,16 @@ pub async fn resize_popup(app: AppHandle, width: f64, height: f64) -> Result<(),
         window
             .set_size(tauri::LogicalSize::new(w, h))
             .map_err(|e: tauri::Error| AppError::WindowError(e.to_string()))?;
+
+        // 记下真实尺寸：定位必须以它为准，而不是一个估算常数（Phase 8a）。
+        let previous = crate::system::popup_geometry::actual_size();
+        crate::system::popup_geometry::record_actual_size(w, h);
+
+        // 尺寸变了就必须重新定位。此前只 resize 不重定位，于是
+        // Loading→Result 变高时浮窗下半截会直接跑出屏幕。
+        if (w - previous.0).abs() > 0.5 || (h - previous.1).abs() > 0.5 {
+            crate::system::translation_flow::reposition_popup(&app, w, h);
+        }
     }
     Ok(())
 }
@@ -57,6 +93,18 @@ pub async fn resize_popup(app: AppHandle, width: f64, height: f64) -> Result<(),
 #[tauri::command]
 pub fn get_popup_geometry() -> crate::system::popup_geometry::PopupGeometry {
     crate::system::popup_geometry::PopupGeometry::current()
+}
+
+/// 读取统一运行时状态（计划第 50 节）。
+///
+/// 界面用它回答「应用现在怎么样」，而不是从各种失败迹象自行推测。
+/// 需要事件时监听 `runtime-status-changed` —— 那个事件只在状态**变化**时
+/// 发出，不会按固定频率推送。
+#[tauri::command]
+pub async fn get_runtime_status(
+    app: AppHandle,
+) -> Result<crate::runtime::RuntimeStatusSnapshot, AppError> {
+    Ok(app.state::<crate::state::AppState>().runtime.snapshot())
 }
 
 /// 获取应用版本号
@@ -164,7 +212,10 @@ pub async fn set_clipboard_monitor_enabled(app: AppHandle, enabled: bool) -> Res
         .config
         .write()
         .await
-        .set("clipboard_monitor_enabled", if enabled { "true" } else { "false" })
+        .set(
+            "clipboard_monitor_enabled",
+            if enabled { "true" } else { "false" },
+        )
         .await?;
 
     // 更新监控线程状态

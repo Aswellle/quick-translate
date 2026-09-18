@@ -139,6 +139,8 @@ export const PROVIDER_LABELS: Record<string, string> = {
   baidu:   "百度",
   youdao:  "有道",
   google:  "Google",
+  // 非翻译源：所有翻译源都连不上时由本地缓存提供结果
+  cache:   "本地缓存",
 };
 
 export const ERROR_MESSAGES: Record<string, string> = {
@@ -150,7 +152,10 @@ export const ERROR_MESSAGES: Record<string, string> = {
   RATE_LIMIT:          "请求频率过高，请稍后重试",
   QUOTA_EXHAUSTED:     "翻译额度已用尽",
   TIMEOUT:             "翻译超时，请重试",
-  ALL_PROVIDERS_FAILED:"所有翻译源均不可用",
+  PROVIDER_REJECTED:   "翻译服务不支持该内容或语言",
+  // 计划第 31 节：不要把 DeepL timeout / Tencent 429 / Baidu 503 这类
+  // 内部细节丢给普通用户。用户只需知道"暂时连不上、会自己恢复"。
+  ALL_PROVIDERS_FAILED:"暂时无法连接翻译服务，恢复网络后会自动继续工作",
   CLIPBOARD_ERROR:     "剪贴板操作失败",
   HOTKEY_CONFLICT:     "快捷键冲突，请在设置中修改",
   DATABASE_ERROR:      "数据存储错误",

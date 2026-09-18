@@ -151,6 +151,17 @@ export async function hidePopup(): Promise<void> {
   return invoke("hide_popup");
 }
 
+/**
+ * 用户点击浮窗后把它转为可交互。
+ *
+ * 浮窗默认是非激活窗口（`focusable(false)`）：显示时不抢焦点，代价是
+ * 也收不到键盘事件 —— Esc / 空格 / Enter 全部失效。只有用户真的点了它，
+ * 后端才会把窗口设为可激活并聚焦，这批快捷键随之恢复。
+ */
+export async function activatePopup(): Promise<void> {
+  return invoke("activate_popup");
+}
+
 export async function resizePopup(width: number, height: number): Promise<void> {
   return invoke("resize_popup", { width, height });
 }

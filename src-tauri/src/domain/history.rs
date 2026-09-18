@@ -6,9 +6,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+use crate::domain::config::{HISTORY_LIMIT_MAX, HISTORY_LIMIT_MIN};
 use crate::error::AppError;
 use crate::types::{HistoryQuery, StatsResult, TranslationRecord};
-
 pub struct HistoryRepository {
     db: Arc<Mutex<Connection>>,
 }
@@ -193,6 +193,8 @@ impl HistoryRepository {
 
     /// FIFO 超限清理：删除最旧的记录，使总数不超过 limit
     pub async fn enforce_limit(&self, limit: i64) -> Result<u64, AppError> {
+        // 防御性钳制：确保 limit 在有效范围内，避免非正数 limit 删除全部记录
+        let limit = limit.clamp(HISTORY_LIMIT_MIN, HISTORY_LIMIT_MAX);
         let conn = self.db.lock().await;
         let total = count_all(&conn, false)?;
 
