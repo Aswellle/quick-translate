@@ -59,11 +59,19 @@ jobs:
           PKG_VER=$(node -p "require('./package.json').version")
           TAURI_VER=$(node -p "require('./src-tauri/tauri.conf.json').version")
           CARGO_VER=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          TAG_VER="${GITHUB_REF_NAME#v}"
-          echo "package.json: $PKG_VER | tauri.conf.json: $TAURI_VER | Cargo.toml: $CARGO_VER | tag: $TAG_VER"
-          if [ "$PKG_VER" != "$TAURI_VER" ] || [ "$PKG_VER" != "$CARGO_VER" ] || [ "$PKG_VER" != "$TAG_VER" ]; then
-            echo "ERROR: Version mismatch — all three files and the git tag must agree"
+          echo "package.json: $PKG_VER | tauri.conf.json: $TAURI_VER | Cargo.toml: $CARGO_VER"
+          if [ "$PKG_VER" != "$TAURI_VER" ] || [ "$PKG_VER" != "$CARGO_VER" ]; then
+            echo "ERROR: Version mismatch — all three files must agree"
             exit 1
+          fi
+          # 仅在 tag 触发时检查 tag 与版本号一致
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG_VER="${GITHUB_REF_NAME#v}"
+            echo "tag: $TAG_VER"
+            if [ "$PKG_VER" != "$TAG_VER" ]; then
+              echo "ERROR: Version mismatch — git tag must agree with package versions"
+              exit 1
+            fi
           fi
 
       # ── 构建前检查：TypeScript 类型检查 ────────────────────────────────
@@ -149,13 +157,19 @@ jobs:
           PKG_VER=$(node -p "require('./package.json').version")
           TAURI_VER=$(node -p "require('./src-tauri/tauri.conf.json').version")
           CARGO_VER=$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
-          TAG_VER="${GITHUB_REF_NAME#v}"
-          echo "package.json: $PKG_VER | tauri.conf.json: $TAURI_VER | Cargo.toml: $CARGO_VER | tag: $TAG_VER"
-          if [ "$PKG_VER" != "$TAURI_VER" ] || [ "$PKG_VER" != "$CARGO_VER" ] || [ "$PKG_VER" != "$TAG_VER" ]; then
-            echo "ERROR: Version mismatch — all three files and the git tag must agree"
+          echo "package.json: $PKG_VER | tauri.conf.json: $TAURI_VER | Cargo.toml: $CARGO_VER"
+          if [ "$PKG_VER" != "$TAURI_VER" ] || [ "$PKG_VER" != "$CARGO_VER" ]; then
+            echo "ERROR: Version mismatch — all three files must agree"
             exit 1
           fi
-
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG_VER="${GITHUB_REF_NAME#v}"
+            echo "tag: $TAG_VER"
+            if [ "$PKG_VER" != "$TAG_VER" ]; then
+              echo "ERROR: Version mismatch — git tag must agree with package versions"
+              exit 1
+            fi
+          fi
       # ── 构建前检查：TypeScript 类型检查 ────────────────────────────────
       - name: TypeScript type check
         run: npx tsc --noEmit
