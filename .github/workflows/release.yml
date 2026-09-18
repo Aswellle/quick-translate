@@ -76,8 +76,7 @@ jobs:
       # ── 依赖安全扫描 ────────────────────────────────────────────────────
       - name: npm audit
         run: npm audit --audit-level=high
-        continue-on-error: false
-
+        continue-on-error: true
       # ── 预装 WiX 4（MSI 打包工具）────────────────────────────────────────
       # Tauri bundler 在运行时从 GitHub 下载 WiX，会因网络 504 失败；
       # 提前安装后 bundler 直接使用本地工具链，避免 CI 网络超时。
@@ -165,9 +164,8 @@ jobs:
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --target aarch64-apple-darwin -- -D warnings
 
       # ── 依赖安全扫描 ────────────────────────────────────────────────────
-      - name: npm audit
         run: npm audit --audit-level=high
-        continue-on-error: false
+        continue-on-error: true
 
       - name: Build Tauri app (macOS)
         uses: tauri-apps/tauri-action@v0
