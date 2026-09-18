@@ -6,7 +6,9 @@ use tauri::State;
 
 use crate::error::AppError;
 use crate::state::AppState;
-use crate::types::{TranslationRecord, TranslationResult};
+use crate::types::{ProviderStatus, TranslationRecord, TranslationResult};
+
+
 
 /// 前端手动触发翻译
 /// 用于：设置面板的"测试翻译"按钮
@@ -91,4 +93,30 @@ pub async fn validate_provider(
         .translator
         .validate_provider_credentials(&provider_id)
         .await
+}
+
+
+/// 获取所有翻译源的运行时健康状态（用于托盘菜单与诊断）
+#[tauri::command]
+pub async fn get_provider_status(
+    state: State<'_, AppState>,
+) -> Result<Vec<ProviderStatus>, AppError> {
+    let providers = state.translator.list_providers().await;
+    let mut result = Vec::new();
+    for info in providers {
+        let health_state = state
+            .translator
+            .provider_health(&info.id)
+            .await
+            .map(|s| format!("{:?}", s))
+            .unwrap_or_else(|| "unknown".to_string());
+        result.push(ProviderStatus {
+            id: info.id,
+            name: info.name,
+            requires_api_key: info.requires_api_key,
+            is_available: info.is_available,
+            health_state,
+        });
+    }
+    Ok(result)
 }
