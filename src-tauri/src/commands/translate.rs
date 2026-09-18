@@ -8,8 +8,6 @@ use crate::error::AppError;
 use crate::state::AppState;
 use crate::types::{ProviderStatus, TranslationRecord, TranslationResult};
 
-
-
 /// 前端手动触发翻译
 /// 用于：设置面板的"测试翻译"按钮
 /// 注意：返回值直接给前端，不通过 event
@@ -94,7 +92,6 @@ pub async fn validate_provider(
         .validate_provider_credentials(&provider_id)
         .await
 }
-
 
 /// 获取所有翻译源的运行时健康状态（用于托盘菜单与诊断）
 #[tauri::command]
