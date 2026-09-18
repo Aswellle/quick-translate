@@ -10,6 +10,8 @@
 
 没有切窗口，没有开网页，没有粘贴框。手都不用离开键盘。
 
+[🇨🇳 中文](README.md) · [🇺🇸 English](README.en.md)
+
 [![下载](https://img.shields.io/badge/⬇_立即下载-Windows_x64-2563eb?style=for-the-badge)](https://github.com/Aswellle/quick-translate/releases/latest)
 [![版本](https://img.shields.io/github/v/release/Aswellle/quick-translate?style=for-the-badge&label=版本&color=555)](https://github.com/Aswellle/quick-translate/releases)
 [![平台](https://img.shields.io/badge/平台-Windows_10/11-2563eb?style=for-the-badge)](https://github.com/Aswellle/quick-translate/releases/latest)
@@ -27,8 +29,9 @@
 - [快速开始](#快速开始)
 - [操作与快捷键](#操作与快捷键)
 - [翻译源配置](#翻译源配置)
+- [可靠性机制](#可靠性机制)
 - [从源码构建](#从源码构建)
-- [技术栈](#技术栈)
+- [技术架构](#技术架构)
 - [常见问题](#常见问题)
 - [许可证](#许可证)
 
@@ -46,20 +49,55 @@ QuickTranslate 是一款面向 Windows 的**复制即翻译**工具。它常驻�
 
 ## 功能特性
 
+### 核心体验
+
 | 特性 | 说明 |
 |:--|:--|
 | **复制即翻译** | 剪贴板监控触发，无需快捷键，无需切换窗口 |
-| **智能浮窗定位** | DPI 感知、多显示器支持，自动避开光标区域、贴边翻转，屏幕边缘不截断 |
+| **智能浮窗定位** | DPI 感知、多显示器支持，基于真实窗口尺寸与显示器工作区定位，自动避开光标、贴边翻转 |
+| **非激活式弹窗** | 不抢夺前台焦点，切换到其他应用时自动关闭，不打断工作流 |
 | **五路翻译源** | DeepL / 腾讯 / 百度 / 有道 / Google，配置多个时按顺序自动回退 |
-| **多语言互译** | 支持 12 种语言，源语言自动识别，目标语言可选（默认中文） |
-| **历史记录** | 本地存储，支持搜索、收藏、删除、导出 |
-| **安全存储** | API Key 使用 AES-256-GCM 加密后落盘 |
-| **深浅主题** | 深色 / 浅色 / 跟随系统 |
-| **静默更新** | 启动后自动检查，新版本后台下载安装，仅弹出提示 |
-| **轻量驻留** | 空闲内存 < 50MB，CPU 占用约 0 |
-| **随开随关** | 支持开机自启；托盘菜单可随时暂停剪贴板监控 |
+| **多语言互译** | 支持 11 种语言，源语言自动识别，目标语言可选（默认简体中文） |
 
-其他细节：PDF 断行自动拼接、译文/原文一键复制、同语言直通（不做无谓翻译）、单次 5000 字符上限、翻译源凭证可用性一键验证。
+### 翻译源对比
+
+| 翻译源 | 需要配置 | 免费额度 | 特点 |
+|:--|:--|:--|:--|
+| **Google 翻译** | ❌ 免配置 | 无限制 | 开箱即用的兜底源 |
+| **DeepL** | API Key | 50 万字符/月 | 欧美语言质量顶尖 |
+| **腾讯翻译君** | SecretId + SecretKey | 500 万字符/月 | 中英互译优秀 |
+| **百度翻译** | APP ID + 密钥 | 100 万字符/月 | 中日韩互译友好 |
+| **有道翻译** | 应用 ID + 应用密钥 | 新用户赠送额度 | 多语言支持 |
+
+### 可靠性
+
+| 特性 | 说明 |
+|:--|:--|
+| **熔断与自动回退** | 某个翻译源连续失败时自动熔断，跳过它使用下一个；冷却期后自动探测恢复 |
+| **健康感知** | 实时追踪每个翻译源的可用状态，托盘菜单显示实时运行状态 |
+| **离线缓存回退** | 所有翻译源不可用时，命中本地缓存则立即显示历史译文（标明来源），无缓存则提示网络中断 |
+| **请求策略** | 按翻译源配置请求速率限制与总预算，避免高频触发导致配额耗尽或服务商限流 |
+| **剪贴板自愈** | 剪贴板监控异常退出时自动退避重启，确保监控永不丢失 |
+
+### 数据与安全
+
+| 特性 | 说明 |
+|:--|:--|
+| **本地历史记录** | SQLite 存储，支持搜索、收藏（标星永久保留）、删除、导出 |
+| **加密存储** | API Key 使用 AES-256-GCM 加密后落盘，密钥绑定当前机器 |
+| **FIFO 自动清理** | 超出上限时优先删除最旧的未收藏记录，收藏记录永不自动删除 |
+
+### 其他
+
+| 特性 | 说明 |
+|:--|:--|
+| **深浅主题** | 深色 / 浅色 / 跟随系统 |
+| **静默更新** | 启动后自动检查，新版本后台下载安装，弹出提示后一键升级 |
+| **轻量驻留** | 空闲内存 < 50MB，CPU 占用约 0 |
+| **开机自启** | 支持随系统启动 |
+| **首次引导向导** | 首次启动引导选择翻译源与目标语言，可跳过使用 Google 兜底 |
+
+其他细节：PDF 断行自动拼接、译文/原文一键复制、同语言直通（不做无谓翻译）、单次 5000 字符上限、翻译源凭证可用性一键验证、托盘菜单一键开关剪贴板监控。
 
 ---
 
@@ -103,7 +141,7 @@ QuickTranslate 是一款面向 Windows 的**复制即翻译**工具。它常驻�
 | `Enter` | 折叠 / 展开浮窗 |
 | 红色圆点 | 关闭 |
 | 黄色圆点 | 折叠为标题栏（保留待看） |
-| 绿色圆点 | 切换 400px / 520px 阅读视口 |
+| 绿色圆点 | 切换标准 / 阅读视口宽度 |
 
 > 浮窗关闭时会记录当前剪贴板状态，避免误触发；真正重新复制同一段文字才会再次翻译。
 
@@ -113,17 +151,29 @@ QuickTranslate 是一款面向 Windows 的**复制即翻译**工具。它常驻�
 
 支持五路翻译源，可配置多个并启用回退。**回退顺序**：DeepL → 腾讯 → 百度 → 有道 → Google（兜底）。
 
-| 翻译源 | 需要配置 | 免费额度 | 备注 |
-|:--|:--|:--|:--|
-| **Google 翻译** | ❌ 免配置 | 无限制（非官方接口） | 开箱即用的兜底源 |
-| **DeepL** | 一个 API Key | 50 万字符 / 月 | 欧美语言质量顶尖 |
-| **腾讯翻译君** | SecretId + SecretKey | 500 万字符 / 月 | 中英互译优秀 |
-| **百度翻译** | APP ID + 密钥 | 100 万字符 / 月 | 中日韩互译友好 |
-| **有道翻译** | 应用 ID + 密钥 | 按量计费 | 新用户有体验金 |
-
 - 在设置 → 翻译源中填入对应凭证，可用「验证」按钮即时校验（不消耗翻译配额）。
 - 凭证只保存在本地，加密后写入数据库。
-- 翻译源随时可切换；主力不可用时自动回退到下一个，无需手动干预。
+- 翻译源随时可切换；主力不可用时自动熔断并回退到下一个，无需手动干预。
+
+各翻译源注册与获取凭证的详细步骤见应用内设置面板。
+
+---
+
+## 可靠性机制
+
+QuickTranslate 内置多层可靠性保障，确保翻译请求稳定、监控持续运行：
+
+**熔断器（Circuit Breaker）**：每个翻译源独立维护健康状态。连续失败达阈值后进入熔断（Open），后续请求直接跳过；冷却期后进入半开（HalfOpen）探测，成功则恢复，失败则延长冷却。冷却时长按指数退避递增（10s → 30s → 2min → 封顶 10min），并加入 ±20% 抖动避免集群效应。
+
+**请求策略（Request Policy）**：每个翻译源可配置请求速率限制与总调用预算，避免高频翻译触发服务商限流或配额耗尽。
+
+**翻译缓存（Translation Cache）**：翻译结果缓存于本地 SQLite（最多 2000 条，30 天 TTL，单条上限 1000 字符）。仅在全部翻译源不可用时查缓存，在线时结果永远是新鲜的。
+
+**请求协调（Request Coordinator）**：代际闸门机制防止并发翻译请求的结果乱序覆盖。每个新请求生成递增代际号，结果回传前验证仍为当前代，否则丢弃。
+
+**剪贴板监控自愈（Clipboard Supervisor）**：监控线程因剪贴板句柄异常退出时，监督者以退避策略（250ms → 30s，±20% 抖动）自动重建并重启。重启次数纳入健康快照，可在托盘菜单查看。
+
+**有界持久化（Bounded Persistence）**：历史记录与缓存写入通过单条有界队列 + 唯一常驻 worker 处理，与翻译主链路完全解耦。队列满时丢弃并告警，绝不阻塞用户看到译文。
 
 ---
 
@@ -154,37 +204,37 @@ npm run dev
 npm run tauri build  # 产物输出到 src-tauri/target/release/
 ```
 
-### 类型检查与测试
+### 代码检查
 
 ```bash
-npx tsc --noEmit                          # TypeScript 类型检查
-cargo clippy                              # Rust 静态检查（在 src-tauri/ 下）
-cargo test --manifest-path src-tauri/Cargo.toml --lib   # Rust 单元测试
+npx --noEmit                              # TypeScript 类型检查
+cd src-tauri && cargo fmt --check         # Rust 格式检查
+cd src-tauri && cargo clippy -- -D warnings  # Rust 静态检查
 ```
 
 ### 发布
 
-推送 `v*` 标签触发 [release workflow](.github/workflows/release.yml)，自动构建并发布带签名的 MSI / NSIS 安装包到 GitHub Releases，同时生成自动更新清单。
+推送 `v*` 标签触发 [release workflow](.github/workflows/release.yml)，自动构建并发布带签名的 MSI 安装包到 GitHub Releases，同时生成自动更新清单。
 
 ```bash
-git tag v0.2.4
-git push origin v0.2.4
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
 ---
 
-## 技术栈
+## 技术架构
 
 | 层 | 技术 |
 |:--|:--|
 | 前端 | React 19 + TypeScript + Vite + Tailwind CSS + Zustand |
 | 后端 | Rust（Tauri 2）+ Tokio 异步运行时 |
-| 数据库 | SQLite（rusqlite，内置 FTS5 全文索引） |
-| 桌面能力 | 系统托盘、剪贴板监听、全局更新器、开机自启 |
+| 数据库 | SQLite（rusqlite，WAL 模式，内置 FTS5） |
+| 桌面能力 | 系统托盘、剪贴板监控、全局更新器、开机自启 |
 
-**架构总览**：前端通过 `invoke()` 调用 Tauri 命令；剪贴板监控线程检测到复制后，由 `translation_flow` 编排「定位光标 → 弹出浮窗 → 调起翻译引擎 → 事件回传前端」。翻译引擎以 Provider 模式组织，按回退链顺序调用，失败自动切换。
+**核心流程**：剪贴板监控线程检测复制 → `ClipboardSupervisor` 保障存活 → `TranslationCoordinator` 生成代际、取消旧请求 → 编排浮窗定位与弹出 → 翻译引擎按回退链调用（`TranslationEngine` + Provider 模式 + 熔断器 + 请求策略）→ 命中缓存回退 → 事件回传前端。
 
-详细结构见 [`CLAUDE.md`](CLAUDE.md)。
+**数据流**：前端通过 `invoke()` 调用 Tauri 命令；后端通过 Tauri 事件（`translation-result`、`translation-loading`、`translation-error`）推送结果。配置与历史记录由有界持久化 worker 异步落盘。
 
 ---
 
@@ -201,6 +251,9 @@ git push origin v0.2.4
 
 **占用多少资源？**
 空闲内存 50MB 以内，CPU 基本为 0，安装包约 5MB。
+
+**翻译结果不准 / 翻译源挂了怎么办？**
+配置多个翻译源并启用回退。主力不可用时自动熔断切换到下一个。托盘菜单可查看各翻译源实时健康状态。网络中断时，已翻译过的内容会从本地缓存回退显示。
 
 **有 bug 或功能建议？**
 欢迎在 [Issues](https://github.com/Aswellle/quick-translate/issues) 反馈。
@@ -219,6 +272,6 @@ git push origin v0.2.4
 
 [⬇ 下载最新版](https://github.com/Aswellle/quick-translate/releases/latest) · [🐛 报告问题](https://github.com/Aswellle/quick-translate/issues) · [📋 更新日志](https://github.com/Aswellle/quick-translate/releases)
 
-<sub>QuickTranslate · 版权所有 © 2026 Aswellle</sub>
+<sub>QuickTranslate · 版权所有 © 2026 welle</sub>
 
 </div>
