@@ -2,6 +2,7 @@
 # 持续集成：在 push 到 main 和 PR 到 main 时运行。
 # 包含前端类型检查与构建、Rust 格式检查与 lint、以及 Tauri 构建验证。
 #
+# 本项目支持 Windows 与 macOS 双平台。
 # 与 release.yml 的分工：
 #   - ci.yml：快速反馈，验证代码质量与可构建性（无产物发布）
 #   - release.yml：仅在 v* tag 触发，构建签名安装包并发布到 GitHub Releases
@@ -53,7 +54,6 @@ jobs:
 
   # ── Rust 格式检查 ─────────────────────────────────────────────────────────
   # cargo fmt --check 是纯格式检查，不需要编译，任何平台都能秒级完成。
-  # 三平台并行跑确保跨平台提交都不会遗漏格式问题。
   rust-fmt:
     name: Rust fmt
     runs-on: ${{ matrix.os }}
@@ -75,12 +75,19 @@ jobs:
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 
   # ── Rust lint ─────────────────────────────────────────────────────────────
-  # cargo clippy 需要完整编译，而本项目为 Windows-only（剪贴板使用 windows-sys，
-  # Tauri webview 在 Linux/macOS 需要 webkit2gtk/glib/gdk/gtk 等系统依赖）。
-  # 仅在 Windows 上跑 clippy 即可覆盖所有 lint 检查。
+  # cargo clippy 需要完整编译。本项目支持 Windows 与 macOS 双平台，
+  # 因此 clippy 在两个目标平台上各跑一次，确保平台特定代码路径都能通过。
   rust-clippy:
-    name: Rust clippy
-    runs-on: windows-latest
+    name: Rust clippy (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            target: aarch64-apple-darwin
 
     steps:
       - name: Checkout
@@ -89,6 +96,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
+          targets: ${{ matrix.target }}
           components: clippy
 
       - name: Cache Cargo
@@ -100,19 +108,27 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             src-tauri/target/
-          key: windows-latest-clippy-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ matrix.os }}-clippy-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            windows-latest-clippy-
+            ${{ matrix.os }}-clippy-${{ matrix.target }}-
 
       - name: Clippy lint
-        run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }} -- -D warnings
 
   # ── 构建验证 ─────────────────────────────────────────────────────────────
   build-verify:
-    name: Build verification
+    name: Build verification (${{ matrix.target }})
     # 仅在 push 到 main 时运行完整构建验证，PR 只做快速检查以节省资源
     if: github.event_name == 'push'
-    runs-on: windows-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            target: aarch64-apple-darwin
 
     steps:
       - name: Checkout
@@ -127,7 +143,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-msvc
+          targets: ${{ matrix.target }}
 
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -138,9 +154,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             src-tauri/target/
-          key: windows-latest-build-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ matrix.os }}-build-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            windows-latest-build-
+            ${{ matrix.os }}-build-${{ matrix.target }}-
 
       - name: Install frontend dependencies
         run: npm ci
@@ -158,4 +174,4 @@ jobs:
           fi
 
       - name: Build Tauri app (verify only)
-        run: cd src-tauri && cargo build --release --target x86_64-pc-windows-msvc
+        run: cd src-tauri && cargo build --release --target ${{ matrix.target }}
