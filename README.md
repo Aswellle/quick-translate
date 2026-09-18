@@ -10,7 +10,7 @@
 
 没有切窗口，没有开网页，没有粘贴框。手都不用离开键盘。
 
-[🇨🇳 中文](README.md) · [🇺🇸 English](README.en.md)
+[中文](README.md) · [English](README.en.md)
 
 [![下载](https://img.shields.io/badge/⬇_立即下载-Windows_x64-2563eb?style=for-the-badge)](https://github.com/Aswellle/quick-translate/releases/latest)
 [![版本](https://img.shields.io/github/v/release/Aswellle/quick-translate?style=for-the-badge&label=版本&color=555)](https://github.com/Aswellle/quick-translate/releases)
