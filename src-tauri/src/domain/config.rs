@@ -173,7 +173,8 @@ fn load_config_from_db(conn: &Connection) -> Result<AppConfig, AppError> {
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
     // 先读取全部行，避免在 query_map 迭代中借用冲突
-    let rows: Vec<(String, String)> = rows.collect::<Result<Vec<_>, _>>()
+    let rows: Vec<(String, String)> = rows
+        .collect::<Result<Vec<_>, _>>()
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
     // 记录需要从旧密钥迁移到的新密钥的条目 (key, plaintext)
@@ -229,7 +230,9 @@ fn load_config_from_db(conn: &Connection) -> Result<AppConfig, AppError> {
                         // 越界值（含 0/负数）钳制到安全范围，避免全部删除
                         tracing::warn!(
                             "history_limit {} 越界，钳制到 [{}, {}]",
-                            n, HISTORY_LIMIT_MIN, HISTORY_LIMIT_MAX
+                            n,
+                            HISTORY_LIMIT_MIN,
+                            HISTORY_LIMIT_MAX
                         );
                         n.clamp(HISTORY_LIMIT_MIN, HISTORY_LIMIT_MAX)
                     }

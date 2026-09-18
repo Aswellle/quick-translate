@@ -67,7 +67,10 @@ pub fn run() {
                 } else {
                     // popup 窗口正常关闭（由 hide_popup command 控制），
                     // settings/history 窗口 × 按钮 → 隐藏而非销毁
-                    tracing::info!("[on_window_event] {} 窗口 close 请求，prevent_close+hide", label);
+                    tracing::info!(
+                        "[on_window_event] {} 窗口 close 请求，prevent_close+hide",
+                        label
+                    );
                     api.prevent_close();
                     let _ = window.hide();
                 }
@@ -96,8 +99,7 @@ pub fn run() {
 
             // 初始化机器绑定随机密钥（必须在 ConfigService::load 之前，确保
             // 加解密使用新版密钥；旧密钥数据会在 load 中自动迁移）
-            crypto::init_per_install_secret(&app_data_dir)
-                .expect("机器密钥初始化失败");
+            crypto::init_per_install_secret(&app_data_dir).expect("机器密钥初始化失败");
 
             let db = Arc::new(Mutex::new(conn));
             let http_client = Arc::new(HttpClient::new());
@@ -165,7 +167,10 @@ pub fn run() {
                 .get("clipboard_monitor_enabled")
                 .map(|v| v == "true")
                 .unwrap_or(true);
-            tracing::info!("[setup] clipboard_monitor_enabled={} (from config)", clipboard_monitor_enabled);
+            tracing::info!(
+                "[setup] clipboard_monitor_enabled={} (from config)",
+                clipboard_monitor_enabled
+            );
             let monitor = Arc::new(system::clipboard::start_monitor(app_handle.clone()));
             if !clipboard_monitor_enabled {
                 tracing::info!("[setup] 调用 monitor.suspend()（config 为 false）");
@@ -238,7 +243,11 @@ pub fn run() {
                     .state::<crate::state::AppState>()
                     .is_onboarding_complete()
                     .await;
-                tracing::info!("[setup] is_onboarding_complete={}，是否需要打开向导={}", needed, !needed);
+                tracing::info!(
+                    "[setup] is_onboarding_complete={}，是否需要打开向导={}",
+                    needed,
+                    !needed
+                );
                 if !needed {
                     let _ = commands::system::open_onboarding_window(onboarding_handle).await;
                 }

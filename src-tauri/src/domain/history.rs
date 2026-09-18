@@ -282,7 +282,10 @@ fn query_like(
 ) -> Result<Vec<TranslationRecord>, AppError> {
     let pattern = format!(
         "%{}%",
-        search.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+        search
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
     );
 
     let sql = if starred_only {
@@ -333,7 +336,10 @@ fn count_all(conn: &Connection, starred_only: bool) -> Result<i64, AppError> {
 fn count_like(conn: &Connection, search: &str, starred_only: bool) -> Result<i64, AppError> {
     let pattern = format!(
         "%{}%",
-        search.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+        search
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
     );
 
     if starred_only {

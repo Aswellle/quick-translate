@@ -38,9 +38,18 @@ pub fn init(app: &AppHandle) -> Result<(), AppError> {
 
     // 获取提供者列表以显示可用性（setup 阶段已注册完毕，sync 安全）
     let providers = state.translator.list_providers_sync();
-    tracing::info!("[tray::init] clipboard_monitor_enabled={} (from config)", clipboard_enabled);
+    tracing::info!(
+        "[tray::init] clipboard_monitor_enabled={} (from config)",
+        clipboard_enabled
+    );
 
-    let menu = build_menu(app, &current_provider, &current_lang, clipboard_enabled, &providers)?;
+    let menu = build_menu(
+        app,
+        &current_provider,
+        &current_lang,
+        clipboard_enabled,
+        &providers,
+    )?;
 
     TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
@@ -61,7 +70,10 @@ pub fn init(app: &AppHandle) -> Result<(), AppError> {
         .build(app)
         .map_err(|e| AppError::WindowError(format!("托盘初始化失败: {}", e)))?;
 
-    tracing::info!("系统托盘已初始化（clipboard_enabled={}）", clipboard_enabled);
+    tracing::info!(
+        "系统托盘已初始化（clipboard_enabled={}）",
+        clipboard_enabled
+    );
     Ok(())
 }
 
@@ -82,7 +94,13 @@ pub async fn refresh_menu(app: &AppHandle) {
     let providers = state.translator.list_providers().await;
     tracing::info!("[refresh_menu] clipboard_enabled={}", clipboard_enabled);
 
-    match build_menu(app, &current_provider, &current_lang, clipboard_enabled, &providers) {
+    match build_menu(
+        app,
+        &current_provider,
+        &current_lang,
+        clipboard_enabled,
+        &providers,
+    ) {
         Ok(new_menu) => {
             if let Some(tray) = app.tray_by_id(TRAY_ID) {
                 if let Err(e) = tray.set_menu(Some(new_menu)) {
@@ -106,7 +124,6 @@ fn build_menu(
     clipboard_monitor_enabled: bool,
     providers: &[ProviderInfo],
 ) -> Result<Menu<tauri::Wry>, AppError> {
-
     // ---- 翻译源子菜单（⚠ 标记需要 API Key 但尚未配置的服务）----
     let providers_meta = [
         ("deepl", "DeepL"),
@@ -200,15 +217,24 @@ fn build_menu(
         PredefinedMenuItem::separator(app).map_err(|e| AppError::WindowError(e.to_string()))?;
 
     // ---- 剪贴板监控开关 ----
-    let clip_check = if clipboard_monitor_enabled { "✓" } else { "  " };
+    let clip_check = if clipboard_monitor_enabled {
+        "✓"
+    } else {
+        "  "
+    };
     let clip_label = format!(
         "{} 剪贴板监控{}",
         clip_check,
         clipboard_suffix(status.clipboard.state)
     );
-    let clipboard_item =
-        MenuItem::with_id(app, "clipboard_monitor_toggle", clip_label, true, None::<&str>)
-            .map_err(|e| AppError::WindowError(e.to_string()))?;
+    let clipboard_item = MenuItem::with_id(
+        app,
+        "clipboard_monitor_toggle",
+        clip_label,
+        true,
+        None::<&str>,
+    )
+    .map_err(|e| AppError::WindowError(e.to_string()))?;
 
     // ---- 主菜单 ----
     let history_item = MenuItem::with_id(app, "history", "翻译历史", true, None::<&str>)
@@ -386,7 +412,12 @@ fn switch_provider(app: AppHandle, provider_id: String) {
         {
             tracing::error!("切换翻译源持久化失败: {}", e);
             // 持久化失败时回滚引擎，保持引擎与 DB 一致
-            let fallback = state.config.read().await.get("provider").unwrap_or_default();
+            let fallback = state
+                .config
+                .read()
+                .await
+                .get("provider")
+                .unwrap_or_default();
             let _ = state.translator.set_active_provider(&fallback).await;
             return;
         }
@@ -430,13 +461,20 @@ fn toggle_clipboard_monitor(app: AppHandle) {
             .map(|v| v == "true")
             .unwrap_or(true);
         let new_value = !current;
-        tracing::info!("[toggle_clipboard_monitor] 当前值={}, 切换到={}", current, new_value);
+        tracing::info!(
+            "[toggle_clipboard_monitor] 当前值={}, 切换到={}",
+            current,
+            new_value
+        );
 
         if let Err(e) = state
             .config
             .write()
             .await
-            .set("clipboard_monitor_enabled", if new_value { "true" } else { "false" })
+            .set(
+                "clipboard_monitor_enabled",
+                if new_value { "true" } else { "false" },
+            )
             .await
         {
             tracing::error!("切换剪贴板监控失败: {}", e);
