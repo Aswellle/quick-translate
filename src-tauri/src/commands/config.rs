@@ -50,7 +50,11 @@ pub async fn set_config_batch(
     // 宽松模式：单键副作用失败仅记录警告，不中止整批次
     for (key, value) in &updates {
         if let Err(e) = handle_side_effect(&app, &state, key, value).await {
-            tracing::warn!("[set_config_batch] side_effect[{}] 失败（已忽略）: {}", key, e);
+            tracing::warn!(
+                "[set_config_batch] side_effect[{}] 失败（已忽略）: {}",
+                key,
+                e
+            );
         }
     }
 

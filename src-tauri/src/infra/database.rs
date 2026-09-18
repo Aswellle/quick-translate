@@ -139,15 +139,14 @@ pub fn run_migrations(conn: &Connection) -> Result<(), AppError> {
 
     // 迁移列表：(版本号, 迁移函数)
     type MigrationFn = fn(&Transaction) -> Result<(), AppError>;
-    let migrations: &[(i64, MigrationFn)] =
-        &[
-            (1, migrate_v1),
-            (2, migrate_v2),
-            (3, migrate_v3),
-            (4, migrate_v4),
-            (5, migrate_v5),
-            (6, migrate_v6),
-        ];
+    let migrations: &[(i64, MigrationFn)] = &[
+        (1, migrate_v1),
+        (2, migrate_v2),
+        (3, migrate_v3),
+        (4, migrate_v4),
+        (5, migrate_v5),
+        (6, migrate_v6),
+    ];
 
     for &(version, migration_fn) in migrations {
         if current_version >= version {
