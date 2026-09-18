@@ -51,9 +51,11 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-  # ── Rust 检查 ─────────────────────────────────────────────────────────────
-  rust:
-    name: Rust (fmt + clippy)
+  # ── Rust 格式检查 ─────────────────────────────────────────────────────────
+  # cargo fmt --check 是纯格式检查，不需要编译，任何平台都能秒级完成。
+  # 三平台并行跑确保跨平台提交都不会遗漏格式问题。
+  rust-fmt:
+    name: Rust fmt
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -64,16 +66,30 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install system dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libglib2.0-dev libxdo-dev libclang-dev libgtk-3-dev
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+  # ── Rust lint ─────────────────────────────────────────────────────────────
+  # cargo clippy 需要完整编译，而本项目为 Windows-only（剪贴板使用 windows-sys，
+  # Tauri webview 在 Linux/macOS 需要 webkit2gtk/glib/gdk/gtk 等系统依赖）。
+  # 仅在 Windows 上跑 clippy 即可覆盖所有 lint 检查。
+  rust-clippy:
+    name: Rust clippy
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
 
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -84,12 +100,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             src-tauri/target/
-          key: ${{ matrix.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: windows-latest-clippy-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ matrix.os }}-cargo-
-
-      - name: Check formatting
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+            windows-latest-clippy-
 
       - name: Clippy lint
         run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
@@ -99,13 +112,7 @@ jobs:
     name: Build verification
     # 仅在 push 到 main 时运行完整构建验证，PR 只做快速检查以节省资源
     if: github.event_name == 'push'
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
+    runs-on: windows-latest
 
     steps:
       - name: Checkout
@@ -120,7 +127,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: x86_64-pc-windows-msvc
 
       - name: Cache Cargo
         uses: actions/cache@v4
@@ -131,9 +138,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             src-tauri/target/
-          key: ${{ matrix.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: windows-latest-build-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ matrix.os }}-${{ matrix.target }}-cargo-
+            windows-latest-build-
 
       - name: Install frontend dependencies
         run: npm ci
@@ -151,4 +158,4 @@ jobs:
           fi
 
       - name: Build Tauri app (verify only)
-        run: cd src-tauri && cargo build --release --target ${{ matrix.target }}
+        run: cd src-tauri && cargo build --release --target x86_64-pc-windows-msvc
