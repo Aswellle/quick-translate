@@ -64,6 +64,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libglib2.0-dev libxdo-dev libclang-dev
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
