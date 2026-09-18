@@ -225,7 +225,7 @@ fn load_config_from_db(conn: &Connection) -> Result<AppConfig, AppError> {
             "history_limit" => {
                 let parsed = decode(&raw).parse::<i64>();
                 config.history_limit = match parsed {
-                    Ok(n) if n >= HISTORY_LIMIT_MIN && n <= HISTORY_LIMIT_MAX => n,
+                    Ok(n) if (HISTORY_LIMIT_MIN..=HISTORY_LIMIT_MAX).contains(&n) => n,
                     Ok(n) => {
                         // 越界值（含 0/负数）钳制到安全范围，避免全部删除
                         tracing::warn!(

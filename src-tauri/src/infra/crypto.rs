@@ -123,6 +123,7 @@ pub fn get_machine_key() -> [u8; 32] {
 }
 
 /// 旧版密钥派生（仅用于迁移兼容）：SHA-256(serial || APP_SALT)
+#[cfg(target_os = "windows")]
 fn derive_old_key(serial: u32) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(serial.to_le_bytes());
@@ -133,17 +134,17 @@ fn derive_old_key(serial: u32) -> [u8; 32] {
 }
 
 /// 返回旧版密钥候选列表（用于迁移时尝试解密历史数据）。
-/// 顺序：序列号派生（Windows）→ 硬编码回退常量。
 pub(crate) fn old_key_candidates() -> Vec<[u8; 32]> {
-    let mut candidates = Vec::new();
     #[cfg(target_os = "windows")]
     {
-        if let Some(serial) = get_volume_serial() {
-            candidates.push(derive_old_key(serial));
-        }
+        get_volume_serial()
+            .map(|serial| vec![derive_old_key(serial), *b"QuickTranslate-AES-256-Key-v1.00"])
+            .unwrap_or_else(|| vec![*b"QuickTranslate-AES-256-Key-v1.00"])
     }
-    candidates.push(*b"QuickTranslate-AES-256-Key-v1.00");
-    candidates
+    #[cfg(not(target_os = "windows"))]
+    {
+        vec![*b"QuickTranslate-AES-256-Key-v1.00"]
+    }
 }
 
 /// 读取系统盘（C:\）的卷序列号
