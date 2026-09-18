@@ -165,6 +165,7 @@ jobs:
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --target aarch64-apple-darwin -- -D warnings
 
       # ── 依赖安全扫描 ────────────────────────────────────────────────────
+      - name: npm audit
         run: npm audit --audit-level=high
         continue-on-error: true
 
