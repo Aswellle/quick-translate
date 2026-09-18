@@ -20,7 +20,7 @@ use tokio::sync::{Mutex, RwLock};
 use domain::config::ConfigService;
 use domain::history::HistoryRepository;
 use domain::translator::{build_provider, TranslationEngine, CREDENTIAL_KEYS};
-use infra::{database, http_client::HttpClient};
+use infra::{crypto, database, http_client::HttpClient};
 use state::AppState;
 
 /// 应用主入口，由 main.rs 的 fn main() 调用
@@ -93,6 +93,12 @@ pub fn run() {
             tracing::info!("App Data 目录: {:?}", app_data_dir);
 
             let conn = database::init_db(&app_data_dir).expect("数据库初始化失败");
+
+            // 初始化机器绑定随机密钥（必须在 ConfigService::load 之前，确保
+            // 加解密使用新版密钥；旧密钥数据会在 load 中自动迁移）
+            crypto::init_per_install_secret(&app_data_dir)
+                .expect("机器密钥初始化失败");
+
             let db = Arc::new(Mutex::new(conn));
             let http_client = Arc::new(HttpClient::new());
 
@@ -244,6 +250,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::translate::translate_text,
             commands::translate::list_providers,
+            commands::translate::get_provider_status,
             commands::translate::validate_provider,
             commands::config::get_config,
             commands::config::set_config,
