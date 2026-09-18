@@ -10,7 +10,7 @@
 
 No window switching, no browser, no paste box. Your hands never leave the keyboard.
 
-[🇨🇳 中文](README.md) · [🇺🇸 English](README.en.md)
+[中文](README.md) · [English](README.en.md)
 
 [![Download](https://img.shields.io/badge/⬇_Download-Windows_x64-2563eb?style=for-the-the-badge)](https://github.com/Aswellle/quick-translate/releases/latest)
 [![Version](https://img.shields.io/github/v/release/Aswellle/quick-translate?style=for-the-badge&label=Version&color=555)](https://github.com/Aswellle/quick-translate/releases)
