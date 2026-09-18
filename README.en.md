@@ -12,10 +12,9 @@ No window switching, no browser, no paste box. Your hands never leave the keyboa
 
 [中文](README.md) · [English](README.en.md)
 
-[![Download](https://img.shields.io/badge/⬇_Download-Windows_x64-2563eb?style=for-the-the-badge)](https://github.com/Aswellle/quick-translate/releases/latest)
+[![Download](https://img.shields.io/badge/⬇_Download-Windows_%7C_macOS-2563eb?style=for-the-badge)](https://github.com/Aswellle/quick-translate/releases/latest)
 [![Version](https://img.shields.io/github/v/release/Aswellle/quick-translate?style=for-the-badge&label=Version&color=555)](https://github.com/Aswellle/quick-translate/releases)
-[![Platform](https://img.shields.io/badge/Platform-Windows_10/11-2563eb?style=for-the-badge)](https://github.com/Aswellle/quick-translate/releases/latest)
-[![Size](https://img.shields.io/badge/Installer-~5MB-555?style=for-the-badge)](https://github.com/Aswellle/quick-translate/releases/latest)
+[![Platform](https://img.shields.io/badge/Platform-Windows_10/11_%7C_macOS-2563eb?style=for-the-badge)](https://github.com/Aswellle/quick-translate/releases/latest)
 
 </div>
 
@@ -39,7 +38,7 @@ No window switching, no browser, no paste box. Your hands never leave the keyboa
 
 ## Introduction
 
-QuickTranslate is a **copy-to-translate** utility for Windows. It lives in your system tray, monitoring your clipboard — whenever you copy text, a translation popup appears near your cursor.
+QuickTranslate is a **copy-to-translate** utility for Windows and macOS. It lives in your system tray, monitoring your clipboard — whenever you copy text, a translation popup appears near your cursor.
 
 > It removes those ten-second cycles of "switch to browser → open translator → paste → wait → switch back → find where you were." Dozens of times per document. What's really consumed isn't time — it's the focus you just built up.
 
@@ -103,6 +102,8 @@ Other details: PDF line-join fix, one-click copy translation/source, same-langua
 
 ## Installation
 
+### Windows
+
 **System requirements**: Windows 10 / 11 (x64), WebView2 runtime (included with Win11; installer prompts if missing).
 
 Download from the [Releases page](https://github.com/Aswellle/quick-translate/releases/latest):
@@ -111,6 +112,14 @@ Download from the [Releases page](https://github.com/Aswellle/quick-translate/re
 - **`.exe`** — NSIS portable installer
 
 ~5MB installer; launch from Start menu or desktop shortcut after installation.
+
+### macOS
+
+**System requirements**: macOS 13+ (Apple Silicon).
+
+Download from the [Releases page](https://github.com/Aswellle/quick-translate/releases/latest):
+
+- **`.dmg`** — Disk image, drag into Applications folder.
 
 ---
 

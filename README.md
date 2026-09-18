@@ -12,10 +12,9 @@
 
 [中文](README.md) · [English](README.en.md)
 
-[![下载](https://img.shields.io/badge/⬇_立即下载-Windows_x64-2563eb?style=for-the-badge)](https://github.com/Aswellle/quick-translate/releases/latest)
+[![下载](https://img.shields.io/badge/⬇_立即下载-Windows_%7C_macOS-2563eb?style=for-the-badge)](https://github.com/Aswellle/quick-translate/releases/latest)
 [![版本](https://img.shields.io/github/v/release/Aswellle/quick-translate?style=for-the-badge&label=版本&color=555)](https://github.com/Aswellle/quick-translate/releases)
-[![平台](https://img.shields.io/badge/平台-Windows_10/11-2563eb?style=for-the-badge)](https://github.com/Aswellle/quick-translate/releases/latest)
-[![体积](https://img.shields.io/badge/安装包-约5MB-555?style=for-the-badge)](https://github.com/Aswellle/quick-translate/releases/latest)
+[![平台](https://img.shields.io/badge/平台-Windows_10/11_%7C_macOS-2563eb?style=for-the-badge)](https://github.com/Aswellle/quick-translate/releases/latest)
 
 </div>
 
@@ -37,9 +36,9 @@
 
 ---
 
-## 简介
+QuickTranslate 是一款面向 Windows 与 macOS 的**复制即翻译**工具。它常驻系统托盘，监控你的剪贴板——任何时候复制一段文字，译文就会以浮窗的形式出现在光标附近。
 
-QuickTranslate 是一款面向 Windows 的**复制即翻译**工具。它常驻系统托盘，监控你的剪贴板——任何时候复制一段文字，译文就会以浮窗的形式出现在光标附近。
+>
 
 > 它删掉的是「切到浏览器 → 打开翻译页 → 粘贴 → 等加载 → 切回文档 → 找回刚才读到哪一行」这十几秒。一份文档几十次，真正被消耗的不是时间，是你刚建立起来的那点专注。
 
@@ -103,6 +102,8 @@ QuickTranslate 是一款面向 Windows 的**复制即翻译**工具。它常驻�
 
 ## 安装
 
+### Windows
+
 **系统要求**：Windows 10 / 11（x64），需要 WebView2 运行时（Win11 一般已自带，缺失时安装包会引导安装）。
 
 前往 [Releases 页面](https://github.com/Aswellle/quick-translate/releases/latest) 下载：
@@ -111,6 +112,14 @@ QuickTranslate 是一款面向 Windows 的**复制即翻译**工具。它常驻�
 - **`.exe`** — NSIS 便携安装包
 
 安装包约 5MB，安装完成后从开始菜单或桌面快捷方式启动即可。
+
+### macOS
+
+**系统要求**：macOS 13+（Apple Silicon）。
+
+前往 [Releases 页面](https://github.com/Aswellle/quick-translate/releases/latest) 下载：
+
+- **`.dmg`** — 磁盘映像，拖入应用程序文件夹即可。
 
 ---
 
