@@ -26,6 +26,16 @@ pub struct ProviderInfo {
     pub is_available: bool, // 是否已配置且可用
 }
 
+/// 翻译源运行时健康状态（用于托盘菜单与诊断）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderStatus {
+    pub id: String,
+    pub name: String,
+    pub requires_api_key: bool,
+    pub is_available: bool,
+    pub health_state: String, // "healthy" | "degraded" | "open" | "half_open" | "unknown"
+}
+
 /// 历史记录条目（DB → 前端）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranslationRecord {

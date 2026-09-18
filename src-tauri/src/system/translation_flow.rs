@@ -39,7 +39,6 @@ pub fn ensure_popup_window(app: &AppHandle) {
         .title("QuickTranslate")
         .additional_browser_args(crate::system::BROWSER_ARGS)
         .decorations(false)
-        .transparent(true)
         .always_on_top(true)
         .skip_taskbar(true)
         // 非激活窗口（Windows 上即 WS_EX_NOACTIVATE）：显示时不抢焦点，
@@ -73,7 +72,6 @@ pub(crate) async fn show_popup_loading(app: &AppHandle, position: &PopupPosition
         .title("QuickTranslate")
         .additional_browser_args(crate::system::BROWSER_ARGS)
         .decorations(false)
-        .transparent(true)
         .always_on_top(true)
         .skip_taskbar(true)
         .focusable(false)
