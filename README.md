@@ -16,6 +16,7 @@
 [![版本](https://img.shields.io/github/v/release/Aswellle/quick-translate?style=for-the-badge&label=版本&color=555)](https://github.com/Aswellle/quick-translate/releases)
 [![平台](https://img.shields.io/badge/平台-Windows_10/11_%7C_macOS-2563eb?style=for-the-badge)](https://github.com/Aswellle/quick-translate/releases/latest)
 
+[⬇ 下载最新版](https://github.com/Aswellle/quick-translate/releases/latest) · [🐛 报告问题](https://github.com/Aswellle/quick-translate/issues) · [📋 更新日志](https://github.com/Aswellle/quick-translate/releases)
 </div>
 
 ---
@@ -279,8 +280,6 @@ git push origin v0.3.0
 
 **如果它帮你省下了那些十几秒，点个 ⭐ 让更多人看到。**
 
-[⬇ 下载最新版](https://github.com/Aswellle/quick-translate/releases/latest) · [🐛 报告问题](https://github.com/Aswellle/quick-translate/issues) · [📋 更新日志](https://github.com/Aswellle/quick-translate/releases)
-
-<sub>QuickTranslate · 版权所有 © 2026 welle</sub>
+<sub>QuickTranslate · 版权所有 © 2026 Aswellle</sub>
 
 </div>
