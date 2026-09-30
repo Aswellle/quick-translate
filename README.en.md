@@ -17,7 +17,7 @@ No window switching, no browser, no paste box. Your hands never leave the keyboa
 [![Version](https://img.shields.io/github/v/release/Aswellle/quick-translate)](https://github.com/Aswellle/quick-translate/releases)
 [![Downloads](https://img.shields.io/github/downloads/Aswellle/quick-translate/total)](https://github.com/Aswellle/quick-translate/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey)](https://github.com/Aswellle/quick-translate/releases/latest)
-[![License](https://img.shields.io/badge/license-Proprietary-orange)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ![Tauri](https://img.shields.io/badge/Tauri-2.x-FFC131?logo=tauri&logoColor=white)
 ![Rust](https://img.shields.io/badge/Rust-stable-DEA584?logo=rust)
@@ -286,7 +286,9 @@ Welcome in [Issues](https://github.com/Aswellle/quick-translate/issues).
 
 ## License
 
-This is **proprietary software** for personal, non-commercial use only. See [LICENSE](LICENSE) for full terms.
+This project is open source under the **[MIT License](LICENSE)** — free to use, modify and distribute, including for commercial purposes.
+
+> The copyright holder reserves the right to modify or supplement the license terms for future releases, as needed. Each release is governed by the license published with it; copies already obtained are unaffected.
 
 ---
 
