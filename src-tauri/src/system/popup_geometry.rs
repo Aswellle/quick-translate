@@ -337,6 +337,25 @@ mod tests {
         assert!(inside(pos, a, popup));
     }
 
+    /// 任务栏在右侧：工作区右缘 1840（计划第 21 节矩阵中此前缺的一格）。
+    /// 光标贴近右缘时浮窗必须翻到左侧或被 clamp 回工作区内。
+    #[test]
+    fn never_overlaps_a_right_taskbar() {
+        let a = Rect::new(0.0, 0.0, 1840.0, 1080.0);
+        let popup = (400.0, 300.0);
+        for cursor_x in [1700.0, 1800.0, 1838.0] {
+            let pos = place_popup((cursor_x, 500.0), a, popup);
+            assert!(
+                pos.0 + popup.0 <= a.right() + 0.001,
+                "cursor_x={} 时浮窗压到了右侧任务栏：x={} w={}",
+                cursor_x,
+                pos.0,
+                popup.0
+            );
+            assert!(inside(pos, a, popup));
+        }
+    }
+
     // ── 定位：多显示器负坐标 ─────────────────────────────────────────────
 
     /// 左侧副屏：工作区整体位于负坐标。此前的实现假设 `0 <= x < screen_width`，

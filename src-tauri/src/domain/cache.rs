@@ -55,13 +55,13 @@ pub struct CacheEntry<'a> {
 }
 
 pub struct TranslationCache {
-    db: Arc<Mutex<Connection>>,
+    db: crate::infra::database::Db,
     max_entries: i64,
     ttl: Duration,
 }
 
 impl TranslationCache {
-    pub fn new(db: Arc<Mutex<Connection>>) -> Self {
+    pub fn new(db: crate::infra::database::Db) -> Self {
         Self {
             db,
             max_entries: MAX_ENTRIES,
@@ -71,12 +71,18 @@ impl TranslationCache {
 
     /// 测试用：可调上限与 TTL（否则验证淘汰与过期得等 30 天）
     #[cfg(test)]
-    pub fn with_limits(db: Arc<Mutex<Connection>>, max_entries: i64, ttl: Duration) -> Self {
+    pub fn with_limits(db: crate::infra::database::Db, max_entries: i64, ttl: Duration) -> Self {
         Self {
             db,
             max_entries,
             ttl,
         }
+    }
+
+    /// 存储不可用（计划第 26 节的降级路径）：缓存是纯增益能力，
+    /// 读视为无命中、写视为成功静默丢弃，绝不向主链路抛错。
+    fn conn(&self) -> Option<Arc<Mutex<Connection>>> {
+        self.db.try_conn()
     }
 
     /// 缓存键：归一化文本 + 目标语言。
@@ -94,7 +100,7 @@ impl TranslationCache {
     }
 
     /// 精确命中。过期的条目不返回（但留到 enforce_limits 再清理，
-    /// 免得每次读都写一次库）。
+    /// 免得每次读都写一次库）。存储不可用 → 无命中（Ok(None)）。
     pub async fn get(
         &self,
         text: &str,
@@ -104,9 +110,13 @@ impl TranslationCache {
             return Ok(None);
         }
 
+        let Some(conn) = self.conn() else {
+            return Ok(None);
+        };
+
         let key = Self::key(text, target_lang);
         let cutoff = now_unix_ms() - self.ttl.as_millis() as i64;
-        let conn = self.db.lock().await;
+        let conn = conn.lock().await;
 
         let hit = conn
             .query_row(
@@ -141,13 +151,18 @@ impl TranslationCache {
 
     /// 写入缓存。同一段文本重复翻译时更新译文，
     /// 但**保留** last_hit_at 与 hit_count —— 那是这段内容的热度记录。
+    /// 存储不可用 → 静默成功（写入本来就不影响主链路）。
     pub async fn put(&self, entry: CacheEntry<'_>) -> Result<(), AppError> {
         if !Self::is_cacheable(entry.source_text) {
             return Ok(());
         }
 
+        let Some(conn) = self.conn() else {
+            return Ok(());
+        };
+
         let now = now_unix_ms();
-        let conn = self.db.lock().await;
+        let conn = conn.lock().await;
         conn.execute(
             "INSERT INTO translation_cache
                  (cache_key, source_text, translated_text, source_lang, provider,
@@ -175,8 +190,12 @@ impl TranslationCache {
     /// 清理：先删过期条目，再按 LRU 淘汰到上限以内。
     ///
     /// 由调用方在写缓存后择机触发（与历史记录的 `enforce_limit` 同构）。
+    /// 存储不可用 → 无事可做，静默成功。
     pub async fn enforce_limits(&self) -> Result<(), AppError> {
-        let conn = self.db.lock().await;
+        let Some(conn) = self.conn() else {
+            return Ok(());
+        };
+        let conn = conn.lock().await;
 
         let cutoff = now_unix_ms() - self.ttl.as_millis() as i64;
         conn.execute(
@@ -208,7 +227,8 @@ impl TranslationCache {
     /// 测试用：当前条目数
     #[cfg(test)]
     pub async fn len(&self) -> i64 {
-        let conn = self.db.lock().await;
+        let conn = self.conn().expect("测试要求存储可用");
+        let conn = conn.lock().await;
         conn.query_row("SELECT COUNT(*) FROM translation_cache", [], |row| {
             row.get(0)
         })
@@ -229,7 +249,11 @@ mod tests {
     }
 
     fn fast() -> TranslationCache {
-        TranslationCache::with_limits(test_db(), 3, Duration::from_secs(60))
+        TranslationCache::with_limits(
+            crate::infra::database::Db::available(test_db()),
+            3,
+            Duration::from_secs(60),
+        )
     }
 
     /// 直接写一行并可指定 `last_hit_at`。
@@ -349,7 +373,11 @@ mod tests {
     #[tokio::test]
     async fn expired_entries_are_not_served_and_get_cleaned_up() {
         let db = test_db();
-        let c = TranslationCache::with_limits(db.clone(), 100, Duration::from_secs(60));
+        let c = TranslationCache::with_limits(
+            crate::infra::database::Db::available(db.clone()),
+            100,
+            Duration::from_secs(60),
+        );
 
         // 直接写一条 2 分钟前的记录（超过 60s 的 TTL）
         {
@@ -378,7 +406,11 @@ mod tests {
     #[tokio::test]
     async fn lru_eviction_drops_the_least_recently_hit() {
         let db = test_db();
-        let c = TranslationCache::with_limits(db.clone(), 3, TTL); // 上限 3 条
+        let c = TranslationCache::with_limits(
+            crate::infra::database::Db::available(db.clone()),
+            3,
+            TTL,
+        ); // 上限 3 条
         let base = now_unix_ms();
 
         insert_raw(&db, "coldest", base).await;
@@ -403,7 +435,11 @@ mod tests {
     #[tokio::test]
     async fn a_hit_refreshes_recency_and_hit_count() {
         let db = test_db();
-        let c = TranslationCache::with_limits(db.clone(), 100, TTL);
+        let c = TranslationCache::with_limits(
+            crate::infra::database::Db::available(db.clone()),
+            100,
+            TTL,
+        );
         let base = now_unix_ms();
         insert_raw(&db, "x", base).await;
 
@@ -439,7 +475,11 @@ mod tests {
     #[tokio::test]
     async fn rewriting_updates_the_translation_but_keeps_the_hit_count() {
         let db = test_db();
-        let c = TranslationCache::with_limits(db.clone(), 100, TTL);
+        let c = TranslationCache::with_limits(
+            crate::infra::database::Db::available(db.clone()),
+            100,
+            TTL,
+        );
 
         put(&c, "hello", "zh", "旧译文", "deepl").await;
         assert!(c.get("hello", "zh").await.unwrap().is_some()); // hit_count → 1

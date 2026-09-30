@@ -7,11 +7,25 @@ pub enum AppError {
     #[error("网络连接失败：{0}")]
     NetworkError(String),
 
+    /// 无法建立 TCP/TLS 连接（含 DNS 解析失败）。reqwest 的 is_connect 统一归这里：
+    /// 离线的典型信号，与「请求发出去但出问题」在诊断上要分开（计划第 14 节）。
+    #[error("网络连接失败（无法连接服务器）：{0}")]
+    ConnectError(String),
+
+    /// 响应体/协议层问题（reqwest is_body / is_decode）。
+    #[error("服务响应异常：{0}")]
+    ProtocolError(String),
+
     #[error("API 认证失败：{provider}")]
     AuthError { provider: String },
 
     #[error("请求频率超限：{provider}")]
-    RateLimit { provider: String },
+    RateLimit {
+        provider: String,
+        /// 服务端 Retry-After 指示的等待秒数（HTTP 429 响应头）。
+        /// 有值时熔断冷却取 max(常规曲线, retry_after)，计划第 8 节。
+        retry_after_secs: Option<u64>,
+    },
 
     #[error("翻译额度已用尽：{provider}")]
     QuotaExhausted { provider: String },
@@ -47,6 +61,11 @@ pub enum AppError {
     #[error("数据库错误：{0}")]
     DatabaseError(String),
 
+    /// 本地存储（SQLite）在启动时初始化失败 —— 进程继续运行（计划第 26 节），
+    /// 历史与缓存降级：读空、写拒绝。翻译主链路不受影响。
+    #[error("本地存储暂不可用，历史记录功能已降级")]
+    StorageUnavailable,
+
     #[error("数据库迁移失败：{message}")]
     DatabaseMigration { message: String },
 
@@ -81,6 +100,8 @@ impl AppError {
     pub fn error_code(&self) -> &'static str {
         match self {
             Self::NetworkError(_) => "NETWORK_ERROR",
+            Self::ConnectError(_) => "CONNECT_ERROR",
+            Self::ProtocolError(_) => "PROTOCOL_ERROR",
             Self::AuthError { .. } => "AUTH_ERROR",
             Self::RateLimit { .. } => "RATE_LIMIT",
             Self::QuotaExhausted { .. } => "QUOTA_EXHAUSTED",
@@ -92,6 +113,7 @@ impl AppError {
             Self::SameLanguage { .. } => "SAME_LANGUAGE",
             Self::ClipboardError(_) => "CLIPBOARD_ERROR",
             Self::DatabaseError(_) => "DATABASE_ERROR",
+            Self::StorageUnavailable => "STORAGE_UNAVAILABLE",
             Self::DatabaseMigration { .. } => "DB_MIGRATION_FAILED",
             Self::ConfigError(_) => "CONFIG_ERROR",
             Self::WindowError(_) => "WINDOW_ERROR",
@@ -115,8 +137,16 @@ impl From<serde_json::Error> for AppError {
 
 impl From<reqwest::Error> for AppError {
     fn from(e: reqwest::Error) -> Self {
+        // 计划第 14 节：reqwest::Error 必须按性质细分，而不是全部折进
+        // 一个 NetworkError —— 离线（连不上）与「服务器回了个怪东西」
+        // 在日志、诊断与健康统计上应当可辨。
         if e.is_timeout() {
             AppError::Timeout { timeout_secs: 5 }
+        } else if e.is_connect() {
+            // 连接建立失败：TCP/DNS/TLS 握手都在这一层
+            AppError::ConnectError(e.to_string())
+        } else if e.is_body() || e.is_decode() {
+            AppError::ProtocolError(e.to_string())
         } else {
             AppError::NetworkError(e.to_string())
         }

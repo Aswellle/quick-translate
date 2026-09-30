@@ -22,7 +22,7 @@ use crate::types::{ProviderInfo, TranslationResult};
 
 use baidu::BaiduProvider;
 use deepl::DeepLProvider;
-use error_class::classify;
+use error_class::{classify, ErrorClass};
 use google::GoogleProvider;
 use health::{ProviderHealth, ProviderHealthState, ProvidersHealth};
 use policy::{policy_for, TranslationBudget, TOTAL_BUDGET};
@@ -132,6 +132,7 @@ pub fn http_status_error(provider: &str, status: u16, body: String) -> AppError 
         },
         429 => AppError::RateLimit {
             provider: provider.to_string(),
+            retry_after_secs: None,
         },
         // 408 是服务端在等请求超时，属于暂态
         408 => AppError::NetworkError(format!("{} HTTP 408: {}", provider, body)),
@@ -141,6 +142,15 @@ pub fn http_status_error(provider: &str, status: u16, body: String) -> AppError 
         },
         _ => AppError::NetworkError(format!("{} HTTP {}: {}", provider, status, body)),
     }
+}
+
+/// 解析 429 响应的 Retry-After 头（计划第 8 节：按 Retry-After 退避）。
+///
+/// 只支持整数秒形式 —— DeepL / Google 实际都发秒数；HTTP 日期形式需要
+/// 完整日期解析，为它引入依赖不值得，解析不出按 None 走常规冷却曲线。
+pub fn parse_retry_after_secs(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    let value = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?;
+    value.trim().parse::<u64>().ok()
 }
 
 /// 单个 provider 的尝试循环结局。
@@ -218,7 +228,10 @@ async fn try_provider(
             Ok(result) => {
                 entry.lock_health().record_success(Instant::now());
                 tracing::info!(
-                    "翻译成功: provider={}, {}ms",
+                    event = "provider_attempt_succeeded",
+                    provider = %provider_id,
+                    duration_ms = result.duration_ms,
+                    "[provider] {} 翻译成功（{}ms）",
                     provider_id,
                     result.duration_ms
                 );
@@ -234,10 +247,19 @@ async fn try_provider(
             }
             Err(e) => {
                 let class = classify(&e);
+                // HTTP 429 的 Retry-After 指示（计划第 8 节）：有值时冷却
+                // 至少尊重服务端指示（上限 LONG_COOLDOWN）
+                let retry_after = match &e {
+                    AppError::RateLimit {
+                        retry_after_secs: Some(secs),
+                        ..
+                    } => Some(std::time::Duration::from_secs(*secs)),
+                    _ => None,
+                };
                 {
                     let mut h = entry.lock_health();
                     let mut rng = rand::thread_rng();
-                    h.record_failure(class, Instant::now(), &mut rng);
+                    h.record_failure_with_wait(class, retry_after, Instant::now(), &mut rng);
                 }
 
                 tracing::warn!(
@@ -291,6 +313,9 @@ pub struct TranslationEngine {
     fallback_enabled: RwLock<bool>,
     /// 供凭证更新时重建 provider 实例
     http_client: Arc<HttpClient>,
+    /// 诊断计数（计划第 33 节）：一次翻译最终由**非首选**源成功 = 一次 fallback。
+    /// 全原子量，热路径记账。
+    fallback_count: std::sync::atomic::AtomicU64,
 }
 
 impl TranslationEngine {
@@ -300,7 +325,14 @@ impl TranslationEngine {
             active_provider_id: RwLock::new("google".to_string()),
             fallback_enabled: RwLock::new(true),
             http_client,
+            fallback_count: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// 诊断读取：启动以来「非首选源兜底成功」的次数。
+    pub fn fallback_count(&self) -> u64 {
+        self.fallback_count
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub async fn register_provider(&self, provider: Box<dyn TranslationProvider>) {
@@ -344,6 +376,7 @@ impl TranslationEngine {
 
         // 到这里注册表锁已经释放：下面的网络 I/O 不再阻塞 list_providers
         // （托盘菜单/设置页）。重构前读锁会一直活到 translate().await 之后。
+        let mut is_first_candidate = true;
         for entry in entries {
             let info = entry.provider.info();
 
@@ -354,14 +387,25 @@ impl TranslationEngine {
             }
 
             match try_provider(&entry, text, target_lang, &budget, &mut errors).await {
-                AttemptOutcome::Success(result) => return Ok(result),
+                AttemptOutcome::Success(result) => {
+                    // 诊断计数（计划第 33 节）：最终由非首选源成功 = 一次 fallback。
+                    // 用户无感（计划第 46 节），只在本地诊断里可见。
+                    if !is_first_candidate {
+                        self.fallback_count
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    return Ok(result);
+                }
                 AttemptOutcome::SameLanguage(lang) => return Err(AppError::SameLanguage { lang }),
                 // Permanent：换一家也是同样结果。直接把原因告诉用户，
                 // 比统一报「所有翻译源均不可用」有用得多。
                 AttemptOutcome::Fatal(e) => return Err(e),
                 // 预算耗尽：整条链必须停 —— 这正是「不让用户干等几十秒」的落点
                 AttemptOutcome::BudgetExhausted => break,
-                AttemptOutcome::Exhausted => continue,
+                AttemptOutcome::Exhausted => {
+                    is_first_candidate = false;
+                    continue;
+                }
             }
         }
 
@@ -514,6 +558,17 @@ impl TranslationEngine {
             .iter()
             .find(|e| e.provider.info().id == provider_id)
             .map(|e| e.lock_health().state())
+    }
+
+    /// 读取某个翻译源最近一次错误的类别（供设置页把「暂时不可用」细分
+    /// 成限流/认证/额度，计划第 28 节）。未失败过返回 None。
+    pub async fn provider_last_error_class(&self, provider_id: &str) -> Option<ErrorClass> {
+        self.providers
+            .read()
+            .await
+            .iter()
+            .find(|e| e.provider.info().id == provider_id)
+            .and_then(|e| e.lock_health().last_error_class())
     }
 
     /// 批量替换某翻译源的凭证（腾讯/百度/有道/DeepL 通用路径）。
@@ -673,6 +728,7 @@ mod tests {
                 }),
                 Outcome::RateLimit => Err(AppError::RateLimit {
                     provider: self.id.to_string(),
+                    retry_after_secs: None,
                 }),
                 Outcome::Quota => Err(AppError::QuotaExhausted {
                     provider: self.id.to_string(),

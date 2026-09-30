@@ -131,9 +131,10 @@ impl PersistenceWriter {
 
 /// 处理一个任务。
 ///
-/// **刻意不做重试**：连接已设 `busy_timeout = 5000`，SQLite 的锁竞争由它
-/// 兜住；再叠一层重试只会把同样的等待做两遍。剩下的失败是真实错误
-/// （磁盘满、库损坏），重试也修不好，如实记录即可。
+/// 历史写入带**一次**重试（计划第 24 节：retry → 仍失败 → 记录 → 丢弃）。
+/// 首次尝试里的 SQLite 锁竞争由 `busy_timeout = 5000` 兜住，因此重试针对的
+/// 是另一种短暂故障 —— 杀软扫描、磁盘瞬时卡顿这类；重试仍失败就是真实
+/// 错误（磁盘满、库损坏），按计划记录 error 后丢弃，绝不反噬主链路。
 async fn process(
     history: &HistoryRepository,
     cache: &TranslationCache,
@@ -154,9 +155,26 @@ async fn process(
                 error!(event = "history_limit_failed", "历史清理失败: {}", e);
             }
         }
-        Err(e) => {
-            error!(event = "history_write_failed", "历史记录写入失败: {}", e);
-            storage_error = Some("HISTORY_WRITE_FAILED");
+        Err(first) => {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            match history.insert(&record).await {
+                Ok(()) => {
+                    info!(
+                        event = "history_write_retried_ok",
+                        "历史写入首次失败后重试成功: {}", first
+                    );
+                    if let Err(e) = history.enforce_limit(history_limit).await {
+                        error!(event = "history_limit_failed", "历史清理失败: {}", e);
+                    }
+                }
+                Err(second) => {
+                    error!(
+                        event = "history_write_failed",
+                        "历史记录写入失败（含一次重试）: 首次 {} / 重试 {}", first, second
+                    );
+                    storage_error = Some("HISTORY_WRITE_FAILED");
+                }
+            }
         }
     }
 
@@ -254,8 +272,12 @@ mod tests {
     #[tokio::test]
     async fn writer_persists_to_history_and_cache() {
         let db = migrated_db();
-        let history = Arc::new(HistoryRepository::new(db.clone()));
-        let cache = Arc::new(TranslationCache::new(db.clone()));
+        let history = Arc::new(HistoryRepository::new(
+            crate::infra::database::Db::available(db.clone()),
+        ));
+        let cache = Arc::new(TranslationCache::new(
+            crate::infra::database::Db::available(db.clone()),
+        ));
         let runtime = test_runtime();
         let writer = PersistenceWriter::spawn(history.clone(), cache.clone(), runtime.clone());
 
@@ -281,8 +303,12 @@ mod tests {
     #[tokio::test]
     async fn writer_processes_a_burst_in_order() {
         let db = migrated_db();
-        let history = Arc::new(HistoryRepository::new(db.clone()));
-        let cache = Arc::new(TranslationCache::new(db.clone()));
+        let history = Arc::new(HistoryRepository::new(
+            crate::infra::database::Db::available(db.clone()),
+        ));
+        let cache = Arc::new(TranslationCache::new(
+            crate::infra::database::Db::available(db.clone()),
+        ));
         let runtime = test_runtime();
         let writer = PersistenceWriter::spawn(history.clone(), cache.clone(), runtime.clone());
 

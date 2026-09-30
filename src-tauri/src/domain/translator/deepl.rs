@@ -132,6 +132,7 @@ impl TranslationProvider for DeepLProvider {
             }),
             429 => Err(AppError::RateLimit {
                 provider: "deepl".to_string(),
+                retry_after_secs: super::parse_retry_after_secs(response.headers()),
             }),
             456 => Err(AppError::QuotaExhausted {
                 provider: "deepl".to_string(),

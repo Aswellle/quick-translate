@@ -136,7 +136,7 @@ pub async fn execute_at_position(app: &AppHandle, cursor_x: f64, cursor_y: f64, 
     let id = coordinator.supersede();
 
     if text.trim().is_empty() {
-        translation_flow::emit_error(app, "EMPTY_TEXT", "未检测到选中文本");
+        translation_flow::emit_error(app, "EMPTY_TEXT", "未检测到选中文本", &id.full());
         return;
     }
 
@@ -152,7 +152,7 @@ pub async fn execute_at_position(app: &AppHandle, cursor_x: f64, cursor_y: f64, 
     let position = translation_flow::compute_popup_position_dpi(app, cursor_x, cursor_y);
     // 浮窗建不起来（WebView2 异常等）是真实的故障模式，上报给运行时层，
     // 让界面能如实显示，而不是让用户面对一个「什么都没发生」的复制操作
-    let shown = translation_flow::show_popup_loading(app, &position).await;
+    let shown = translation_flow::show_popup_loading(app, &position, &id.full()).await;
 
     // 浮窗已显示才记录基线：被动态的关闭看守要拿「浮窗出现时用户正在用谁」
     // 当参照物（Phase 8b）
@@ -216,13 +216,16 @@ async fn run_translation(app: &AppHandle, request: TranslationRequest) {
         .runtime
         .report_providers_health(state.translator.providers_health().await);
 
+    // 诊断计数（计划第 33 节）：纯记账，不触发状态广播
+    state.runtime.record_translation_result(outcome.is_ok());
+
     match outcome {
         Ok(mut result) => {
             result.truncated = request.truncated;
             result.duration_ms = (now_unix_ms() - start_ms) as u64;
 
             let emitted = coordinator.run_if_current(id, || {
-                translation_flow::emit_result(app, &result);
+                translation_flow::emit_result(app, &result, &id.full());
             });
 
             if !emitted {
@@ -256,7 +259,7 @@ async fn run_translation(app: &AppHandle, request: TranslationRequest) {
             };
 
             if !coordinator.run_if_current(id, || {
-                translation_flow::emit_result(app, &original);
+                translation_flow::emit_result(app, &original, &id.full());
             }) {
                 log_stale_result(id);
             }
@@ -270,7 +273,7 @@ async fn run_translation(app: &AppHandle, request: TranslationRequest) {
             if should_fall_back_to_cache(&e) {
                 if let Some(cached) = lookup_cache(&state, &request).await {
                     if coordinator.run_if_current(id, || {
-                        translation_flow::emit_result(app, &cached);
+                        translation_flow::emit_result(app, &cached, &id.full());
                     }) {
                         tracing::info!(
                             event = "translation_served_from_cache",
@@ -293,7 +296,7 @@ async fn run_translation(app: &AppHandle, request: TranslationRequest) {
             );
 
             if !coordinator.run_if_current(id, || {
-                translation_flow::emit_error(app, e.error_code(), &e.to_string());
+                translation_flow::emit_error(app, e.error_code(), &e.to_string(), &id.full());
             }) {
                 log_stale_result(id);
             }

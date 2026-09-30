@@ -151,6 +151,8 @@ pub struct RuntimeStatus {
     started_at: Instant,
     reported: Mutex<Reported>,
     last_published: Mutex<Option<PublishedKey>>,
+    /// 翻译诊断计数（计划第 33 节）。全原子量，热路径记账不抢锁。
+    counters: crate::runtime::lifecycle::DiagnosticsCounters,
 }
 
 impl RuntimeStatus {
@@ -161,11 +163,38 @@ impl RuntimeStatus {
             started_at: Instant::now(),
             reported: Mutex::new(Reported::default()),
             last_published: Mutex::new(None),
+            counters: Default::default(),
         })
     }
 
     pub fn uptime_ms(&self) -> u64 {
         self.started_at.elapsed().as_millis() as u64
+    }
+
+    /// 记一次翻译结局（coordinator 在每次翻译后调用）。纯计数，不触发广播。
+    pub fn record_translation_result(&self, success: bool) {
+        use std::sync::atomic::Ordering;
+        if success {
+            self.counters
+                .translation_success
+                .fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.counters
+                .translation_failure
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// 本地诊断快照（计划第 33 节）：debug / support 用，不参与状态广播。
+    pub fn diagnostics(&self) -> crate::runtime::lifecycle::RuntimeDiagnostics {
+        use std::sync::atomic::Ordering;
+        crate::runtime::lifecycle::RuntimeDiagnostics {
+            uptime_ms: self.uptime_ms(),
+            clipboard_restart_count: self.clipboard.health_snapshot().worker_restarts as u64,
+            translation_success_count: self.counters.translation_success.load(Ordering::Relaxed),
+            translation_failure_count: self.counters.translation_failure.load(Ordering::Relaxed),
+            fallback_count: 0,
+        }
     }
 
     /// 剪贴板组件：从既有健康快照派生，不重复维护。

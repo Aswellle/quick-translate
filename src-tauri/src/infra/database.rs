@@ -3,10 +3,45 @@
 
 use rusqlite::{Connection, Transaction};
 use std::path::Path;
+use std::sync::Arc;
+use tokio::sync::Mutex as AsyncMutex;
 use tracing::{error, info, warn};
 
 use crate::error::AppError;
 use crate::types::now_unix_ms;
+
+/// 全库共享的连接句柄。HistoryRepository 内部用它序列化所有 DB 操作。
+pub type SharedConnection = Arc<AsyncMutex<Connection>>;
+
+/// 可降级的数据库句柄（计划第 25/26 节：存储故障不得拖垮翻译主链路）。
+///
+/// init 失败时 `conn = None`：进程照常启动，历史/缓存功能降级为
+/// 「读空、写拒绝、配置回内存默认值」，翻译与剪贴板完全不受影响。
+/// 各消费方用 `try_conn()` 取连接，按自己的语义决定怎么降级。
+#[derive(Clone)]
+pub struct Db {
+    conn: Option<SharedConnection>,
+}
+
+impl Db {
+    pub fn available(conn: SharedConnection) -> Self {
+        Self { conn: Some(conn) }
+    }
+
+    pub fn unavailable() -> Self {
+        Self { conn: None }
+    }
+
+    pub fn is_available(&self) -> bool {
+        self.conn.is_some()
+    }
+
+    /// 存储不可用时返回 None。调用方按各自的降级语义处理：
+    /// 历史查询 → 空结果/错误，缓存 → 无命中，配置 → 内存默认值。
+    pub fn try_conn(&self) -> Option<SharedConnection> {
+        self.conn.clone()
+    }
+}
 
 /// 初始化数据库：打开文件 → integrity check → 执行 schema migration
 pub fn init_db(app_data_dir: &Path) -> Result<Connection, AppError> {
@@ -29,11 +64,15 @@ pub fn init_db(app_data_dir: &Path) -> Result<Connection, AppError> {
         }
         Err(e) => {
             warn!("数据库验证失败，尝试恢复: {}", e);
+            // 先抢救配置（含加密凭证密文），再备份重建 —— 顺序不能反。
+            // 计划第 25 节：禁止静默覆盖/清空原 credential。
+            let salvaged = salvage_config_rows(&db_path);
             recover_database(&db_path)?;
 
             let conn = open_connection(&db_path)?;
             run_migrations(&conn)?;
             seed_defaults(&conn)?;
+            restore_salvaged_rows(&conn, &salvaged);
             Ok(conn)
         }
     }
@@ -86,6 +125,72 @@ fn recover_database(db_path: &Path) -> Result<(), AppError> {
     }
 
     Ok(())
+}
+
+/// 从损坏的数据库中尽力抢救 app_config 行（用户配置 + 加密凭证密文）。
+///
+/// SQLite 按页损坏：integrity_check 失败的库仍可能有大片可读页。V2 计划
+/// 第 25 节要求「禁止静默覆盖/清空原 credential」，因此在重建空库**之前**
+/// 以只读模式把配置表捞出来，重建后由调用方原样写回。密文依赖的
+/// per-install 密钥存在独立文件里不受影响，捞回的凭证照常可解密。
+///
+/// 捞不出（文件彻底不可读 / 表损坏）时返回空表 —— 凭证确实丢了，但
+/// 必须留下明确的事件日志，而不是像从前那样无日志地静默重置。
+fn salvage_config_rows(db_path: &Path) -> Vec<(String, String)> {
+    let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY;
+    let conn = match Connection::open_with_flags(db_path, flags) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!(
+                event = "config_salvage_failed",
+                reason = %e,
+                "损坏库无法以只读方式打开，配置与凭证无法抢救"
+            );
+            return Vec::new();
+        }
+    };
+
+    let rows_result: Result<Vec<(String, String)>, rusqlite::Error> = (|| {
+        let mut stmt = conn.prepare("SELECT key, value FROM app_config")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect()
+    })();
+
+    let rows = rows_result.unwrap_or_default();
+
+    if rows.is_empty() {
+        warn!(
+            event = "config_salvage_empty",
+            "损坏库中未捞到任何配置行，凭证将重置（用户需重新填写）"
+        );
+    } else {
+        info!(
+            event = "config_salvaged",
+            count = rows.len(),
+            "已从损坏库抢救配置行（含凭证密文），将在重建后写回"
+        );
+    }
+    rows
+}
+
+/// 把抢救出的配置行写回重建后的库（覆盖默认种子值）。
+fn restore_salvaged_rows(conn: &Connection, rows: &[(String, String)]) {
+    let now = now_unix_ms();
+    for (key, value) in rows {
+        if let Err(e) = conn.execute(
+            "INSERT OR REPLACE INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)",
+            rusqlite::params![key, value, now],
+        ) {
+            warn!(
+                event = "config_restore_failed",
+                key = %key,
+                reason = %e,
+                "抢救出的配置行写回失败"
+            );
+        }
+    }
 }
 
 /// 判断是否为全新安装（schema_version 表不存在或为空）
@@ -371,4 +476,87 @@ CREATE INDEX IF NOT EXISTS idx_translation_cache_last_hit
 fn migrate_v6(tx: &Transaction) -> Result<(), AppError> {
     tx.execute_batch(CACHE_TABLE_SQL)
         .map_err(|e| AppError::DatabaseError(format!("Schema v6 迁移失败: {}", e)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "qt-db-test-{}-{}-{}",
+            tag,
+            std::process::id(),
+            now_unix_ms()
+        ));
+        std::fs::create_dir_all(&dir).expect("建测试目录失败");
+        dir
+    }
+
+    /// 计划第 25 节：文件级损坏（非 SQLite 文件）走完整恢复链 ——
+    /// 抢救降级为空表 + 事件日志，重建后返回可用库，绝不 panic。
+    #[test]
+    fn corrupted_file_rebuilds_with_graceful_salvage() {
+        let dir = temp_dir("corrupt");
+        let db_path = dir.join("quicktranslate.db");
+        std::fs::write(&db_path, vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x42]).unwrap();
+
+        let conn = init_db(&dir).expect("损坏文件必须走恢复链后成功重建");
+
+        let version: i64 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(version),0) FROM schema_version",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(version >= 1, "重建后的库必须完成迁移");
+    }
+
+    /// 抢救逻辑：可读库中的 app_config 行（含凭证密文）能被原样捞出。
+    #[test]
+    fn salvage_reads_config_rows_from_readable_db() {
+        let dir = temp_dir("salvage");
+        {
+            let conn = open_connection(&dir.join("quicktranslate.db")).unwrap();
+            run_migrations(&conn).unwrap();
+            conn.execute(
+                "INSERT INTO app_config (key, value, updated_at) VALUES ('deepl_api_key', 'cipher-xyz', 1)",
+                [],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO app_config (key, value, updated_at) VALUES ('target_lang', '\"fr\"', 2)",
+                [],
+            )
+            .unwrap();
+        } // drop(conn)：释放文件句柄
+
+        let rows = salvage_config_rows(&dir.join("quicktranslate.db"));
+        assert!(rows.contains(&("deepl_api_key".to_string(), "cipher-xyz".to_string())));
+        assert!(rows.contains(&("target_lang".to_string(), "\"fr\"".to_string())));
+    }
+
+    /// 重建后写回：抢救行覆盖默认种子值（凭证不得被种子清空）。
+    #[test]
+    fn restored_rows_override_seed_defaults() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        seed_defaults(&conn).unwrap();
+
+        restore_salvaged_rows(
+            &conn,
+            &[("deepl_api_key".to_string(), "cipher-salvaged".to_string())],
+        );
+
+        let value: String = conn
+            .query_row(
+                "SELECT value FROM app_config WHERE key = 'deepl_api_key'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(value, "cipher-salvaged", "抢救行必须覆盖默认空值");
+    }
 }

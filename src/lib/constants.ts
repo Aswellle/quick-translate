@@ -160,6 +160,15 @@ export const ERROR_MESSAGES: Record<string, string> = {
   HOTKEY_CONFLICT:     "快捷键冲突，请在设置中修改",
   DATABASE_ERROR:      "数据存储错误",
   CONFIG_ERROR:        "配置错误",
+  // 计划第 52 节：error code ≠ user message。以下错误码原先缺席，
+  // 会把 Rust 的 to_string() 原样漏进浮窗/设置面板。
+  STORAGE_UNAVAILABLE: "本地存储暂不可用，历史记录功能已降级",
+  DB_MIGRATION_FAILED: "数据存储需要修复，请重启应用",
+  WINDOW_ERROR:        "窗口操作失败，请重试",
+  CRYPTO_ERROR:        "本地数据解密失败，请重新配置凭证",
+  SERDE_ERROR:         "内部数据异常，请重试",
+  CONNECT_ERROR:       "无法连接翻译服务器，请检查网络",
+  PROTOCOL_ERROR:      "翻译服务响应异常，请稍后重试",
   UNKNOWN:             "翻译失败，请重试",
 };
 

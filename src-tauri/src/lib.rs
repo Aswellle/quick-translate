@@ -95,17 +95,33 @@ pub fn run() {
 
             tracing::info!("App Data 目录: {:?}", app_data_dir);
 
-            let conn = database::init_db(&app_data_dir).expect("数据库初始化失败");
+            // ── 启动韧性分级（计划第 26 节）────────────────────────────────
+            // 数据库初始化失败是 Recoverable 故障：log + 降级 + 继续启动。
+            // 历史与缓存功能降级（读空、写拒绝），翻译主链路完全不受影响。
+            // 真正 Critical 的只有 Tauri runtime 本身起不来。
+            let db = match database::init_db(&app_data_dir) {
+                Ok(conn) => {
+                    let db = database::Db::available(Arc::new(Mutex::new(conn)));
+                    tracing::info!("[setup] 数据库初始化成功");
+                    db
+                }
+                Err(e) => {
+                    tracing::error!(
+                        event = "database_init_failed",
+                        "数据库初始化失败，历史/缓存功能降级，进程继续启动: {}",
+                        e
+                    );
+                    database::Db::unavailable()
+                }
+            };
+            let http_client = Arc::new(HttpClient::new());
 
             // 初始化机器绑定随机密钥（必须在 ConfigService::load 之前，确保
             // 加解密使用新版密钥；旧密钥数据会在 load 中自动迁移）
             crypto::init_per_install_secret(&app_data_dir).expect("机器密钥初始化失败");
 
-            let db = Arc::new(Mutex::new(conn));
-            let http_client = Arc::new(HttpClient::new());
-
             // ── Step 2: 初始化 Domain 层 ─────────────────────────────────────
-            let config = ConfigService::load(db.clone()).expect("配置加载失败");
+            let config = ConfigService::load(db.clone());
             let config = Arc::new(RwLock::new(config));
             // 无外层 Mutex：HistoryRepository 内部已有 Arc<Mutex<Connection>>，双重加锁无益
             let history = Arc::new(HistoryRepository::new(db.clone()));
@@ -198,6 +214,15 @@ pub fn run() {
             });
             monitor.attach_runtime(runtime.clone());
 
+            // 存储降级也要让运行时层知道：托盘/设置显示「部分功能异常」，
+            // 而不是让用户从「历史是空的」自行猜测（计划第 4/26 节）。
+            if !db.is_available() {
+                runtime.report_storage(
+                    crate::runtime::ComponentState::Degraded,
+                    Some("STORAGE_UNAVAILABLE"),
+                );
+            }
+
             // 历史与缓存的写入统一走这一条有界队列 + 单 worker（计划第 24 节）
             let persistence = Arc::new(system::persistence::PersistenceWriter::spawn(
                 history.clone(),
@@ -224,7 +249,16 @@ pub fn run() {
             };
             app.manage(app_state);
 
-            system::tray::init(&app_handle).expect("系统托盘初始化失败");
+            // 托盘初始化失败同样是 Recoverable（计划第 26 节）：
+            // 托盘是入口之一，但翻译、剪贴板、浮窗不依赖它。log + 继续启动，
+            // 用户仍可通过浮窗完成翻译，重启后托盘通常能恢复。
+            if let Err(e) = system::tray::init(&app_handle) {
+                tracing::error!(
+                    event = "tray_init_failed",
+                    "系统托盘初始化失败，功能降级（翻译/浮窗不受影响）: {}",
+                    e
+                );
+            }
 
             // 启动后 5s 后台静默检查更新
             let update_handle = app_handle.clone();
@@ -287,6 +321,7 @@ pub fn run() {
             commands::system::set_clipboard_monitor_enabled,
             commands::system::get_popup_geometry,
             commands::system::get_runtime_status,
+            commands::system::get_runtime_diagnostics,
         ])
         .run(tauri::generate_context!())
         .expect("QuickTranslate 启动失败");

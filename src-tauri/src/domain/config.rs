@@ -2,11 +2,10 @@
 // 配置服务：内存缓存 + SQLite 持久化
 
 use rusqlite::Connection;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 use crate::error::AppError;
 use crate::infra::crypto;
+use crate::infra::database::Db;
 use crate::types::{now_unix_ms, AppConfig};
 
 /// 需要加密存储的 key 集合
@@ -31,16 +30,41 @@ pub const HISTORY_LIMIT_MIN: i64 = 1;
 pub const HISTORY_LIMIT_MAX: i64 = 100_000;
 
 pub struct ConfigService {
-    db: Arc<Mutex<Connection>>,
+    db: Db,
     cache: AppConfig,
 }
 
 impl ConfigService {
-    pub fn load(db: Arc<Mutex<Connection>>) -> Result<Self, AppError> {
-        let conn = db.blocking_lock();
-        let cache = load_config_from_db(&conn)?;
-        drop(conn);
-        Ok(ConfigService { db, cache })
+    /// 加载配置。**从不失败**（计划第 26 节：启动韧性分级）——
+    /// 数据库不可用或读取失败时回退内存默认值并记录事件，
+    /// 进程照常启动；翻译主链路不依赖本函数的成功。
+    pub fn load(db: Db) -> Self {
+        let cache = match db.try_conn() {
+            Some(conn) => {
+                let conn = conn.blocking_lock();
+                match load_config_from_db(&conn) {
+                    Ok(cache) => cache,
+                    Err(e) => {
+                        tracing::error!(
+                            event = "config_load_failed",
+                            "配置读取失败，回退内存默认值: {}",
+                            e
+                        );
+                        AppConfig::default()
+                    }
+                }
+            }
+            None => {
+                // 存储不可用：用默认配置继续启动，翻译仍可用
+                // （只剩 Google 兜底），历史/设置持久化降级。
+                tracing::warn!(
+                    event = "config_loaded_without_storage",
+                    "数据库不可用，配置回退到内存默认值（凭证为空）"
+                );
+                AppConfig::default()
+            }
+        };
+        ConfigService { db, cache }
     }
 
     pub fn get_all(&self) -> AppConfig {
@@ -100,7 +124,8 @@ impl ConfigService {
         };
         let now = now_unix_ms();
         {
-            let conn = self.db.lock().await;
+            let shared = self.db.try_conn().ok_or(AppError::StorageUnavailable)?;
+            let conn = shared.lock().await;
             conn.execute(
                 "INSERT OR REPLACE INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)",
                 rusqlite::params![key, db_value, now],
@@ -114,7 +139,8 @@ impl ConfigService {
     pub async fn set_batch(&mut self, updates: Vec<(String, String)>) -> Result<(), AppError> {
         let now = now_unix_ms();
         {
-            let conn = self.db.lock().await;
+            let shared = self.db.try_conn().ok_or(AppError::StorageUnavailable)?;
+            let conn = shared.lock().await;
             conn.execute_batch("BEGIN")?;
             for (key, value) in &updates {
                 let db_value = if is_encrypted(key) {

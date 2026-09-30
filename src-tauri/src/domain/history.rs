@@ -8,19 +8,27 @@ use tokio::sync::Mutex;
 
 use crate::domain::config::{HISTORY_LIMIT_MAX, HISTORY_LIMIT_MIN};
 use crate::error::AppError;
+use crate::infra::database::Db;
 use crate::types::{HistoryQuery, StatsResult, TranslationRecord};
 pub struct HistoryRepository {
-    db: Arc<Mutex<Connection>>,
+    db: Db,
 }
 
 impl HistoryRepository {
-    pub fn new(db: Arc<Mutex<Connection>>) -> Self {
+    pub fn new(db: Db) -> Self {
         HistoryRepository { db }
+    }
+
+    /// 存储不可用时返回 `StorageUnavailable`：历史是辅助能力（计划第 25 节），
+    /// 这个错误绝不能出现在翻译主链路上。
+    fn conn(&self) -> Result<Arc<Mutex<Connection>>, AppError> {
+        self.db.try_conn().ok_or(AppError::StorageUnavailable)
     }
 
     /// 插入翻译记录（FTS 通过 trigger 自动同步）
     pub async fn insert(&self, record: &TranslationRecord) -> Result<(), AppError> {
-        let conn = self.db.lock().await;
+        let conn = self.conn()?;
+        let conn = conn.lock().await;
         conn.execute(
             r#"INSERT INTO translation_records
                (id, source_text, translated_text, source_lang, target_lang,
@@ -45,7 +53,8 @@ impl HistoryRepository {
 
     /// 查询历史记录（支持 LIKE 子串搜索 + 分页 + starred_only 过滤）
     pub async fn query(&self, params: &HistoryQuery) -> Result<Vec<TranslationRecord>, AppError> {
-        let conn = self.db.lock().await;
+        let conn = self.conn()?;
+        let conn = conn.lock().await;
 
         let starred_only = params.starred_only.unwrap_or(false);
 
@@ -64,7 +73,8 @@ impl HistoryRepository {
 
     /// 获取记录总数（用于前端分页）
     pub async fn count(&self, search: Option<&str>, starred_only: bool) -> Result<i64, AppError> {
-        let conn = self.db.lock().await;
+        let conn = self.conn()?;
+        let conn = conn.lock().await;
 
         let count = if let Some(keyword) = search {
             if keyword.trim().is_empty() {
@@ -81,7 +91,8 @@ impl HistoryRepository {
 
     /// 切换收藏状态，返回新的收藏状态
     pub async fn toggle_star(&self, id: &str) -> Result<bool, AppError> {
-        let conn = self.db.lock().await;
+        let conn = self.conn()?;
+        let conn = conn.lock().await;
 
         conn.execute(
             "UPDATE translation_records SET is_starred = CASE WHEN is_starred = 1 THEN 0 ELSE 1 END WHERE id = ?1",
@@ -102,7 +113,8 @@ impl HistoryRepository {
 
     /// 导出所有历史记录（无分页）
     pub async fn export_all(&self) -> Result<Vec<TranslationRecord>, AppError> {
-        let conn = self.db.lock().await;
+        let conn = self.conn()?;
+        let conn = conn.lock().await;
         let mut stmt = conn
             .prepare(
                 r#"SELECT id, source_text, translated_text, source_lang, target_lang,
@@ -122,7 +134,8 @@ impl HistoryRepository {
 
     /// 获取使用统计
     pub async fn get_stats(&self) -> Result<StatsResult, AppError> {
-        let conn = self.db.lock().await;
+        let conn = self.conn()?;
+        let conn = conn.lock().await;
 
         let total_records: u64 = conn
             .query_row("SELECT COUNT(*) FROM translation_records", [], |row| {
@@ -195,7 +208,8 @@ impl HistoryRepository {
     pub async fn enforce_limit(&self, limit: i64) -> Result<u64, AppError> {
         // 防御性钳制：确保 limit 在有效范围内，避免非正数 limit 删除全部记录
         let limit = limit.clamp(HISTORY_LIMIT_MIN, HISTORY_LIMIT_MAX);
-        let conn = self.db.lock().await;
+        let conn = self.conn()?;
+        let conn = conn.lock().await;
         let total = count_all(&conn, false)?;
 
         if total <= limit {
@@ -222,7 +236,8 @@ impl HistoryRepository {
 
     /// 删除单条历史记录（FTS 通过 trg_records_ad trigger 自动同步）
     pub async fn delete_by_id(&self, id: &str) -> Result<(), AppError> {
-        let conn = self.db.lock().await;
+        let conn = self.conn()?;
+        let conn = conn.lock().await;
         conn.execute("DELETE FROM translation_records WHERE id = ?1", [id])
             .map_err(|e| AppError::DatabaseError(e.to_string()))?;
         Ok(())
@@ -230,7 +245,8 @@ impl HistoryRepository {
 
     /// 清空所有历史记录
     pub async fn clear_all(&self) -> Result<(), AppError> {
-        let conn = self.db.lock().await;
+        let conn = self.conn()?;
+        let conn = conn.lock().await;
         conn.execute("DELETE FROM translation_records", [])
             .map_err(|e| AppError::DatabaseError(e.to_string()))?;
         Ok(())

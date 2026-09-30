@@ -213,6 +213,7 @@ impl TranslationProvider for TencentProvider {
                 }),
                 "RequestLimitExceeded" => Err(AppError::RateLimit {
                     provider: "tencent".into(),
+                    retry_after_secs: None,
                 }),
                 _ => Err(AppError::NetworkError(format!(
                     "腾讯翻译错误: {} {}",

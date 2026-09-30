@@ -54,7 +54,11 @@ pub fn ensure_popup_window(app: &AppHandle) {
 /// 创建或复用浮窗，发送 loading 事件。
 ///
 /// 返回 false 表示浮窗没能显示出来 —— 调用方据此上报浮窗组件的健康状态。
-pub(crate) async fn show_popup_loading(app: &AppHandle, position: &PopupPosition) -> bool {
+pub(crate) async fn show_popup_loading(
+    app: &AppHandle,
+    position: &PopupPosition,
+    request_id: &str,
+) -> bool {
     if let Some(window) = app.get_webview_window(POPUP_LABEL) {
         tracing::info!("[show_popup_loading] 找到 popup，设置位置={:?}", position);
         let _ = window.set_position(tauri::LogicalPosition::new(position.x, position.y));
@@ -96,28 +100,38 @@ pub(crate) async fn show_popup_loading(app: &AppHandle, position: &PopupPosition
         "translation-loading",
         TranslationLoadingPayload {
             position: position.clone(),
+            request_id: request_id.to_string(),
         },
+    );
+    // 计划第 32 节：被动显示（未抢焦点）也要可观测 —— 排查「浮窗没弹出来」
+    // 时，这条事件与 popup_watch 的关闭事件是同一条时间线的两端。
+    tracing::info!(
+        event = "popup_show_passive",
+        request_id = %request_id,
+        "[popup] 浮窗以被动态显示"
     );
     true
 }
 
 /// 下发翻译结果。**调用方必须已通过 coordinator 的代际闸门** ——
 /// 本函数不做任何「该不该显示」的判断。
-pub(crate) fn emit_result(app: &AppHandle, result: &TranslationResult) {
+pub(crate) fn emit_result(app: &AppHandle, result: &TranslationResult, request_id: &str) {
     let _ = app.emit(
         "translation-result",
         TranslationResultPayload {
             result: result.clone(),
+            request_id: request_id.to_string(),
         },
     );
 }
 
-pub(crate) fn emit_error(app: &AppHandle, code: &str, message: &str) {
+pub(crate) fn emit_error(app: &AppHandle, code: &str, message: &str, request_id: &str) {
     let _ = app.emit(
         "translation-error",
         TranslationErrorPayload {
             code: code.to_string(),
             message: message.to_string(),
+            request_id: request_id.to_string(),
         },
     );
 }

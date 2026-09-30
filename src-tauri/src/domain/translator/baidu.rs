@@ -135,9 +135,11 @@ impl TranslationProvider for BaiduProvider {
                 }),
                 "54003" | "54004" => Err(AppError::RateLimit {
                     provider: "baidu".into(),
+                    retry_after_secs: None,
                 }),
                 "54005" => Err(AppError::RateLimit {
                     provider: "baidu".into(),
+                    retry_after_secs: None,
                 }),
                 _ => Err(AppError::NetworkError(format!(
                     "百度翻译错误 {}: {}",

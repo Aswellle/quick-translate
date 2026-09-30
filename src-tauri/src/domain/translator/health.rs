@@ -200,6 +200,33 @@ impl ProviderHealth {
         }
     }
 
+    /// 一次失败，附带服务端指示的等待时长（HTTP 429 的 Retry-After，计划第 8 节）。
+    ///
+    /// 冷却取「常规冷却曲线」与 `retry_after` 的较大者，上限 `LONG_COOLDOWN` ——
+    /// 服务端再怎么让等，也不该把一个源封死半天。熔断未打开时（还没攒够阈值）
+    /// 只记账，不动冷却。
+    pub fn record_failure_with_wait(
+        &mut self,
+        class: ErrorClass,
+        retry_after: Option<std::time::Duration>,
+        now: Instant,
+        rng: &mut impl Rng,
+    ) {
+        self.record_failure(class, now, rng);
+        if let Some(wait) = retry_after {
+            let wait = wait.min(LONG_COOLDOWN);
+            if self.state == ProviderHealthState::Open && self.cooldown < wait {
+                tracing::info!(
+                    event = "provider_cooldown_extended_by_retry_after",
+                    retry_after_ms = wait.as_millis() as u64,
+                    "[provider] 冷却按 Retry-After 延长至 {:?}",
+                    wait
+                );
+                self.cooldown = wait;
+            }
+        }
+    }
+
     /// 凭证被替换后调用：整个健康状态归零。
     ///
     /// 没有这一步的话，用户把 Key 改对了仍然要在冷却里干等 10 分钟 ——

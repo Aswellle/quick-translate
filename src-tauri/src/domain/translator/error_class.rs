@@ -77,7 +77,10 @@ impl ErrorClass {
 pub fn classify(err: &AppError) -> ErrorClass {
     match err {
         // 超时与传输层失败：同一 provider 重试有意义
-        AppError::Timeout { .. } | AppError::NetworkError(_) => ErrorClass::Transient,
+        AppError::Timeout { .. }
+        | AppError::NetworkError(_)
+        | AppError::ConnectError(_)
+        | AppError::ProtocolError(_) => ErrorClass::Transient,
 
         AppError::RateLimit { .. } => ErrorClass::RateLimit,
         AppError::AuthError { .. } => ErrorClass::Auth,
@@ -105,6 +108,7 @@ pub fn classify(err: &AppError) -> ErrorClass {
         AppError::ClipboardError(_)
         | AppError::DatabaseError(_)
         | AppError::DatabaseMigration { .. }
+        | AppError::StorageUnavailable
         | AppError::WindowError(_)
         | AppError::CryptoError(_)
         | AppError::SerdeError(_) => ErrorClass::Permanent,
@@ -137,7 +141,8 @@ mod tests {
     fn rate_limit_is_its_own_class() {
         assert_eq!(
             cls(AppError::RateLimit {
-                provider: "deepl".into()
+                provider: "deepl".into(),
+                retry_after_secs: None,
             }),
             ErrorClass::RateLimit
         );
