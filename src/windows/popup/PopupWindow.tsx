@@ -23,6 +23,7 @@ import { isKeyConsumingTarget, isDragBlockingTarget } from "@/lib/domUtils";
 import type {
   TranslationResultPayload,
   TranslationErrorPayload,
+  TranslationLoadingPayload,
 } from "@/lib/types";
 
 // 浮窗尺寸契约由后端 popup_geometry 下发（唯一来源，C3）。
@@ -40,11 +41,16 @@ const FALLBACK_GEOMETRY: PopupGeometry = {
 };
 
 export function PopupWindow() {
-  const { status, result, errorCode, errorMessage, setLoading, setResult, setError } =
+  const { status, result, errorCode, errorMessage, requestId, setLoading, setResult, setError } =
     useTranslationStore();
 
   // popup 容器的 ref，用于判断点击是否在窗体内部
   const popupRef = useRef<HTMLDivElement>(null);
+
+  // 当前请求 id 的同步镜像：后端 coordinator 是 latest-wins 的第一道闸门
+  // （迟到的结果根本不会被 emit），这里是前端的第二道防线（计划第 6 节）——
+  // 事件投递顺序被打乱时，旧结果/旧错误照样会被这道校验拦下。
+  const requestIdRef = useRef<string | null>(null);
 
   // 拖拽进行中标志：阻止 onFocusChanged 在 startDragging 期间误关弹窗
   const isDragging = useRef(false);
@@ -99,25 +105,38 @@ export function PopupWindow() {
 
   // ── 监听翻译 Loading 事件 ──
   // 新一轮翻译开始：复位折叠态（否则新结果会被压在紧凑条里看不见）
-  const handleLoading = useCallback(() => {
-    setLoading();
-    setCollapsed(false);
-    resizePopup(width, geometry.height_loading).catch(console.error);
-  }, [setLoading, width, geometry.height_loading]);
-  useTauriEvent<unknown>(EVENTS.TRANSLATION_LOADING, handleLoading);
+  const handleLoading = useCallback(
+    (event: { payload: TranslationLoadingPayload }) => {
+      requestIdRef.current = event.payload.request_id;
+      setLoading(event.payload.request_id);
+      setCollapsed(false);
+      resizePopup(width, geometry.height_loading).catch(console.error);
+    },
+    [setLoading, width, geometry.height_loading]
+  );
+  useTauriEvent<TranslationLoadingPayload>(EVENTS.TRANSLATION_LOADING, handleLoading);
 
-  // ── 监听翻译结果事件 ──
+  // ── 监听翻译结果事件（latest-wins 前端防线）──
   const handleResult = useCallback(
     (event: { payload: TranslationResultPayload }) => {
+      if (event.payload.request_id !== requestIdRef.current) {
+        // 迟到的旧结果：新请求早已接管 UI，直接丢弃
+        console.info("[PopupWindow] 丢弃迟到的翻译结果（request_id 不匹配）");
+        return;
+      }
       setResult(event.payload.result);
     },
     [setResult]
   );
   useTauriEvent<TranslationResultPayload>(EVENTS.TRANSLATION_RESULT, handleResult);
 
-  // ── 监听翻译错误事件 ──
+  // ── 监听翻译错误事件（同样过 latest-wins 校验）──
   const handleError = useCallback(
     (event: { payload: TranslationErrorPayload }) => {
+      if (event.payload.request_id !== requestIdRef.current) {
+        console.info("[PopupWindow] 丢弃迟到的翻译错误（request_id 不匹配）");
+        return;
+      }
       setError(event.payload.code, event.payload.message);
     },
     [setError]

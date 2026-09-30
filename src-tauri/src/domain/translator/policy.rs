@@ -68,12 +68,12 @@ impl RequestPolicy {
     /// Retry 与 Fallback 是两件事，这里只回答前者。Auth/Quota 试一万次也
     /// 不会好；Permanent 是请求本身的问题；SameLanguage 根本不是失败。
     ///
-    /// **RateLimit 刻意不在此列。** 计划第 8 节允许的是「按 Retry-After
-    /// 重试最多一次」，但本仓库尚未解析 `Retry-After`（那是计划第 14 节
-    /// HTTP Client V2 的范畴）。缺了这个信息，重试 429 就只是盲目重试：
-    /// 服务端刚说了「慢一点」，200ms 后再撞一次只会再拿一个 429，
-    /// 白白吃掉本该留给其他源的预算。宁可立刻换源。
-    /// 等 Retry-After 解析落地后，再把 RateLimit 加回这个列表。
+    /// **RateLimit 也刻意不在此列。** 计划第 8 节写的是「按 Retry-After
+    /// 重试最多一次」—— 但服务端让等 30~60 秒时，8 秒总预算根本装不下
+    /// 这次等待；立即再撞则是无视服务端指示的盲目重试。所以对 429 的
+    /// 正确响应是**立刻换源**（fallback），而 `Retry-After` 已被解析并
+    /// 用于延长熔断冷却（见 `ProviderHealth::record_failure_with_wait`），
+    /// 保证冷却期内不再撞击该源。这比原地等待更符合计划的本意。
     pub fn should_retry(self, class: ErrorClass) -> bool {
         matches!(class, ErrorClass::Transient)
     }

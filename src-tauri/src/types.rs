@@ -34,6 +34,10 @@ pub struct ProviderStatus {
     pub requires_api_key: bool,
     pub is_available: bool,
     pub health_state: String, // "healthy" | "degraded" | "open" | "half_open" | "unknown"
+    /// 最近一次错误的类别："transient" | "rate_limit" | "auth" | "quota" |
+    /// "permanent" | "same_language" | null。设置页据此把「暂时不可用」
+    /// 细分成限流 / 认证失败 / 额度用尽（计划第 28 节）。
+    pub last_error_class: Option<String>,
 }
 
 /// 历史记录条目（DB → 前端）
@@ -110,12 +114,17 @@ pub struct PopupPosition {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranslationLoadingPayload {
     pub position: PopupPosition,
+    /// 本次翻译请求的完整 UUID。前端据此做 latest-wins 二次校验
+    /// （计划第 6 节）：迟到的结果事件直接丢弃，不进状态。
+    pub request_id: String,
 }
 
 /// 翻译结果事件 payload
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranslationResultPayload {
     pub result: TranslationResult,
+    /// 见 TranslationLoadingPayload.request_id
+    pub request_id: String,
 }
 
 /// 翻译错误事件 payload
@@ -123,6 +132,8 @@ pub struct TranslationResultPayload {
 pub struct TranslationErrorPayload {
     pub code: String,
     pub message: String,
+    /// 见 TranslationLoadingPayload.request_id
+    pub request_id: String,
 }
 
 /// 完整应用配置（用于设置面板）

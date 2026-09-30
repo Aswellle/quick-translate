@@ -9,12 +9,15 @@ import {
   getAutostart,
   getStats,
   openUrl,
+  getProviderStatus,
+  onRuntimeStatusChanged,
   setClipboardMonitorEnabled as invokeSetClipboardMonitor,
   type AppConfig,
   type StatsResult,
+  type ProviderStatus,
 } from "@/lib/commands";
 import { toast } from "@/components/ToastManager";
-import { SUPPORTED_LANGUAGES, PROVIDERS } from "@/lib/constants";
+import { SUPPORTED_LANGUAGES, PROVIDERS, ERROR_MESSAGES } from "@/lib/constants";
 import { useConfigStore } from "@/stores/configStore";
 
 // 需要特殊处理的凭证字段：getConfig() 返回 masked 值，不能直接写回
@@ -48,6 +51,37 @@ export function SettingsWindow() {
   // 标记哪些凭证字段在后端已配置（getConfig 返回 masked 非空值）
   // 用于显示"已配置"状态及决定 Save 时是否包含该字段
   const [maskedCredentials, setMaskedCredentials] = useState<Record<string, boolean>>({});
+  // 翻译源运行时状态（计划第 28 节）：由后端 Runtime 层给出，前端不自行推测。
+  // 挂载时拉一次；运行时状态变化（后端有指纹去重，低频）时刷新。
+  const [providerStatus, setProviderStatus] = useState<Record<string, ProviderStatus>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    const refresh = () => {
+      getProviderStatus()
+        .then((list) => {
+          if (cancelled) return;
+          const map: Record<string, ProviderStatus> = {};
+          for (const p of list) map[p.id] = p;
+          setProviderStatus(map);
+        })
+        .catch(() => {
+          /* 状态拉取失败不影响设置面板其它功能 */
+        });
+    };
+    refresh();
+    let unlisten: (() => void) | undefined;
+    onRuntimeStatusChanged(() => refresh())
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
 
   // 加载配置
   useEffect(() => {
@@ -123,7 +157,13 @@ export function SettingsWindow() {
       setTimeout(() => setSaveStatus("idle"), 2500);
     } catch (err: unknown) {
       setSaveStatus("err");
-      const msg = err instanceof Error ? err.message : JSON.stringify(err);
+      // 计划第 52 节：错误码 ≠ 用户文案。后端 AppError 序列化为 {code, message}，
+      // 优先查 ERROR_MESSAGES 映射表，查不到才退回原始 message。
+      const e = err as { code?: string; message?: string };
+      const msg =
+        (e?.code && ERROR_MESSAGES[e.code]) ||
+        e?.message ||
+        (err instanceof Error ? err.message : String(err));
       toast("保存失败：" + msg, "error");
     } finally {
       setSaving(false);
@@ -211,6 +251,7 @@ export function SettingsWindow() {
             onTest={handleTest}
             testingId={testingId}
             testResults={testResults}
+            providerStatus={providerStatus}
             maskedCredentials={maskedCredentials}
           />
         )}
@@ -399,6 +440,7 @@ function ProviderTab({
   testingId,
   testResults,
   maskedCredentials,
+  providerStatus,
 }: {
   draft: AppConfig;
   onChange: <K extends keyof AppConfig>(key: K, value: AppConfig[K]) => void;
@@ -406,6 +448,7 @@ function ProviderTab({
   testingId: string | null;
   testResults: Record<string, boolean | null>;
   maskedCredentials: Record<string, boolean>;
+  providerStatus: Record<string, ProviderStatus>;
 }) {
   return (
     <div className="space-y-3">
@@ -440,6 +483,7 @@ function ProviderTab({
           isTesting={testingId === provider.id}
           testResult={testResults[provider.id]}
           maskedCredentials={maskedCredentials}
+          runtimeStatus={providerStatus[provider.id]}
         />
       ))}
 
@@ -465,6 +509,49 @@ function ProviderTab({
   );
 }
 
+/**
+ * 运行时状态的展示词表（计划第 28/51 节）。
+ * 用户不需要看到开发者的 Open/HalfOpen 术语 ——
+ * 「暂时不可用」「认证失败」这类话配上「将自动恢复」就够了。
+ */
+function providerStateLabel(
+  status: ProviderStatus | undefined,
+  hasCredentials: boolean
+): { text: string; tone: "ok" | "warn" | "err" | "muted" } | null {
+  if (!status || !hasCredentials) {
+    return hasCredentials ? null : { text: "未配置", tone: "muted" };
+  }
+  switch (status.health_state) {
+    case "healthy":
+      return { text: "正常", tone: "ok" };
+    case "half_open":
+      return { text: "正在恢复…", tone: "warn" };
+    case "open":
+    case "degraded": {
+      // 用最近一次错误的类别细分「暂时不可用」的原因
+      switch (status.last_error_class) {
+        case "auth":
+          return { text: "认证失败，请检查凭证", tone: "err" };
+        case "quota":
+          return { text: "额度已用尽", tone: "err" };
+        case "rate_limit":
+          return { text: "请求过于频繁，稍后自动恢复", tone: "warn" };
+        default:
+          return { text: "暂时不可用，将自动恢复", tone: "warn" };
+      }
+    }
+    default:
+      return null;
+  }
+}
+
+const STATE_TONE_CLASS: Record<string, string> = {
+  ok: "text-green-500",
+  warn: "text-amber-500",
+  err: "text-red-500",
+  muted: "text-[var(--text-tertiary)]",
+};
+
 function ProviderCard({
   provider,
   draft,
@@ -473,6 +560,7 @@ function ProviderCard({
   isTesting,
   testResult,
   maskedCredentials,
+  runtimeStatus,
 }: {
   provider: (typeof PROVIDERS)[number];
   draft: AppConfig;
@@ -481,6 +569,7 @@ function ProviderCard({
   isTesting: boolean;
   testResult?: boolean | null;
   maskedCredentials: Record<string, boolean>;
+  runtimeStatus?: ProviderStatus;
 }) {
   const [expanded, setExpanded] = useState(false);
   // 已配置 = 后端有记录（masked 非空）或本次输入框有值
@@ -505,9 +594,16 @@ function ProviderCard({
           >
             {provider.badge}
           </span>
-          {hasCredentials && testResult === undefined && (
-            <span className="text-[10px] text-green-500">已配置</span>
-          )}
+          {testResult === undefined &&
+            (() => {
+              const label = providerStateLabel(runtimeStatus, hasCredentials);
+              if (!label) return null;
+              return (
+                <span className={["text-[10px]", STATE_TONE_CLASS[label.tone]].join(" ")}>
+                  {label.text}
+                </span>
+              );
+            })()}
           {testResult === true && (
             <span className="text-[10px] text-green-500 flex items-center gap-0.5">
               <svg className="w-3 h-3" viewBox="0 0 16 16" fill="none">

@@ -77,6 +77,36 @@ fn absorb_current(backend: &mut dyn ClipboardBackend) -> (Option<String>, Option
     (text, seq)
 }
 
+/// 「这次读取是不是一段新内容」的判定（计划第 54 节：核心算法纯函数化）。
+///
+/// 抽成纯函数而不留在轮询循环里，是因为 34.4 那条「同文本重新复制仍要触发」
+/// 的判定依赖序列号对比，在连续轮询的时序下无法确定性地驱动 —— 纯函数
+/// 不用启动任何线程就能把每条分支都测到。
+///
+/// - 文本变化 → 新内容；
+/// - 文本相同但序列号变化 → 用户重新复制了同一段文本，同样是新内容
+///   （这是关闭浮窗后重复复制仍能触发翻译的依据，F8 / 计划 34.4）；
+/// - 序列号不可用（非 Windows）：不做「重新复制」推断，避免恒真/恒假误判。
+fn is_new_content(
+    last_text: Option<&str>,
+    last_seq: Option<u32>,
+    current_normalized: &str,
+    current_seq: Option<u32>,
+) -> bool {
+    match last_text {
+        Some(prev) => {
+            let prev_norm = super::normalize_text(prev);
+            let text_changed = current_normalized != prev_norm;
+            let recopied = match (current_seq, last_seq) {
+                (Some(cur), Some(last)) => cur != last,
+                _ => false,
+            };
+            text_changed || recopied
+        }
+        None => true,
+    }
+}
+
 /// worker 主循环。除非收到停机请求或命中致命错误，否则永不返回。
 pub fn run_worker(
     mut backend: Box<dyn ClipboardBackend>,
@@ -185,10 +215,13 @@ pub fn run_worker(
                     return WorkerExit::Fatal(e);
                 }
 
-                let backoff = transient_backoff(
-                    failures,
-                    timing.transient_backoff_initial,
-                    timing.transient_backoff_max,
+                let backoff = crate::util::backoff::with_jitter(
+                    transient_backoff(
+                        failures,
+                        timing.transient_backoff_initial,
+                        timing.transient_backoff_max,
+                    ),
+                    &mut rand::thread_rng(),
                 );
                 tracing::warn!(
                     event = "clipboard_worker_failed",
@@ -227,27 +260,14 @@ pub fn run_worker(
             continue;
         }
 
-        // 检测是否是新内容。
-        // 文本变化 → 新内容；文本相同但剪贴板序列号变化 → 用户重新复制了同一段文本，
-        // 同样视为新内容（这是关闭浮窗后重复复制仍能触发翻译的依据）。
-        //
-        // 序列号不可用时（非 Windows）只能靠文本比较，「重新复制同一段文本」
-        // 无法被识别 —— 但此时 hide_popup/resume 分支已清空 last_text，重复复制
-        // 仍会因 last_text == None 而触发，承诺得以保住（F8）。
+        // 检测是否是新内容（纯函数，见 is_new_content 的文档）。
         let current_seq = backend.seq();
-        let is_new = match &last_text {
-            Some(prev) => {
-                let prev_norm = super::normalize_text(prev);
-                let text_changed = current_normalized != prev_norm;
-                let recopied = match (current_seq, last_seq) {
-                    (Some(cur), Some(last)) => cur != last,
-                    // 序列号不可用：不做「重新复制」推断，避免恒真/恒假的误判
-                    _ => false,
-                };
-                text_changed || recopied
-            }
-            None => true,
-        };
+        let is_new = is_new_content(
+            last_text.as_deref(),
+            last_seq,
+            &current_normalized,
+            current_seq,
+        );
 
         if is_new {
             last_text = Some(current);
@@ -470,6 +490,67 @@ mod tests {
         let backend = MockClipboardBackend::new(vec![Step::Text("stable")]);
         let (emitted, _) = run(backend, 1);
         assert_eq!(emitted, vec!["stable"]);
+    }
+
+    // ── 计划 34.3：pending 期间新复制到达 → 只触发最新内容（latest-wins）──
+
+    /// 防抖窗口内用户连续复制 A、B：A 尚未触发就被 B 覆盖，只有 B 触发翻译。
+    /// 这是「新复制内容优先；旧请求绝不能覆盖新结果」在剪贴板层的直接体现。
+    #[test]
+    fn pending_is_replaced_by_newer_copy_latest_wins() {
+        let backend = MockClipboardBackend::new(vec![Step::Text("copy A"), Step::Text("copy B")]);
+        let (emitted, _) = run(backend, 1);
+        assert_eq!(
+            emitted,
+            vec!["copy B"],
+            "防抖窗口内的新复制必须取代未触发的旧 pending"
+        );
+    }
+
+    // ── 计划 34.4：重复复制相同文本仍要触发（序列号判定，纯函数）──────────
+
+    /// 文本不变但剪贴板序列号变化 = 用户真的重新复制了一次，必须视为新内容。
+    #[test]
+    fn recopied_same_text_is_new_via_seq() {
+        assert!(
+            is_new_content(Some("same text"), Some(1), "same text", Some(2)),
+            "同文本 + 序列号变化必须判为新内容（关闭浮窗后重复复制的依据）"
+        );
+        assert!(
+            !is_new_content(Some("same text"), Some(2), "same text", Some(2)),
+            "同文本 + 同序列号 = 原地未动，不得再次触发"
+        );
+    }
+
+    /// 序列号不可用的平台（非 Windows）没有「重新复制」推断能力：
+    /// 文本不变就不算新内容，不能靠恒真误判刷爆翻译。
+    #[test]
+    fn same_text_without_seq_is_not_new() {
+        assert!(
+            !is_new_content(Some("stable"), None, "stable", None),
+            "序列号不可用时同文本不得反复触发"
+        );
+    }
+
+    /// 文本变化始终是新内容 —— 与序列号无关
+    #[test]
+    fn changed_text_is_always_new() {
+        assert!(is_new_content(Some("a"), Some(1), "b", Some(1)));
+        assert!(is_new_content(Some("a"), None, "b", None));
+    }
+
+    /// 归一化在判定内完成：CRLF 与 LF 视为同一段文本
+    /// （契约：`current_normalized` 必须是调用方先 normalize 过的值）
+    #[test]
+    fn newline_normalization_applies_to_comparison() {
+        let raw = "line1\r\nline2";
+        let current_normalized = crate::system::clipboard::normalize_text(raw);
+        assert!(!is_new_content(
+            Some(raw),
+            Some(1),
+            &current_normalized,
+            Some(1)
+        ));
     }
 
     #[test]

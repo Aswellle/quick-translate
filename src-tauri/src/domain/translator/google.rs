@@ -125,6 +125,7 @@ impl GoogleProvider {
             }
             429 => Err(AppError::RateLimit {
                 provider: "google".into(),
+                retry_after_secs: super::parse_retry_after_secs(response.headers()),
             }),
             code => Err(super::http_status_error("google", code, String::new())),
         }

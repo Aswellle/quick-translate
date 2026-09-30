@@ -22,6 +22,12 @@ impl RequestId {
     pub fn new() -> Self {
         Self(Uuid::new_v4())
     }
+
+    /// 完整 UUID（发给前端的 payload 用它做 latest-wins 校验）。
+    /// Display 截断的 8 位用于日志；前端防线要的是零碰撞概率，给全量。
+    pub fn full(&self) -> String {
+        self.0.to_string()
+    }
 }
 
 impl Default for RequestId {

@@ -145,9 +145,11 @@ impl TranslationProvider for YoudaoProvider {
                 }),
                 "207" => Err(AppError::RateLimit {
                     provider: "youdao".into(),
+                    retry_after_secs: None,
                 }),
                 "411" | "412" => Err(AppError::RateLimit {
                     provider: "youdao".into(),
+                    retry_after_secs: None,
                 }),
                 _ => Err(AppError::NetworkError(format!(
                     "有道翻译错误 {}",

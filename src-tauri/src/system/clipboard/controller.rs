@@ -163,6 +163,16 @@ impl MonitorController {
         }
     }
 
+    /// 请求 worker 在下一轮循环吸收当前剪贴板内容（不触发翻译）。
+    ///
+    /// 两个触发方，语义相同：
+    /// - `resume()`：暂停不是用户动作，暂停期间复制的旧内容恢复后不该弹窗；
+    /// - supervisor 重建 worker：句柄重建也不是用户动作，剪贴板里躺着的
+    ///   旧内容不该因为重启而被当成「新复制」重新弹窗（计划第 5 节）。
+    pub fn request_absorb(&self) {
+        self.absorb_pending.store(true, Ordering::SeqCst);
+    }
+
     /// worker 调用：取出并清除「恢复后吸收」请求。
     pub(crate) fn take_absorb_request(&self) -> bool {
         self.absorb_pending.swap(false, Ordering::SeqCst)

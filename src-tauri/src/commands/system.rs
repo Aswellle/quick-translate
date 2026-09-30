@@ -46,7 +46,8 @@ pub async fn hide_popup(app: AppHandle) -> Result<(), AppError> {
 /// 误判成「用户切走了」而立刻关掉。
 #[tauri::command]
 pub async fn activate_popup(app: AppHandle) -> Result<(), AppError> {
-    app.state::<crate::state::AppState>().popup_watch.stop();
+    let popup_watch = app.state::<crate::state::AppState>().popup_watch.clone();
+    popup_watch.stop();
 
     let Some(window) = app.get_webview_window("popup") else {
         return Ok(());
@@ -55,9 +56,20 @@ pub async fn activate_popup(app: AppHandle) -> Result<(), AppError> {
     window
         .set_focusable(true)
         .map_err(|e: tauri::Error| AppError::WindowError(e.to_string()))?;
-    window
-        .set_focus()
-        .map_err(|e: tauri::Error| AppError::WindowError(e.to_string()))?;
+
+    if let Err(e) = window.set_focus() {
+        // fail-safe（计划第 20 节）：聚焦失败时窗口已可激活却拿不到焦点，
+        // blur 关闭路径失效，看守又刚被停掉 —— 浮窗就只剩红叉可关了。
+        // 把看守重新拉起（基线 = 当前前台窗口），用户切走时照样自动关闭，
+        // 不给「Popup 永远不消失」留门。
+        tracing::warn!(
+            event = "popup_activate_focus_failed",
+            "set_focus 失败，恢复被动态看守兜底: {}",
+            e
+        );
+        popup_watch.begin();
+        return Err(AppError::WindowError(e.to_string()));
+    }
 
     tracing::info!(
         event = "popup_activated_by_user",
@@ -100,6 +112,16 @@ pub fn get_popup_geometry() -> crate::system::popup_geometry::PopupGeometry {
 /// 界面用它回答「应用现在怎么样」，而不是从各种失败迹象自行推测。
 /// 需要事件时监听 `runtime-status-changed` —— 那个事件只在状态**变化**时
 /// 发出，不会按固定频率推送。
+/// 本地诊断快照（计划第 33 节）：debug / support 用，不参与状态广播，不上传。
+#[tauri::command]
+pub async fn get_runtime_diagnostics(
+    state: tauri::State<'_, crate::state::AppState>,
+) -> Result<crate::runtime::lifecycle::RuntimeDiagnostics, AppError> {
+    let mut d = state.runtime.diagnostics();
+    d.fallback_count = state.translator.fallback_count();
+    Ok(d)
+}
+
 #[tauri::command]
 pub async fn get_runtime_status(
     app: AppHandle,

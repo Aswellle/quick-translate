@@ -50,25 +50,38 @@ pub async fn translate_text(
         .await?;
     result.truncated = truncated;
 
-    // 异步写入历史记录（不阻塞返回）
-    let history = state.history.clone();
-    let record = TranslationRecord::from_result(&result, &text, &target);
-    let limit = state
-        .config
-        .read()
-        .await
-        .get("history_limit")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(200i64);
+    // 与剪贴板路径一致：翻译源健康结论交给运行时层（计划第 4 节）
+    state
+        .runtime
+        .report_providers_health(state.translator.providers_health().await);
 
-    tauri::async_runtime::spawn(async move {
-        if let Err(e) = history.insert(&record).await {
-            tracing::error!("历史记录写入失败: {}", e);
-        }
-        if let Err(e) = history.enforce_limit(limit).await {
-            tracing::error!("历史清理失败: {}", e);
-        }
-    });
+    // 落盘走有界队列 + 单 worker（计划第 24/41 节），与剪贴板路径同一条管道。
+    // 此前这里是「每请求 spawn 一个游离历史写任务」—— 计划第 41 节明确禁止的
+    // 唯一残留形态。入队失败只丢一次历史/缓存写入，不影响返回给前端的结果。
+    let record = TranslationRecord::from_result(&result, &text, &target);
+    let job = crate::system::persistence::PersistJob {
+        history_limit: state
+            .config
+            .read()
+            .await
+            .get("history_limit")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(200i64),
+        record,
+        cache_entry: crate::system::persistence::OwnedCacheEntry {
+            source_text: text_to_translate.clone(),
+            target_lang: target.clone(),
+            translated_text: result.translated_text.clone(),
+            source_lang: result.detected_source_lang.clone(),
+            provider: result.provider.clone(),
+        },
+    };
+    if !state.persistence.enqueue(job) {
+        tracing::warn!(
+            event = "persistence_queue_full",
+            "[translate_text] 落盘队列已满，本次历史与缓存写入被丢弃（翻译结果不受影响）"
+        );
+    }
 
     Ok(result)
 }
@@ -107,12 +120,18 @@ pub async fn get_provider_status(
             .await
             .map(|s| format!("{:?}", s))
             .unwrap_or_else(|| "unknown".to_string());
+        let last_error_class = state
+            .translator
+            .provider_last_error_class(&info.id)
+            .await
+            .map(|c| format!("{:?}", c).to_lowercase());
         result.push(ProviderStatus {
             id: info.id,
             name: info.name,
             requires_api_key: info.requires_api_key,
             is_available: info.is_available,
             health_state,
+            last_error_class,
         });
     }
     Ok(result)

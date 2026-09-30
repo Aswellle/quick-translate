@@ -8,7 +8,31 @@
 // fallback_count / clipboard_restart_count …）。它们属于诊断面，
 // 计划把它排在 Phase 13，此处不预先造出无人消费的字段。
 
+use std::sync::atomic::AtomicU64;
 use std::time::Instant;
+
+use serde::Serialize;
+
+/// 翻译诊断计数器（计划第 33 节）。仅用于本地 debug / support / 诊断页，
+/// 不上传（§0.2 非目标）。刻意**不进** RuntimeStatusSnapshot：那边有指纹
+/// 去重的状态广播，计数器每翻译一次都在变，混进去会把
+/// `runtime-status-changed` 变成刷屏事件。
+#[derive(Debug, Default, Serialize)]
+pub struct RuntimeDiagnostics {
+    pub uptime_ms: u64,
+    pub clipboard_restart_count: u64,
+    pub translation_success_count: u64,
+    pub translation_failure_count: u64,
+    pub fallback_count: u64,
+}
+
+/// 进程级计数器本体。挂在 RuntimeStatus 上（全局唯一句柄），
+/// 全原子量 —— 记账处在翻译热路径上，不能抢锁。
+#[derive(Debug, Default)]
+pub struct DiagnosticsCounters {
+    pub translation_success: AtomicU64,
+    pub translation_failure: AtomicU64,
+}
 
 /// 进程生命周期起点。
 ///

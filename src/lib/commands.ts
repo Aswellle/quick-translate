@@ -86,6 +86,53 @@ export async function listProviders(): Promise<ProviderInfo[]> {
   return invoke("list_providers");
 }
 
+/** 翻译源运行时状态（计划第 28/50 节：设置页据此显示七态状态词表） */
+export interface ProviderStatus {
+  id: string;
+  name: string;
+  requires_api_key: boolean;
+  is_available: boolean;
+  /** "healthy" | "degraded" | "open" | "half_open" | "unknown" */
+  health_state: string;
+  /** 最近一次错误类别："transient" | "rate_limit" | "auth" | "quota" | "permanent" | "same_language" | null */
+  last_error_class: string | null;
+}
+
+export async function getProviderStatus(): Promise<ProviderStatus[]> {
+  return invoke("get_provider_status");
+}
+
+/** 运行时状态快照（计划第 4 节：UI 读它，而不是自己推测） */
+export interface RuntimeComponentHealth {
+  state: string; // "Healthy" | "Degraded" | "Recovering" | "Disabled" ...
+  last_error_code: string | null;
+  last_error_at_ms: number | null;
+  last_recovery_at_ms: number | null;
+}
+
+export interface RuntimeStatusSnapshot {
+  overall: string; // "Healthy" | "Degraded" | "Recovering"
+  uptime_ms: number;
+  clipboard: RuntimeComponentHealth;
+  network: RuntimeComponentHealth;
+  popup: RuntimeComponentHealth;
+  storage: RuntimeComponentHealth;
+}
+
+export async function getRuntimeStatus(): Promise<RuntimeStatusSnapshot> {
+  return invoke("get_runtime_status");
+}
+
+/** 订阅运行时状态变化（后端有指纹去重，只在状态真正变化时推送） */
+export async function onRuntimeStatusChanged(
+  handler: (snapshot: RuntimeStatusSnapshot) => void
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<RuntimeStatusSnapshot>("runtime-status-changed", (e) =>
+    handler(e.payload)
+  );
+}
+
 export async function validateProvider(providerId: string): Promise<boolean> {
   return invoke("validate_provider", { providerId });
 }

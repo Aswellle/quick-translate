@@ -77,6 +77,7 @@ pub fn hide_popup_now(app: &AppHandle) {
             tracing::warn!("[hide_popup_now] 隐藏浮窗失败: {}", e);
         }
     }
+    tracing::info!(event = "popup_hidden", "[popup] 浮窗已隐藏");
     let state = app.state::<AppState>();
     state.popup_watch.stop();
     state.clipboard_monitor.reset_last_text();

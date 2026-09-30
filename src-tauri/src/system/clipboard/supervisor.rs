@@ -103,6 +103,10 @@ pub(crate) fn run_supervisor<R: Rng>(
                 let is_restart = attempt > 0;
                 controller.note_worker_started(is_restart);
                 if is_restart {
+                    // 重建不是用户动作：新 worker 起步时剪贴板里躺着的仍是旧
+                    // 内容，不吸收的话 300ms 防抖一到期就会把它当「新复制」
+                    // 重新翻译弹窗。与 resume 吸收同一语义（计划第 5 节）。
+                    controller.request_absorb();
                     tracing::info!(
                         event = "clipboard_worker_recovered",
                         restarts = attempt,
@@ -235,6 +239,18 @@ mod tests {
         vec![Duration::from_millis(1); 5]
     }
 
+    /// 在 `timeout` 内轮询等待条件成立，避免用固定 sleep 造成偶发失败。
+    fn wait_for(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        while std::time::Instant::now() < deadline {
+            if cond() {
+                return true;
+            }
+            thread::sleep(Duration::from_millis(2));
+        }
+        cond()
+    }
+
     /// 计划 34.1：模拟 `Clipboard::new()` 失败，验证 supervisor 会重启并恢复。
     /// 这是 Phase 2 的核心验收项 —— 重构前这条链的终点是「监控永久死亡」。
     #[test]
@@ -252,10 +268,12 @@ mod tests {
                         "mock: 模拟剪贴板句柄创建失败",
                     ))
                 } else {
-                    Ok(
-                        Box::new(MockClipboardBackend::new(vec![Step::Text("hello")]))
-                            as Box<dyn ClipboardBackend>,
-                    )
+                    // 第一段是重建时剪贴板里的旧内容（会被吸收，不触发），
+                    // 第二段模拟恢复后的下一次真实复制。
+                    Ok(Box::new(MockClipboardBackend::new(vec![
+                        Step::Text("stale content"),
+                        Step::Text("brand new copy"),
+                    ])) as Box<dyn ClipboardBackend>)
                 }
             }),
             sink: Box::new(RecordingSink::new(controller.clone(), 1)),
@@ -298,10 +316,10 @@ mod tests {
                         "CLIPBOARD_NOT_SUPPORTED",
                     )])) as Box<dyn ClipboardBackend>)
                 } else {
-                    Ok(
-                        Box::new(MockClipboardBackend::new(vec![Step::Text("recovered")]))
-                            as Box<dyn ClipboardBackend>,
-                    )
+                    Ok(Box::new(MockClipboardBackend::new(vec![
+                        Step::Text("recovered"),
+                        Step::Text("fresh copy"),
+                    ])) as Box<dyn ClipboardBackend>)
                 }
             }),
             sink: Box::new(sink),
@@ -316,9 +334,63 @@ mod tests {
         assert_eq!(controller.health_snapshot().worker_restarts, 1);
         assert_eq!(
             *log.lock().unwrap(),
-            vec!["recovered"],
-            "重建后必须真正恢复翻译能力"
+            vec!["fresh copy"],
+            "重建后旧内容被吸收，下一次真实复制必须真正恢复翻译能力"
         );
+    }
+
+    /// 计划第 5 节（重建版）：句柄重建后，剪贴板里已有的旧内容**不得**被
+    /// 重新翻译弹窗 —— 重建不是用户动作。吸收后 worker 继续运行、无任何触发。
+    #[test]
+    fn rebuild_absorbs_stale_clipboard_content() {
+        let controller = Arc::new(MonitorController::new());
+        let attempts = Arc::new(AtomicU32::new(0));
+        let counter = attempts.clone();
+
+        let sink = RecordingSink::never_stops(controller.clone());
+        let log = sink.log();
+        let deps = SupervisorDeps {
+            make_backend: Box::new(move || {
+                let n = counter.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    Err(ClipboardBackendError::fatal(
+                        "CLIPBOARD_INIT_FAILED",
+                        "mock: 先失败一次触发重建",
+                    ))
+                } else {
+                    // 单步脚本原地重复：内容一直躺在剪贴板里
+                    Ok(Box::new(
+                        MockClipboardBackend::new(vec![Step::Text("stale content")])
+                            .with_seq(Some(1)),
+                    ) as Box<dyn ClipboardBackend>)
+                }
+            }),
+            sink: Box::new(sink),
+            worker_timing: WorkerTiming::fast(),
+            restart_schedule: fast_schedule(),
+        };
+
+        let c2 = controller.clone();
+        let handle = thread::spawn(move || {
+            let mut rng = StdRng::seed_from_u64(5);
+            run_supervisor(c2, deps, &mut rng);
+        });
+
+        // 等重建完成并给足防抖触发的时间窗口，确认没有触发
+        assert!(
+            wait_for(Duration::from_secs(2), || {
+                controller.health_snapshot().worker_restarts == 1
+            }),
+            "supervisor 应完成一次重建"
+        );
+        thread::sleep(Duration::from_millis(60));
+        assert!(
+            log.lock().unwrap().is_empty(),
+            "重建后剪贴板里的旧内容不得重新弹窗"
+        );
+
+        controller.request_shutdown();
+        handle.join().unwrap();
     }
 
     /// 停机请求必须能让 supervisor 退出，哪怕正卡在退避里
