@@ -288,7 +288,7 @@ Welcome in [Issues](https://github.com/Aswellle/quick-translate/issues).
 
 This project is open source under the **[MIT License](LICENSE)** — free to use, modify and distribute, including for commercial purposes.
 
-> The copyright holder reserves the right to modify or supplement the license terms for future releases, as needed. Each release is governed by the license published with it; copies already obtained are unaffected.
+> The copyright holder reserves the right to modify or supplement the license terms for future releases, as needed: each release is governed by the license terms published with that release, and copies already obtained remain governed by the terms they came with.
 
 ---
 
