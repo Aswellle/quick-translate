@@ -12,9 +12,17 @@
 
 [中文](README.md) · [English](README.en.md)
 
-[![下载](https://img.shields.io/badge/⬇_立即下载-Windows_%7C_macOS-2563eb?style=for-the-badge)](https://github.com/Aswellle/quick-translate/releases/latest)
-[![版本](https://img.shields.io/github/v/release/Aswellle/quick-translate?style=for-the-badge&label=版本&color=555)](https://github.com/Aswellle/quick-translate/releases)
-[![平台](https://img.shields.io/badge/平台-Windows_10/11_%7C_macOS-2563eb?style=for-the-badge)](https://github.com/Aswellle/quick-translate/releases/latest)
+[![CI](https://github.com/Aswellle/quick-translate/actions/workflows/ci.yml/badge.svg)](https://github.com/Aswellle/quick-translate/actions/workflows/ci.yml)
+[![Release](https://github.com/Aswellle/quick-translate/actions/workflows/release.yml/badge.svg)](https://github.com/Aswellle/quick-translate/actions/workflows/release.yml)
+[![Version](https://img.shields.io/github/v/release/Aswellle/quick-translate)](https://github.com/Aswellle/quick-translate/releases)
+[![Downloads](https://img.shields.io/github/downloads/Aswellle/quick-translate/total)](https://github.com/Aswellle/quick-translate/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey)](https://github.com/Aswellle/quick-translate/releases/latest)
+[![License](https://img.shields.io/badge/license-Proprietary-orange)](LICENSE)
+
+![Tauri](https://img.shields.io/badge/Tauri-2.x-FFC131?logo=tauri&logoColor=white)
+![Rust](https://img.shields.io/badge/Rust-stable-DEA584?logo=rust)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
+![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
 
 </div>
 
@@ -28,7 +36,7 @@
 - [快速开始](#快速开始)
 - [操作与快捷键](#操作与快捷键)
 - [翻译源配置](#翻译源配置)
-- [可靠性机制](#可靠性机制)
+- [可靠性与稳定性](#可靠性与稳定性)
 - [从源码构建](#从源码构建)
 - [技术架构](#技术架构)
 - [常见问题](#常见问题)
@@ -36,11 +44,13 @@
 
 ---
 
+## 简介
+
 QuickTranslate 是一款面向 Windows 与 macOS 的**复制即翻译**工具。它常驻系统托盘，监控你的剪贴板——任何时候复制一段文字，译文就会以浮窗的形式出现在光标附近。
 
->
-
 > 它删掉的是「切到浏览器 → 打开翻译页 → 粘贴 → 等加载 → 切回文档 → 找回刚才读到哪一行」这十几秒。一份文档几十次，真正被消耗的不是时间，是你刚建立起来的那点专注。
+
+它按常驻软件的标准设计：断网、翻译服务故障、剪贴板被占用，都不会打断它的工作；可恢复的故障在后台自动恢复，不需要你重启程序或重新配置。
 
 **适用场景**：读英文文档与论文、处理外文邮件、刷海外内容、终端编译报错、Figma/Jira 里的英文术语……任何能选中并复制文字的地方，它都能用。
 
@@ -55,7 +65,7 @@ QuickTranslate 是一款面向 Windows 与 macOS 的**复制即翻译**工具。
 | **复制即翻译** | 剪贴板监控触发，无需快捷键，无需切换窗口 |
 | **智能浮窗定位** | DPI 感知、多显示器支持，基于真实窗口尺寸与显示器工作区定位，自动避开光标、贴边翻转 |
 | **非激活式弹窗** | 不抢夺前台焦点，切换到其他应用时自动关闭，不打断工作流 |
-| **五路翻译源** | DeepL / 腾讯 / 百度 / 有道 / Google，配置多个时按顺序自动回退 |
+| **五路翻译源** | DeepL / 腾讯 / 百度 / 有道 / Google，配置多个时自动回退切换 |
 | **多语言互译** | 支持 11 种语言，源语言自动识别，目标语言可选（默认简体中文） |
 
 ### 翻译源对比
@@ -72,11 +82,13 @@ QuickTranslate 是一款面向 Windows 与 macOS 的**复制即翻译**工具。
 
 | 特性 | 说明 |
 |:--|:--|
-| **熔断与自动回退** | 某个翻译源连续失败时自动熔断，跳过它使用下一个；冷却期后自动探测恢复 |
-| **健康感知** | 实时追踪每个翻译源的可用状态，托盘菜单显示实时运行状态 |
-| **离线缓存回退** | 所有翻译源不可用时，命中本地缓存则立即显示历史译文（标明来源），无缓存则提示网络中断 |
-| **请求策略** | 按翻译源配置请求速率限制与总预算，避免高频触发导致配额耗尽或服务商限流 |
-| **剪贴板自愈** | 剪贴板监控异常退出时自动退避重启，确保监控永不丢失 |
+| **翻译源自动回退** | 主力源失败或限流时自动切换下一个，该源恢复后自动回归，全程无需干预 |
+| **实时健康面板** | 设置页与托盘显示每个翻译源的当前状态（正常 / 正在恢复 / 请求频繁 / 认证失败 / 额度用尽） |
+| **离线缓存回退** | 断网时已译过的内容照常显示（标注来自本地缓存），网络恢复后自动继续 |
+| **故障降级运行** | 本地数据异常时翻译照常工作，历史功能临时降级，应用不崩溃、不退出 |
+| **凭证自动保护** | 数据库损坏时自动抢救已保存的 API Key，修复后无需重新配置各翻译源 |
+| **最新结果优先** | 连续快速复制多段文字时，始终只显示最后一次的结果，迟到的旧译文不会覆盖新内容 |
+| **剪贴板自愈** | 剪贴板被占用或句柄异常时自动退避恢复，恢复后不会把旧内容误当新复制重新弹出 |
 
 ### 数据与安全
 
@@ -162,27 +174,27 @@ QuickTranslate 是一款面向 Windows 与 macOS 的**复制即翻译**工具。
 
 - 在设置 → 翻译源中填入对应凭证，可用「验证」按钮即时校验（不消耗翻译配额）。
 - 凭证只保存在本地，加密后写入数据库。
-- 翻译源随时可切换；主力不可用时自动熔断并回退到下一个，无需手动干预。
+- 翻译源随时可切换；主力不可用时自动回退到下一个，恢复后自动回归，无需手动干预。
+- 每张翻译源卡片实时显示健康状态——限流、认证失败、额度用尽等原因一眼可见，不用猜哪个环节出了问题。
 
 各翻译源注册与获取凭证的详细步骤见应用内设置面板。
 
 ---
 
-## 可靠性机制
+## 可靠性与稳定性
 
-QuickTranslate 内置多层可靠性保障，确保翻译请求稳定、监控持续运行：
+QuickTranslate 按**长期常驻**的标准设计：外部服务、网络、本地数据的故障都被隔离在各自范围内，可恢复的故障在后台自动处理，用户几乎无感。
 
-**熔断器（Circuit Breaker）**：每个翻译源独立维护健康状态。连续失败达阈值后进入熔断（Open），后续请求直接跳过；冷却期后进入半开（HalfOpen）探测，成功则恢复，失败则延长冷却。冷却时长按指数退避递增（10s → 30s → 2min → 封顶 10min），并加入 ±20% 抖动避免集群效应。
+| 场景 | 你看到的表现 |
+|:--|:--|
+| 翻译服务商宕机 / 限流 | 自动切换到下一个可用源，翻译照常出结果；该源恢复后自动回归 |
+| 网络断开 | 浮窗、设置、历史全部照常可用；已译过的内容从本地缓存显示；网络恢复后下一次复制自动恢复 |
+| 剪贴板被其他程序占用 | 监控自动退避重试；恢复后不会把旧内容误当新复制重新弹窗 |
+| 本地数据库异常 | 翻译功能不受影响继续运行，历史功能临时降级并如实提示；已保存的 API Key 自动抢救，无需重新配置 |
+| 连续快速复制多段文字 | 始终只显示最后一次复制的结果，不会出现旧译文覆盖新内容 |
+| 长时间挂机使用 | 内存与资源占用稳定，写入队列有界，不会随使用时间膨胀 |
 
-**请求策略（Request Policy）**：每个翻译源可配置请求速率限制与总调用预算，避免高频翻译触发服务商限流或配额耗尽。
-
-**翻译缓存（Translation Cache）**：翻译结果缓存于本地 SQLite（最多 2000 条，30 天 TTL，单条上限 1000 字符）。仅在全部翻译源不可用时查缓存，在线时结果永远是新鲜的。
-
-**请求协调（Request Coordinator）**：代际闸门机制防止并发翻译请求的结果乱序覆盖。每个新请求生成递增代际号，结果回传前验证仍为当前代，否则丢弃。
-
-**剪贴板监控自愈（Clipboard Supervisor）**：监控线程因剪贴板句柄异常退出时，监督者以退避策略（250ms → 30s，±20% 抖动）自动重建并重启。重启次数纳入健康快照，可在托盘菜单查看。
-
-**有界持久化（Bounded Persistence）**：历史记录与缓存写入通过单条有界队列 + 唯一常驻 worker 处理，与翻译主链路完全解耦。队列满时丢弃并告警，绝不阻塞用户看到译文。
+**工程保障**：核心故障路径全部有自动化测试覆盖（200+ 单元测试），CI 在 Linux / Windows / macOS 三平台运行前端构建、Rust 测试与静态检查，发布产物由 GitHub Actions 自动构建签名。
 
 ---
 
@@ -190,7 +202,7 @@ QuickTranslate 内置多层可靠性保障，确保翻译请求稳定、监控�
 
 ### 环境要求
 
-- Node.js ≥ 18
+- Node.js ≥ 20（CI 在 Node 22 上验证）
 - Rust stable ≥ 1.75
 - Tauri CLI 2.x
 
@@ -216,14 +228,14 @@ npm run tauri build  # 产物输出到 src-tauri/target/release/
 ### 代码检查
 
 ```bash
-npx --noEmit                              # TypeScript 类型检查
-cd src-tauri && cargo fmt --check         # Rust 格式检查
-cd src-tauri && cargo clippy -- -D warnings  # Rust 静态检查
+npx tsc --noEmit                              # TypeScript 类型检查
+cd src-tauri && cargo fmt --check             # Rust 格式检查
+cd src-tauri && cargo clippy -- -D warnings   # Rust 静态检查
 ```
 
 ### 发布
 
-推送 `v*` 标签触发 [release workflow](.github/workflows/release.yml)，自动构建并发布带签名的 MSI 安装包到 GitHub Releases，同时生成自动更新清单。
+推送 `v*` 标签触发 [release workflow](.github/workflows/release.yml)，自动构建并发布签名的安装包（Windows MSI / NSIS、macOS DMG）到 GitHub Releases，同时生成自动更新清单。
 
 ```bash
 git tag v0.3.0
@@ -238,12 +250,12 @@ git push origin v0.3.0
 |:--|:--|
 | 前端 | React 19 + TypeScript + Vite + Tailwind CSS + Zustand |
 | 后端 | Rust（Tauri 2）+ Tokio 异步运行时 |
-| 数据库 | SQLite（rusqlite，WAL 模式，内置 FTS5） |
+| 数据库 | SQLite（rusqlite，WAL 模式） |
 | 桌面能力 | 系统托盘、剪贴板监控、全局更新器、开机自启 |
 
-**核心流程**：剪贴板监控线程检测复制 → `ClipboardSupervisor` 保障存活 → `TranslationCoordinator` 生成代际、取消旧请求 → 编排浮窗定位与弹出 → 翻译引擎按回退链调用（`TranslationEngine` + Provider 模式 + 熔断器 + 请求策略）→ 命中缓存回退 → 事件回传前端。
+**核心流程**：剪贴板监控检测复制 → 监控守护自动保障存活 → 请求协调器取消旧请求、编排浮窗弹出 → 翻译引擎按回退链调用（含熔断与请求预算）→ 全源失败时查本地缓存 → 结果回传前端。
 
-**数据流**：前端通过 `invoke()` 调用 Tauri 命令；后端通过 Tauri 事件（`translation-result`、`translation-loading`、`translation-error`）推送结果。配置与历史记录由有界持久化 worker 异步落盘。
+**数据流**：前端通过 `invoke()` 调用 Tauri 命令；后端通过 Tauri 事件推送结果；历史与缓存由独立的有界队列异步落盘，数据库再慢也不影响译文显示。
 
 ---
 
@@ -262,7 +274,10 @@ git push origin v0.3.0
 空闲内存 50MB 以内，CPU 基本为 0，安装包约 5MB。
 
 **翻译结果不准 / 翻译源挂了怎么办？**
-配置多个翻译源并启用回退。主力不可用时自动熔断切换到下一个。托盘菜单可查看各翻译源实时健康状态。网络中断时，已翻译过的内容会从本地缓存回退显示。
+配置多个翻译源并启用回退，主力不可用时自动切换到下一个。设置页的翻译源卡片会实时显示各源健康状态（正在恢复 / 请求频繁 / 认证失败 / 额度用尽），原因一眼可见。网络中断时，已翻译过的内容会从本地缓存回退显示。
+
+**本地数据出问题了，翻译还能用吗？**
+能。数据库异常时翻译功能照常运行，历史功能临时降级并如实提示；已保存的翻译源凭证会被自动抢救，数据修复后无需重新配置。
 
 **有 bug 或功能建议？**
 欢迎在 [Issues](https://github.com/Aswellle/quick-translate/issues) 反馈。
