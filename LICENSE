@@ -1,39 +1,34 @@
-Copyright (c) 2026 welle. All rights reserved.
+MIT License
 
-PROPRIETARY SOFTWARE LICENSE
+Copyright (c) 2026 welle
 
-This software and its source code ("Software") are the exclusive property of
-welle ("Author"). By accessing, downloading, or using the
-Software, you agree to the following terms:
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-1. PERMITTED USE
-   You may use the Software for personal, non-commercial purposes only.
-   You may read and study the source code for educational purposes.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-2. RESTRICTIONS
-   You may NOT, without prior written permission from the Author:
-   a. Use the Software or any portion of it for commercial purposes,
-      including but not limited to selling, licensing, or offering it
-      as part of a paid product or service;
-   b. Redistribute, sublicense, or transfer the Software or its source
-      code to any third party;
-   c. Modify, adapt, translate, or create derivative works based on the
-      Software;
-   d. Remove or alter any copyright, trademark, or proprietary notices.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
-3. CONTRIBUTIONS
-   Any contribution submitted to this project (e.g., pull requests) is
-   understood to be made under these same terms. The Author retains full
-   rights to all contributed code.
+---
 
-4. NO WARRANTY
-   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
-   EXPRESS OR IMPLIED. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY
-   CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM THE USE OF THE SOFTWARE.
+关于许可条款的后续修订 / Note on future license versions
 
-5. TERMINATION
-   Your right to use the Software terminates immediately upon any breach
-   of these terms. The Author reserves the right to change these terms
-   at any time.
+版权持有者保留在未来版本中按需修改或补充本软件许可条款的权利。每一版本
+软件适用其发布时所附带的许可条款；依据本许可条款已获得的版本，继续按本
+版本条款使用。
 
-For commercial licensing inquiries, contact: WL_Oneace@163.com
+The copyright holder reserves the right to modify or supplement the license
+terms of the Software for future releases, as needed. Each release is
+governed by the license terms published with that release; copies already
+obtained under this license remain governed by these terms.

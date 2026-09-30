@@ -17,7 +17,7 @@
 [![Version](https://img.shields.io/github/v/release/Aswellle/quick-translate)](https://github.com/Aswellle/quick-translate/releases)
 [![Downloads](https://img.shields.io/github/downloads/Aswellle/quick-translate/total)](https://github.com/Aswellle/quick-translate/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey)](https://github.com/Aswellle/quick-translate/releases/latest)
-[![License](https://img.shields.io/badge/license-Proprietary-orange)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ![Tauri](https://img.shields.io/badge/Tauri-2.x-FFC131?logo=tauri&logoColor=white)
 ![Rust](https://img.shields.io/badge/Rust-stable-DEA584?logo=rust)
@@ -287,7 +287,9 @@ git push origin v0.3.0
 
 ## 许可证
 
-本项目为**专有软件**，仅供个人非商业使用。详细条款见 [LICENSE](LICENSE)。
+本项目基于 **[MIT 许可证](LICENSE)** 开源——可自由使用、修改、分发，包括商业用途。
+
+> 版权持有者保留在未来版本中按需修改或补充许可条款的权利；每一版本适用其发布时附带的许可条款，已获得的版本不受影响。
 
 ---
 
