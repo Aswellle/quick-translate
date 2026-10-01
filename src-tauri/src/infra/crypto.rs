@@ -312,6 +312,11 @@ mod tests {
         assert_ne!(k1, k2);
     }
 
+    /// `derive_old_key` 只在 Windows 上存在（旧版机器密钥依赖卷序列号），
+    /// 所以这组新旧对比也只能在那里验证。缺少本门控时，macOS 上的
+    /// `cargo test` 会因找不到该函数而直接编译失败 —— cargo clippy 不编译
+    /// #[cfg(test)] 代码，因此这个缺口在 rust-test job 出现前一直没被发现。
+    #[cfg(target_os = "windows")]
     #[test]
     fn derive_new_key_differs_from_old() {
         // 确保新版派生与旧版（仅 serial+salt）不同，避免迁移时误判
