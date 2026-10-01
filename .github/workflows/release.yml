@@ -1,8 +1,12 @@
 # .github/workflows/release.yml
 # 推送 v* tag 时自动构建 Windows 与 macOS 安装包，发布到 GitHub Releases。
 #
-# 双平台矩阵构建：Windows (MSI) + macOS (app + dmg)。
-# latest.json（Tauri Updater 自动更新清单）由 tauri-action 自动生成并上传。
+# 双平台矩阵构建：Windows (MSI + NSIS) + macOS (dmg)。
+#
+# latest.json（Tauri Updater 自动更新清单）由 tauri-action 依据 tauri.conf.json 的
+# bundle.createUpdaterArtifacts 生成 —— 该开关产出各安装包的 .sig 签名，tauri-action
+# 再把它们组装成 latest.json。**关掉它，自动更新会静默失效**：产物仍有 .msi/.dmg，
+# 但更新端点会 404（v0.3.0 起就这样坏了，v0.4.1 才修复）。
 
 name: Release
 
