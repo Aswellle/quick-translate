@@ -1,0 +1,21 @@
+# 固定本地开发使用的 Rust 工具链版本。
+#
+# CI 侧由 workflow 里的 `dtolnay/rust-toolchain@1.99.0` 固定 —— 那个仓库
+# 每个工具链一个分支，分支内写死版本，与本文件的 channel 是**两处独立
+# 但必须同步**的声明。升级时两边一起改。
+#
+# 为什么不继续用 `@stable`：工具链会随上游静默漂移。2026-09 它从 1.94 漂到
+# 1.99，clippy 新增的 double_must_use 在零代码改动的情况下打断了构建，
+# 而本地（旧工具链）一切正常 —— 既无法复现也无法预防（见 PR #35）。
+#
+# 升级流程：
+#   1. 改本文件 channel，并同步改 workflow 中的 action 引用
+#   2. rustup toolchain install <version>
+#   3. 本地跑 cargo test --lib + cargo clippy -- -D warnings + cargo fmt --check
+#   4. 提 PR
+#
+# Cargo.toml 未声明 rust-version（MSRV 另行评估，勿与本文件混淆）。
+
+[toolchain]
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]

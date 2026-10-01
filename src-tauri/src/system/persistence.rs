@@ -283,14 +283,21 @@ mod tests {
 
         assert!(writer.enqueue(job("hello")), "队列应有空位");
 
-        // 轮询等待落盘，不用固定 sleep（那会让测试要么慢要么偶发失败）
+        // 轮询等待落盘，不用固定 sleep（那会让测试要么慢要么偶发失败）。
+        //
+        // 等待条件必须是「历史与缓存都已写入」二者同时成立，而不是先等
+        // 历史、再裸断言缓存：worker 跑在 tauri 的全局运行时线程上，
+        // `cache.put` 是 `history.insert` 之后的下一个 await —— 高负载下
+        // 测试线程完全可能在两步之间观察到历史行已提交而缓存还没写，
+        // 随后的缓存断言就会偶发失败（这正是本测试曾经的 flake）。
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
         let mut history_count = 0;
-        for _ in 0..200 {
+        while std::time::Instant::now() < deadline {
             history_count = history.query(&HistoryQuery::default()).await.unwrap().len();
-            if history_count == 1 {
+            if history_count == 1 && cache.get("hello", "zh").await.unwrap().is_some() {
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
         assert_eq!(history_count, 1, "worker 应在期限内写入历史");
 
@@ -316,13 +323,15 @@ mod tests {
             assert!(writer.enqueue(job(&format!("text-{}", i))));
         }
 
+        // 同上：轮询到全部写入完成，deadline 制（10s）而不是固定次数。
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
         let mut count = 0;
-        for _ in 0..200 {
+        while std::time::Instant::now() < deadline {
             count = history.query(&HistoryQuery::default()).await.unwrap().len();
             if count == 10 {
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(5)).await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
         assert_eq!(count, 10, "一个 worker 应把整批任务都处理完，不丢件");
     }
