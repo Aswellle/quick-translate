@@ -1,0 +1,94 @@
+# .github/workflows/verify-darwin-updater.yml
+# 一次性验证 workflow：在 macOS runner 上实跑 `tauri build`，
+# 回答「`dmg` 目标是否足以产出 macOS updater 产物（.app.tar.gz + .sig），
+# 还是需要 `app` 目标」。
+#
+# 背景：v0.4.1 恢复了 Windows 的自动更新（latest.json 只含
+# windows-x86_64 三键，无 darwin 键）。macOS + updater 这条路径在本仓库
+# 从未成功过 —— v0.2.x 的 workflow 是纯 Windows，macOS 与 updater 产物
+# 是同一次改动里一起进出的。CI 的 build-verify 只跑 `cargo build
+# --release`（不打包），无法回答这个问题。
+#
+# 结论产出后本文件应删除（或并入 ci.yml 常态化）。不发布任何产物。
+
+name: Verify darwin updater artifacts
+
+on:
+  push:
+    branches: [verify/darwin-updater]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-darwin-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: macos-latest
+    name: Probe bundle targets on macOS
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # ── 探针 A：当前配置（targets: ["msi", "nsis", "dmg"]）──────────────
+      # 与 main 一致，作为基线。理论上 dmg 不产出 .app.tar.gz，
+      # 实际以产物清单为准。
+      - name: Probe A — build with current targets (dmg only)
+        run: npx tauri build --target aarch64-apple-darwin
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: List artifacts after Probe A
+        if: always()
+        run: |
+          echo "===== bundle tree after Probe A ====="
+          find src-tauri/target/aarch64-apple-darwin/release/bundle -type f | sort || true
+
+      # ── 探针 B：加上 app 目标 ────────────────────────────────────────────
+      # 用 node 原地改 tauri.conf.json 再构建一次。若探针 A 已产出
+      # .app.tar.gz + .sig 则 B 是纯重复验证。
+      - name: Probe B — build with app target added
+        if: always()
+        run: |
+          node -e "
+            const fs = require('fs');
+            const p = 'src-tauri/tauri.conf.json';
+            const c = JSON.parse(fs.readFileSync(p, 'utf8'));
+            c.bundle.targets = ['msi', 'nsis', 'dmg', 'app'];
+            fs.writeFileSync(p, JSON.stringify(c, null, 2) + '\n');
+          "
+          npx tauri build --target aarch64-apple-darwin
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: List artifacts after Probe B
+        if: always()
+        run: |
+          echo "===== bundle tree after Probe B ====="
+          find src-tauri/target/aarch64-apple-darwin/release/bundle -type f | sort || true
+
+      - name: Compare
+        if: always()
+        run: |
+          echo "===== .app.tar.gz / .sig produced? ====="
+          find src-tauri/target/aarch64-apple-darwin/release/bundle -type f \( -name "*.app.tar.gz" -o -name "*.sig" \) | sort || true
