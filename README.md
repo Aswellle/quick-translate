@@ -8,7 +8,7 @@
 
 **看到不认识的英文，`Ctrl+C`。译文浮窗出现在光标旁边。**
 
-没有切窗口，没有开网页，没有粘贴框。手都不用离开键盘。
+无需切窗口，无需开网页，无需粘贴框。手都不用离开键盘。
 
 [中文](README.md) · [English](README.en.md)
 
@@ -296,7 +296,5 @@ git push origin v0.3.0
 <div align="center">
 
 **如果它帮你省下了那些十几秒，点个 ⭐ 让更多人看到。**
-
-<sub>QuickTranslate · 版权所有 © 2026 Aswellle</sub>
 
 </div>
