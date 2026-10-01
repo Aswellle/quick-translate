@@ -67,7 +67,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           components: rustfmt
 
@@ -94,7 +94,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: ${{ matrix.target }}
           components: clippy
@@ -114,6 +114,50 @@ jobs:
 
       - name: Clippy lint
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }} -- -D warnings
+
+  # ── Rust 测试 ─────────────────────────────────────────────────────────────
+  # cargo test 此前不在任何 workflow 里 —— 203 个单元测试从未被 CI 把关，
+  # flaky 的落盘测试因此长期隐身。
+  #
+  # 无需 npm 步骤：已实测删掉 dist/ 后 cargo test --lib 仍编译通过，
+  # generate_context! 不依赖已构建的前端产物。
+  #
+  # 目标平台各跑一次：Windows 特有路径（剪贴板序列号、弹窗几何）需要在
+  # 真平台上有覆盖。
+  rust-test:
+    name: Rust tests (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            target: aarch64-apple-darwin
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.99.0
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            src-tauri/target/
+          key: ${{ matrix.os }}-test-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ matrix.os }}-test-${{ matrix.target }}-
+
+      - name: Run unit tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
 
   # ── 构建验证 ─────────────────────────────────────────────────────────────
   build-verify:
@@ -141,7 +185,7 @@ jobs:
           cache: "npm"
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.99.0
         with:
           targets: ${{ matrix.target }}
 
