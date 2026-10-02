@@ -13,7 +13,6 @@
 [中文](README.md) · [English](README.en.md)
 
 [![CI](https://github.com/Aswellle/quick-translate/actions/workflows/ci.yml/badge.svg)](https://github.com/Aswellle/quick-translate/actions/workflows/ci.yml)
-[![Release](https://github.com/Aswellle/quick-translate/actions/workflows/release.yml/badge.svg)](https://github.com/Aswellle/quick-translate/actions/workflows/release.yml)
 [![Version](https://img.shields.io/github/v/release/Aswellle/quick-translate)](https://github.com/Aswellle/quick-translate/releases)
 [![Downloads](https://img.shields.io/github/downloads/Aswellle/quick-translate/total)](https://github.com/Aswellle/quick-translate/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey)](https://github.com/Aswellle/quick-translate/releases/latest)
