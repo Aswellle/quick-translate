@@ -25,6 +25,10 @@ pub struct RequestPolicy {
     /// 单次尝试的超时（含连接与读取）。
     /// 由引擎用 `tokio::time::timeout` 施加，实际值还会被剩余预算进一步压低。
     pub attempt_timeout: Duration,
+    /// 连接超时。reqwest 不支持按请求覆盖连接超时，因此这个值与
+    /// `best_effort` 一一对应（official=3s / best_effort=2s），由
+    /// `HttpClient::fast_client` 的两档预建客户端落实（计划第 13/14 节）。
+    pub connect_timeout: Duration,
     /// 该 provider 最多尝试几次（含首次）。计划第 30 节：<= 2。
     pub max_attempts: u32,
     /// 首次重试前的退避
@@ -41,6 +45,7 @@ impl RequestPolicy {
     pub const fn official() -> Self {
         Self {
             attempt_timeout: Duration::from_secs(3),
+            connect_timeout: Duration::from_secs(3),
             max_attempts: 2,
             backoff_base: Duration::from_millis(200),
             max_backoff: Duration::from_secs(1),
@@ -56,6 +61,7 @@ impl RequestPolicy {
     pub const fn best_effort() -> Self {
         Self {
             attempt_timeout: Duration::from_secs(2),
+            connect_timeout: Duration::from_secs(2),
             max_attempts: 1,
             backoff_base: Duration::from_millis(200),
             max_backoff: Duration::from_secs(1),
@@ -143,6 +149,19 @@ impl TranslationBudget {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// connect_timeout 与档位一一对应：HttpClient 的两档预建客户端
+    /// （3s / 2s）靠 `best_effort` 选择，这张表里的值必须与其保持一致 ——
+    /// 否则字段就成了没人执行的死文档。
+    #[test]
+    fn connect_timeout_matches_the_client_tier() {
+        let official = RequestPolicy::official();
+        let best_effort = RequestPolicy::best_effort();
+        assert_eq!(official.connect_timeout, Duration::from_secs(3));
+        assert!(!official.best_effort);
+        assert_eq!(best_effort.connect_timeout, Duration::from_secs(2));
+        assert!(best_effort.best_effort);
+    }
 
     #[test]
     fn official_policy_allows_one_retry() {

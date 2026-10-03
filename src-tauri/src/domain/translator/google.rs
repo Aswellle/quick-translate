@@ -93,7 +93,7 @@ impl GoogleProvider {
 
         let response = self
             .http_client
-            .client()
+            .fast_client()
             .get(GOOGLE_TRANSLATE_URL)
             .header("User-Agent", ua)
             .query(&[

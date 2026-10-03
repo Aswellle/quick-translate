@@ -104,10 +104,24 @@ export async function getProviderStatus(): Promise<ProviderStatus[]> {
 
 /** 运行时状态快照（计划第 4 节：UI 读它，而不是自己推测） */
 export interface RuntimeComponentHealth {
-  state: string; // "Healthy" | "Degraded" | "Recovering" | "Disabled" ...
+  /** "healthy" | "degraded" | "recovering" | "disabled"（snake_case） */
+  state: string;
   last_error_code: string | null;
   last_error_at_ms: number | null;
   last_recovery_at_ms: number | null;
+}
+
+/** 本地诊断计数（计划第 33 节）：仅供设置面板展示，不上传 */
+export interface RuntimeDiagnostics {
+  uptime_ms: number;
+  clipboard_restart_count: number;
+  translation_success_count: number;
+  translation_failure_count: number;
+  fallback_count: number;
+}
+
+export async function getRuntimeDiagnostics(): Promise<RuntimeDiagnostics> {
+  return invoke("get_runtime_diagnostics");
 }
 
 export interface RuntimeStatusSnapshot {

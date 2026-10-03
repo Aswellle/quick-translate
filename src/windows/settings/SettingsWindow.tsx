@@ -10,11 +10,15 @@ import {
   getStats,
   openUrl,
   getProviderStatus,
+  getRuntimeStatus,
+  getRuntimeDiagnostics,
   onRuntimeStatusChanged,
   setClipboardMonitorEnabled as invokeSetClipboardMonitor,
   type AppConfig,
   type StatsResult,
   type ProviderStatus,
+  type RuntimeStatusSnapshot,
+  type RuntimeDiagnostics,
 } from "@/lib/commands";
 import { toast } from "@/components/ToastManager";
 import { SUPPORTED_LANGUAGES, PROVIDERS, ERROR_MESSAGES } from "@/lib/constants";
@@ -54,6 +58,10 @@ export function SettingsWindow() {
   // 翻译源运行时状态（计划第 28 节）：由后端 Runtime 层给出，前端不自行推测。
   // 挂载时拉一次；运行时状态变化（后端有指纹去重，低频）时刷新。
   const [providerStatus, setProviderStatus] = useState<Record<string, ProviderStatus>>({});
+  // 运行时状态快照 + 诊断计数（计划第 33/50 节）：由 Runtime 层给出，面板只做转译。
+  // 诊断计数不主动广播，随状态变化时一并刷新。
+  const [runtimeSnapshot, setRuntimeSnapshot] = useState<RuntimeStatusSnapshot | null>(null);
+  const [runtimeDiag, setRuntimeDiag] = useState<RuntimeDiagnostics | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -68,6 +76,16 @@ export function SettingsWindow() {
         .catch(() => {
           /* 状态拉取失败不影响设置面板其它功能 */
         });
+      getRuntimeStatus()
+        .then((snap) => {
+          if (!cancelled) setRuntimeSnapshot(snap);
+        })
+        .catch(() => {});
+      getRuntimeDiagnostics()
+        .then((d) => {
+          if (!cancelled) setRuntimeDiag(d);
+        })
+        .catch(() => {});
     };
     refresh();
     let unlisten: (() => void) | undefined;
@@ -242,7 +260,7 @@ export function SettingsWindow() {
       {/* ── 内容区 ── */}
       <div className="flex-1 overflow-y-auto px-6 py-5">
         {activeTab === "general" && (
-          <GeneralTab draft={draft} onChange={updateDraft} onClipboardToggle={handleClipboardToggle} stats={stats} statsLoading={statsLoading} />
+          <GeneralTab draft={draft} onChange={updateDraft} onClipboardToggle={handleClipboardToggle} stats={stats} statsLoading={statsLoading} runtimeSnapshot={runtimeSnapshot} runtimeDiag={runtimeDiag} />
         )}
         {activeTab === "provider" && (
           <ProviderTab
@@ -290,12 +308,16 @@ function GeneralTab({
   onClipboardToggle,
   stats,
   statsLoading,
+  runtimeSnapshot,
+  runtimeDiag,
 }: {
   draft: AppConfig;
   onChange: <K extends keyof AppConfig>(key: K, value: AppConfig[K]) => void;
   onClipboardToggle: (enabled: boolean) => void;
   stats: StatsResult | null;
   statsLoading: boolean;
+  runtimeSnapshot: RuntimeStatusSnapshot | null;
+  runtimeDiag: RuntimeDiagnostics | null;
 }) {
   return (
     <div className="space-y-4">
@@ -352,6 +374,9 @@ function GeneralTab({
           />
         </SettingsRow>
       </SettingsSection>
+
+      {/* 运行状态（计划第 33/50 节）：消费 Runtime 层快照与诊断计数 */}
+      <RuntimeStatusSection snapshot={runtimeSnapshot} diag={runtimeDiag} />
 
       {/* 使用统计 */}
       <SettingsSection label="使用统计">
@@ -410,6 +435,116 @@ function GeneralTab({
         )}
       </SettingsSection>
     </div>
+  );
+}
+
+// ──────────── 运行状态面板 ────────────
+
+const COMPONENT_LABELS: Record<"clipboard" | "network" | "popup" | "storage", string> = {
+  clipboard: "剪贴板监控",
+  network: "翻译服务",
+  popup: "翻译浮窗",
+  storage: "本地存储",
+};
+
+/** 组件状态 → 展示文案与色调（UI 不推测状态，只转译 Runtime 层给出的结论） */
+function componentStateLabel(state: string): { text: string; tone: "ok" | "warn" | "muted" } {
+  switch (state) {
+    case "healthy":
+      return { text: "正常", tone: "ok" };
+    case "recovering":
+      return { text: "正在恢复", tone: "warn" };
+    case "degraded":
+      return { text: "异常，自动处理中", tone: "warn" };
+    case "disabled":
+      return { text: "已停用", tone: "muted" };
+    default:
+      return { text: state, tone: "muted" };
+  }
+}
+
+const RUNTIME_TONE_CLASS: Record<string, string> = {
+  ok: "text-green-600 dark:text-green-500",
+  warn: "text-amber-600 dark:text-amber-500",
+  muted: "text-[var(--text-secondary)]",
+};
+
+function formatUptime(ms: number): string {
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 1) return "刚刚";
+  if (minutes < 60) return `${minutes} 分钟`;
+  return `${(minutes / 60).toFixed(1)} 小时`;
+}
+
+function RuntimeStatusSection({
+  snapshot,
+  diag,
+}: {
+  snapshot: RuntimeStatusSnapshot | null;
+  diag: RuntimeDiagnostics | null;
+}) {
+  const overall = snapshot
+    ? snapshot.overall === "healthy"
+      ? { text: "正常运行", tone: "ok" as const }
+      : snapshot.overall === "recovering"
+        ? { text: "正在恢复", tone: "warn" as const }
+        : { text: "部分功能异常", tone: "warn" as const }
+    : null;
+
+  return (
+    <SettingsSection label="运行状态">
+      {/* 总体状态 + 诊断摘要 */}
+      <div className="px-4 py-3 flex items-center justify-between gap-4">
+        <div className="flex-1 min-w-0">
+          <p className="text-[13px] font-medium text-[var(--text-primary)]">QuickTranslate</p>
+          {diag && (
+            <p className="text-[11.5px] text-[var(--text-secondary)] mt-0.5 tabular-nums leading-snug">
+              已运行 {formatUptime(diag.uptime_ms)} · 翻译成功 {diag.translation_success_count} 次
+              {diag.translation_failure_count > 0 && `（失败 ${diag.translation_failure_count}）`}
+              {diag.fallback_count > 0 && ` · 兜底切换 ${diag.fallback_count} 次`}
+              {diag.clipboard_restart_count > 0 && ` · 剪贴板自愈 ${diag.clipboard_restart_count} 次`}
+            </p>
+          )}
+        </div>
+        {overall && (
+          <span
+            className={["text-[12px] font-medium shrink-0", RUNTIME_TONE_CLASS[overall.tone]].join(" ")}
+          >
+            ● {overall.text}
+          </span>
+        )}
+      </div>
+      {/* 各组件状态 */}
+      {snapshot &&
+        (["clipboard", "network", "popup", "storage"] as const).map((key) => {
+          const comp = snapshot[key];
+          const label = componentStateLabel(comp.state);
+          const isDisabled = comp.state === "disabled";
+          return (
+            <div
+              key={key}
+              className="px-4 py-2.5 flex items-center justify-between gap-4 border-t border-[var(--border-secondary)]"
+            >
+              <p
+                className={[
+                  "text-[12.5px]",
+                  isDisabled ? "text-[var(--text-secondary)]" : "text-[var(--text-primary)]",
+                ].join(" ")}
+              >
+                {COMPONENT_LABELS[key]}
+              </p>
+              <span
+                className={["text-[11.5px] font-medium shrink-0", RUNTIME_TONE_CLASS[label.tone]].join(" ")}
+              >
+                {label.text}
+                {comp.state !== "healthy" && comp.state !== "disabled" && comp.last_error_code
+                  ? `（${comp.last_error_code}）`
+                  : ""}
+              </span>
+            </div>
+          );
+        })}
+    </SettingsSection>
   );
 }
 
