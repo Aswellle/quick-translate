@@ -36,10 +36,13 @@
   --surface-elevated:     rgba(255, 255, 255, 0.72);
 
   /* ── Text Colors ── */
+  /* 对比度校准（WCAG AA ≥ 4.5:1 for body, ≥ 3:1 for large/hint text）：
+     secondary 深一档保证正文级辅助文本可读；tertiary 用于元信息，
+     从 #AEAEB2（≈2.3:1，几乎不可读）提到 #86868B（≈3.9:1）。 */
   --text-primary:         #1D1D1F;
-  --text-secondary:       #636366;
-  --text-tertiary:        #AEAEB2;
-  --text-placeholder:      #C7C7CC;
+  --text-secondary:       #515154;
+  --text-tertiary:        #86868B;
+  --text-placeholder:     #A1A1A6;
 
   /* ── Border / Divider ── */
   --border-primary:       rgba(0, 0, 0, 0.1);
@@ -75,8 +78,12 @@
   --radius-full:         9999px;
 
   /* ── Typography ── */
-  --font-ui: "SF Pro Text", "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-  --font-display: "SF Pro Display", "Segoe UI", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-ui: "SF Pro Text", "Segoe UI", -apple-system, BlinkMacSystemFont,
+             "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei",
+             system-ui, sans-serif;
+  --font-display: "SF Pro Display", "Segoe UI", -apple-system, BlinkMacSystemFont,
+             "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei",
+             system-ui, sans-serif;
 
   /* ── Transitions ── */
   --ease-out-expo:       cubic-bezier(0.16, 1, 0.3, 1);
@@ -91,9 +98,9 @@
   --surface-elevated:     rgba(44, 44, 46, 0.78);
 
   --text-primary:         #F5F5F7;
-  --text-secondary:       #98989D;
-  --text-tertiary:        #636366;
-  --text-placeholder:     #48484A;
+  --text-secondary:       #A8A8AD;
+  --text-tertiary:        #7C7C81;
+  --text-placeholder:     #6E6E73;
 
   --border-primary:       rgba(255, 255, 255, 0.12);
   --border-secondary:     rgba(255, 255, 255, 0.08);
