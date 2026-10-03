@@ -42,9 +42,10 @@ function applyThemeNow(theme: string) {
   }
 }
 
-export function SettingsWindow() {
+export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provider" }) {
   const { setConfig } = useConfigStore();
-  const [activeTab, setActiveTab] = useState<TabId>("general");
+  // 初始 Tab 可由 URL hash 指定（托盘「配置翻译源…」直达路径）
+  const [activeTab, setActiveTab] = useState<TabId>(initialTab ?? "general");
   const [draft, setDraft] = useState<AppConfig | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "ok" | "err">("idle");
@@ -90,6 +91,30 @@ export function SettingsWindow() {
     refresh();
     let unlisten: (() => void) | undefined;
     onRuntimeStatusChanged(() => refresh())
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // 托盘「配置翻译源…」对已打开的设置窗口发事件切换 Tab
+  // （新建窗口走 URL hash，见 App.tsx 的 initialTab）
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    import("@tauri-apps/api/event")
+      .then(({ listen }) =>
+        listen<{ tab: string }>("settings-navigate", (e) => {
+          if (e.payload.tab === "provider" || e.payload.tab === "general") {
+            setActiveTab(e.payload.tab);
+          }
+        })
+      )
       .then((fn) => {
         if (cancelled) fn();
         else unlisten = fn;
@@ -260,7 +285,7 @@ export function SettingsWindow() {
       {/* ── 内容区 ── */}
       <div className="flex-1 overflow-y-auto px-6 py-5">
         {activeTab === "general" && (
-          <GeneralTab draft={draft} onChange={updateDraft} onClipboardToggle={handleClipboardToggle} stats={stats} statsLoading={statsLoading} runtimeSnapshot={runtimeSnapshot} runtimeDiag={runtimeDiag} />
+          <GeneralTab draft={draft} onChange={updateDraft} onClipboardToggle={handleClipboardToggle} stats={stats} statsLoading={statsLoading} runtimeSnapshot={runtimeSnapshot} runtimeDiag={runtimeDiag} providerStatus={providerStatus} onNavigate={setActiveTab} />
         )}
         {activeTab === "provider" && (
           <ProviderTab
@@ -310,6 +335,8 @@ function GeneralTab({
   statsLoading,
   runtimeSnapshot,
   runtimeDiag,
+  providerStatus,
+  onNavigate,
 }: {
   draft: AppConfig;
   onChange: <K extends keyof AppConfig>(key: K, value: AppConfig[K]) => void;
@@ -318,9 +345,14 @@ function GeneralTab({
   statsLoading: boolean;
   runtimeSnapshot: RuntimeStatusSnapshot | null;
   runtimeDiag: RuntimeDiagnostics | null;
+  providerStatus: Record<string, ProviderStatus>;
+  onNavigate: (tab: TabId) => void;
 }) {
   return (
     <div className="space-y-4">
+      {/* 跳过向导的兜底提示：没有任何密钥时给出显眼的配置入口 */}
+      <UnconfiguredBanner providerStatus={providerStatus} onNavigate={() => onNavigate("provider")} />
+
       {/* 外观 */}
       <SettingsSection label="外观">
         <SettingsRow label="目标语言">
@@ -434,6 +466,52 @@ function GeneralTab({
           <p className="text-[12.5px] text-[var(--text-secondary)]">统计数据加载失败</p>
         )}
       </SettingsSection>
+    </div>
+  );
+}
+
+// ──────────── 未配置提示横幅 ────────────
+
+/**
+ * 跳过首次向导的兜底提示（计划第 5 节的后续路径）：
+ * 所有需要密钥的翻译源都未配置时，明确告诉用户当前在用 Google 兜底，
+ * 并给出直达「翻译源」Tab 的入口 —— 不催促、不阻塞，但入口必须显眼。
+ */
+function UnconfiguredBanner({
+  providerStatus,
+  onNavigate,
+}: {
+  providerStatus: Record<string, ProviderStatus>;
+  onNavigate: () => void;
+}) {
+  const statuses = Object.values(providerStatus);
+  if (statuses.length === 0) return null; // 状态未就绪时不显示
+
+  const anyConfigured = statuses.some((p) => p.requires_api_key && p.is_available);
+  if (anyConfigured) return null;
+
+  return (
+    <div className="macos-card p-3.5 flex items-center justify-between gap-3 border-[var(--system-blue)]/30">
+      <div className="flex items-start gap-2.5 min-w-0">
+        <svg className="w-4 h-4 text-[var(--system-blue)] shrink-0 mt-0.5" viewBox="0 0 16 16" fill="none">
+          <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.4" />
+          <path d="M8 5v3.5M8 10.5v.01" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+        </svg>
+        <div className="min-w-0">
+          <p className="text-[12.5px] font-medium text-[var(--text-primary)]">
+            还没有配置翻译源密钥
+          </p>
+          <p className="text-[11.5px] text-[var(--text-secondary)] mt-0.5 leading-snug">
+            当前使用免配置的 Google 兜底源。配置一个密钥可获得更佳的翻译质量与更高的免费额度。
+          </p>
+        </div>
+      </div>
+      <button
+        onClick={onNavigate}
+        className="shrink-0 text-[12px] font-medium px-3 py-1.5 rounded-lg bg-[var(--system-blue)] text-white hover:bg-[#0071E3] active:scale-95 transition-all"
+      >
+        前往配置
+      </button>
     </div>
   );
 }
