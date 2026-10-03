@@ -360,7 +360,10 @@ fn open_provider_settings(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("settings") {
         let _ = window.show();
         let _ = window.set_focus();
-        let _ = window.emit("settings-navigate", serde_json::json!({ "tab": "provider" }));
+        let _ = window.emit(
+            "settings-navigate",
+            serde_json::json!({ "tab": "provider" }),
+        );
         return;
     }
     open_settings_at(app, Some("provider"));
@@ -375,21 +378,20 @@ fn open_settings_at(app: &AppHandle, tab: Option<&str>) {
     if let Some(window) = app.get_webview_window("settings") {
         let _ = window.show();
         let _ = window.set_focus();
-        let _ = window.emit("settings-navigate", serde_json::json!({ "tab": tab.unwrap_or("general") }));
+        let _ = window.emit(
+            "settings-navigate",
+            serde_json::json!({ "tab": tab.unwrap_or("general") }),
+        );
         return;
     }
-    match WebviewWindowBuilder::new(
-        app,
-        "settings",
-        WebviewUrl::App(url.into()),
-    )
-    .title("QuickTranslate 设置")
-    .additional_browser_args(crate::system::BROWSER_ARGS)
-    .inner_size(600.0, 480.0)
-    .min_inner_size(500.0, 400.0)
-    .resizable(true)
-    .center()
-    .build()
+    match WebviewWindowBuilder::new(app, "settings", WebviewUrl::App(url.into()))
+        .title("QuickTranslate 设置")
+        .additional_browser_args(crate::system::BROWSER_ARGS)
+        .inner_size(600.0, 480.0)
+        .min_inner_size(500.0, 400.0)
+        .resizable(true)
+        .center()
+        .build()
     {
         Ok(w) => {
             let _ = w.show();
