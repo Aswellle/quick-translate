@@ -226,7 +226,7 @@ function StepChoose({
         <h2 className="text-[17px] font-semibold" style={{ fontFamily: "var(--font-display)" }}>
           选择翻译服务
         </h2>
-        <p className="text-[11px] text-[var(--text-tertiary)] mt-1">
+        <p className="text-[12px] text-[var(--text-secondary)] mt-1">
           可随时在设置中更换，所有服务均提供免费额度
         </p>
       </div>
@@ -255,9 +255,9 @@ function StepChoose({
                 </div>
                 <span className="text-[13px] font-medium">{p.name}</span>
               </div>
-              <span className="text-[11px] text-[var(--text-tertiary)]">{p.freeQuota}</span>
+              <span className="text-[12px] text-[var(--text-secondary)]">{p.freeQuota}</span>
             </div>
-            <p className="text-[11px] text-[var(--text-tertiary)] mt-1 ml-6">{p.description}</p>
+            <p className="text-[12px] text-[var(--text-secondary)] mt-1 ml-6">{p.description}</p>
           </button>
         ))}
       </div>
@@ -297,7 +297,7 @@ function StepConfigure({
         <h2 className="text-[17px] font-semibold" style={{ fontFamily: "var(--font-display)" }}>
           配置 {provider.name}
         </h2>
-        <p className="text-[11px] text-[var(--text-tertiary)] mt-1">
+        <p className="text-[12px] text-[var(--text-secondary)] mt-1">
           凭证仅保存在本地，AES-256 加密存储
         </p>
       </div>
@@ -313,8 +313,8 @@ function StepConfigure({
           </p>
           <ol className="space-y-1.5">
             {provider.setupSteps.map((step, i) => (
-              <li key={i} className="text-[11px] text-[var(--text-secondary)] flex gap-2">
-                <span className="shrink-0 w-5 h-5 rounded-full bg-[var(--system-blue)]/10 text-[var(--system-blue)] text-[10px] font-bold flex items-center justify-center mt-0.5">
+              <li key={i} className="text-[12px] text-[var(--text-secondary)] flex gap-2">
+                <span className="shrink-0 w-5 h-5 rounded-full bg-[var(--system-blue)]/10 text-[var(--system-blue)] text-[11px] font-bold flex items-center justify-center mt-0.5">
                   {i + 1}
                 </span>
                 {step}
@@ -324,7 +324,7 @@ function StepConfigure({
           {provider.setupUrl && (
             <button
               onClick={() => openUrl(provider.setupUrl)}
-              className="inline-flex items-center gap-1 text-[11px] text-[var(--system-blue)] hover:underline mt-1"
+              className="inline-flex items-center gap-1 text-[12px] font-medium text-[var(--system-blue)] hover:underline mt-1"
             >
               前往控制台
               <svg className="w-3 h-3" viewBox="0 0 12 12" fill="none">
@@ -338,7 +338,7 @@ function StepConfigure({
       <div className="space-y-3">
         {provider.credentialFields.map((field) => (
           <div key={field.key}>
-            <label className="text-[11px] font-medium text-[var(--text-secondary)] mb-1 block">
+            <label className="text-[12px] font-medium text-[var(--text-secondary)] mb-1 block">
               {field.label}
             </label>
             <input
@@ -389,7 +389,7 @@ function StepTest({
         <h2 className="text-[17px] font-semibold" style={{ fontFamily: "var(--font-display)" }}>
           验证连接
         </h2>
-        <p className="text-[11px] text-[var(--text-tertiary)] mt-1">
+        <p className="text-[12px] text-[var(--text-secondary)] mt-1">
           发送一次测试请求确认凭证有效
         </p>
       </div>
