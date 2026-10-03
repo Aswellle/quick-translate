@@ -14,20 +14,31 @@ import { OnboardingWindow } from "@/windows/onboarding/OnboardingWindow";
 
 type WindowType = "popup" | "settings" | "history" | "onboarding";
 
+/** settings 窗口可携带子路径：#settings/provider 直达翻译源配置 Tab */
 function getWindowType(): WindowType {
   const hash = window.location.hash.replace("#", "");
-  if (hash === "settings")   return "settings";
+  if (hash.startsWith("settings")) return "settings";
   if (hash === "history")    return "history";
   if (hash === "onboarding") return "onboarding";
   return "popup";
 }
 
+/** 从 hash 中解析 settings 的初始 Tab（托盘「配置翻译源…」的直达路径） */
+function getSettingsInitialTab(): "general" | "provider" {
+  const hash = window.location.hash.replace("#", "");
+  return hash.startsWith("settings/provider") ? "provider" : "general";
+}
+
 export default function App() {
   const [windowType, setWindowType] = useState<WindowType>(getWindowType);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<"general" | "provider">(getSettingsInitialTab);
   const setConfig = useConfigStore((s) => s.setConfig);
 
   useEffect(() => {
-    const handler = () => setWindowType(getWindowType());
+    const handler = () => {
+      setWindowType(getWindowType());
+      setSettingsInitialTab(getSettingsInitialTab());
+    };
     window.addEventListener("hashchange", handler);
     return () => window.removeEventListener("hashchange", handler);
   }, []);
@@ -81,7 +92,7 @@ export default function App() {
     <div className="w-full h-full">
       <ToastManager />
       {windowType === "popup"       && <PopupWindow />}
-      {windowType === "settings"    && <SettingsWindow />}
+      {windowType === "settings"    && <SettingsWindow key={settingsInitialTab} initialTab={settingsInitialTab} />}
       {windowType === "history"     && <HistoryWindow />}
       {windowType === "onboarding"  && <OnboardingWindow />}
     </div>

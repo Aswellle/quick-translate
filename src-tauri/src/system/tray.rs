@@ -254,12 +254,19 @@ fn build_menu(
     let quit_item = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)
         .map_err(|e| AppError::WindowError(e.to_string()))?;
 
+    // 配置翻译源的常驻入口（计划第 5 节跳过向导的兜底路径）：
+    // 无论用户是否完成了首次向导，托盘里永远有一条直达密钥配置的路。
+    let provider_config_item =
+        MenuItem::with_id(app, "provider_config", "配置翻译源…", true, None::<&str>)
+            .map_err(|e| AppError::WindowError(e.to_string()))?;
+
     let mut items: Vec<&dyn tauri::menu::IsMenuItem<tauri::Wry>> = Vec::new();
     for item in &status_items {
         items.push(item.as_ref());
     }
     items.push(&status_separator);
     items.push(&provider_submenu);
+    items.push(&provider_config_item);
     items.push(&lang_submenu);
     items.push(&history_item);
     items.push(&settings_item);
@@ -317,6 +324,7 @@ fn handle_menu_event(app: &AppHandle, event_id: &str) {
 
     match event_id {
         "settings" => open_settings_window(app),
+        "provider_config" => open_provider_settings(app),
         "history" => open_history_window(app),
         "quit" => {
             tracing::info!("用户退出应用");
@@ -339,15 +347,41 @@ fn handle_menu_event(app: &AppHandle, event_id: &str) {
 }
 
 fn open_settings_window(app: &AppHandle) {
+    open_settings_at(app, None);
+}
+
+/// 直达「翻译源」配置页：密钥配置的托盘常驻入口。
+///
+/// 窗口已存在时发 `settings-navigate` 事件让前端切 Tab；不存在时通过
+/// URL hash（`#settings/provider`）携带初始 Tab —— 新建窗口的 webview
+/// 是异步加载的，事件会跑在订阅之前，hash 是唯一可靠的传递方式。
+fn open_provider_settings(app: &AppHandle) {
+    use tauri::Emitter;
     if let Some(window) = app.get_webview_window("settings") {
         let _ = window.show();
         let _ = window.set_focus();
+        let _ = window.emit("settings-navigate", serde_json::json!({ "tab": "provider" }));
+        return;
+    }
+    open_settings_at(app, Some("provider"));
+}
+
+fn open_settings_at(app: &AppHandle, tab: Option<&str>) {
+    use tauri::Emitter;
+    let url = match tab {
+        Some(t) => format!("index.html#settings/{}", t),
+        None => "index.html#settings".to_string(),
+    };
+    if let Some(window) = app.get_webview_window("settings") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        let _ = window.emit("settings-navigate", serde_json::json!({ "tab": tab.unwrap_or("general") }));
         return;
     }
     match WebviewWindowBuilder::new(
         app,
         "settings",
-        WebviewUrl::App("index.html#settings".into()),
+        WebviewUrl::App(url.into()),
     )
     .title("QuickTranslate 设置")
     .additional_browser_args(crate::system::BROWSER_ARGS)
