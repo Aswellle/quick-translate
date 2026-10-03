@@ -85,7 +85,7 @@ const RecordCard = memo(function RecordCard({
         <div className="flex items-start justify-between gap-2">
           <div className="flex-1 min-w-0 space-y-1">
             {/* 原文 */}
-            <p className="text-[11px] text-[var(--text-tertiary)] truncate font-mono">
+            <p className="text-[12px] text-[var(--text-secondary)] truncate font-mono">
               <Highlight text={truncate(record.source_text)} query={searchQuery} />
             </p>
             {/* 译文 */}
@@ -115,13 +115,13 @@ const RecordCard = memo(function RecordCard({
         </div>
         {/* 元信息行 */}
         <div className="flex items-center gap-2 mt-2">
-          <span className="text-[10px] text-[var(--text-tertiary)]">
+          <span className="text-[11px] font-medium text-[var(--text-secondary)]">
             {getLangName(record.source_lang)} → {getLangName(record.target_lang)}
           </span>
-          <span className="text-[10px] text-[var(--text-tertiary)] bg-[var(--surface-tertiary)] dark:bg-[var(--surface-secondary)] px-1.5 py-px rounded-full">
+          <span className="text-[11px] font-medium text-[var(--text-secondary)] bg-[var(--surface-tertiary)] dark:bg-[var(--surface-secondary)] px-1.5 py-px rounded-full">
             {PROVIDER_LABELS[record.provider] ?? record.provider}
           </span>
-          <span className="text-[10px] text-[var(--text-tertiary)] ml-auto tabular-nums">
+          <span className="text-[11px] text-[var(--text-secondary)] ml-auto tabular-nums">
             {formatTime(record.created_at)}
           </span>
         </div>
@@ -134,15 +134,15 @@ const RecordCard = memo(function RecordCard({
           onClick={(e) => e.stopPropagation()}
         >
           <div>
-            <p className="text-[10px] font-medium text-[var(--text-tertiary)] uppercase tracking-wide mb-1">
+            <p className="text-[11.5px] font-semibold text-[var(--text-secondary)] tracking-wide mb-1">
               原文
             </p>
-            <p className="selectable text-[12px] text-[var(--text-secondary)] leading-relaxed whitespace-pre-wrap break-words font-mono">
+            <p className="selectable text-[12.5px] text-[var(--text-secondary)] leading-relaxed whitespace-pre-wrap break-words font-mono">
               <Highlight text={record.source_text} query={searchQuery} />
             </p>
           </div>
           <div>
-            <p className="text-[10px] font-medium text-[var(--text-tertiary)] uppercase tracking-wide mb-1">
+            <p className="text-[11.5px] font-semibold text-[var(--text-secondary)] tracking-wide mb-1">
               译文
             </p>
             <p className="selectable text-[13px] text-[var(--text-primary)] leading-relaxed whitespace-pre-wrap break-words">
@@ -156,10 +156,10 @@ const RecordCard = memo(function RecordCard({
               <button
                 onClick={() => onStar(record.id)}
                 className={[
-                  "inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] transition-colors",
+                  "inline-flex items-center gap-1 px-2 py-1 rounded-md text-[12px] transition-colors",
                   record.is_starred
                     ? "text-yellow-500 hover:text-yellow-600 hover:bg-yellow-50 dark:hover:bg-yellow-950/20"
-                    : "text-[var(--text-tertiary)] hover:text-yellow-500 hover:bg-yellow-50 dark:hover:bg-yellow-950/20",
+                    : "text-[var(--text-secondary)] hover:text-yellow-600 dark:hover:text-yellow-500 hover:bg-yellow-50 dark:hover:bg-yellow-950/20",
                 ].join(" ")}
               >
                 <svg className="w-3 h-3" viewBox="0 0 16 16" fill={record.is_starred ? "currentColor" : "none"}>
@@ -169,7 +169,7 @@ const RecordCard = memo(function RecordCard({
               </button>
               <button
                 onClick={() => onDelete(record.id)}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-[var(--text-tertiary)] hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[12px] text-[var(--text-secondary)] hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 transition-colors"
               >
                 <svg className="w-3 h-3" viewBox="0 0 16 16" fill="none">
                   <path d="M2 4h12M5 4V2.5A.5.5 0 015.5 2h5a.5.5 0 01.5.5V4M6 7v5M10 7v5M3 4l1 9.5A.5.5 0 004.5 14h7a.5.5 0 00.5-.5L13 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
@@ -178,7 +178,7 @@ const RecordCard = memo(function RecordCard({
               </button>
             </div>
             {record.duration_ms != null && (
-              <span className="text-[10px] text-[var(--text-tertiary)] tabular-nums">
+              <span className="text-[11px] text-[var(--text-secondary)] tabular-nums">
                 {record.duration_ms}ms
               </span>
             )}

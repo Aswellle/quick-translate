@@ -160,7 +160,7 @@ export function HistoryWindow() {
           >
             翻译历史
           </h1>
-          <p className="text-[11px] text-[var(--text-tertiary)] mt-0.5">
+          <p className="text-[12px] text-[var(--text-secondary)] mt-0.5">
             {searchQuery
               ? `${total} 条匹配结果`
               : starredOnly
@@ -170,7 +170,7 @@ export function HistoryWindow() {
         </div>
         <div className="flex items-center gap-2">
           {/* 格式选择 — 分段控件 */}
-          <div className="inline-flex rounded-lg bg-[var(--surface-tertiary)] dark:bg-[var(--surface-secondary)] p-0.5 gap-0.5 text-[11px]">
+          <div className="inline-flex rounded-lg bg-[var(--surface-tertiary)] dark:bg-[var(--surface-secondary)] p-0.5 gap-0.5 text-[12px]">
             {(["markdown", "html", "json"] as const).map((fmt) => (
               <button
                 key={fmt}
@@ -179,7 +179,7 @@ export function HistoryWindow() {
                   "px-2 py-1 rounded-[5px] font-medium transition-colors",
                   exportFormat === fmt
                     ? "bg-[var(--surface-primary)] dark:bg-[var(--surface-tertiary)] text-[var(--text-primary)] shadow-sm"
-                    : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]",
+                    : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
                 ].join(" ")}
               >
                 {fmt === "markdown" ? "MD" : fmt.toUpperCase()}
@@ -192,7 +192,7 @@ export function HistoryWindow() {
             className={[
               "flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-lg border transition-all",
               total === 0 || exporting
-                ? "text-[var(--text-tertiary)] cursor-not-allowed opacity-50 border-[var(--border-primary)]"
+                ? "text-[var(--text-secondary)] cursor-not-allowed opacity-50 border-[var(--border-primary)]"
                 : "text-[var(--text-secondary)] border-[var(--border-primary)] hover:bg-[var(--hover-bg)] active:scale-95",
             ].join(" ")}
           >
@@ -208,8 +208,8 @@ export function HistoryWindow() {
             className={[
               "flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-lg transition-all",
               total === 0
-                ? "text-[var(--text-tertiary)] cursor-not-allowed opacity-50"
-                : "text-red-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 active:scale-95",
+                ? "text-[var(--text-secondary)] cursor-not-allowed opacity-50"
+                : "text-red-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20 active:scale-95",
             ].join(" ")}
           >
             <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none">
@@ -235,7 +235,7 @@ export function HistoryWindow() {
             "flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] border transition-all",
             starredOnly
               ? "border-yellow-400/70 text-yellow-500 bg-yellow-50/80 dark:bg-yellow-950/20 shadow-sm"
-              : "border-[var(--border-primary)] text-[var(--text-tertiary)] hover:bg-[var(--hover-bg)] hover:text-[var(--text-secondary)]",
+              : "border-[var(--border-primary)] text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] hover:text-[var(--text-primary)]",
           ].join(" ")}
         >
           <svg
@@ -276,7 +276,7 @@ export function HistoryWindow() {
                 "flex items-center gap-1 text-[12px] px-3 py-1.5 rounded-lg border transition-all",
                 hasPrev && !isLoading
                   ? "border-[var(--border-primary)] text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] active:scale-95"
-                  : "border-[var(--border-primary)] text-[var(--text-tertiary)] opacity-40 cursor-not-allowed",
+                  : "border-[var(--border-primary)] text-[var(--text-secondary)] opacity-40 cursor-not-allowed",
               ].join(" ")}
             >
               <svg className="w-3 h-3" viewBox="0 0 12 12" fill="none">
@@ -291,7 +291,7 @@ export function HistoryWindow() {
                 "flex items-center gap-1 text-[12px] px-3 py-1.5 rounded-lg border transition-all",
                 hasNext && !isLoading
                   ? "border-[var(--border-primary)] text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] active:scale-95"
-                  : "border-[var(--border-primary)] text-[var(--text-tertiary)] opacity-40 cursor-not-allowed",
+                  : "border-[var(--border-primary)] text-[var(--text-secondary)] opacity-40 cursor-not-allowed",
               ].join(" ")}
             >
               下一页
@@ -300,7 +300,7 @@ export function HistoryWindow() {
               </svg>
             </button>
           </div>
-          <span className="text-[11px] text-[var(--text-tertiary)] tabular-nums">
+          <span className="text-[12px] text-[var(--text-secondary)] tabular-nums">
             {page + 1} / {totalPages}
           </span>
         </div>
@@ -444,7 +444,7 @@ function EmptyState({
   starredOnly: boolean;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center h-full gap-3 text-[var(--text-tertiary)] animate-fade-in">
+    <div className="flex flex-col items-center justify-center h-full gap-3 text-[var(--text-secondary)] animate-fade-in">
       <div className="w-16 h-16 rounded-2xl bg-[var(--surface-tertiary)] dark:bg-[var(--surface-secondary)] flex items-center justify-center shadow-sm">
         <svg className="w-8 h-8 opacity-40" viewBox="0 0 48 48" fill="none">
           <rect x="8" y="14" width="32" height="22" rx="4" stroke="currentColor" strokeWidth="1.6" />
@@ -466,10 +466,10 @@ function EmptyState({
             : "暂无翻译历史"}
         </p>
         {hasSearch && (
-          <p className="text-[11px] text-[var(--text-tertiary)]">试试其他关键词</p>
+          <p className="text-[12px] text-[var(--text-secondary)]">试试其他关键词</p>
         )}
         {!hasSearch && !starredOnly && (
-          <p className="text-[11px] text-[var(--text-tertiary)]">
+          <p className="text-[12px] text-[var(--text-secondary)]">
             复制文字即翻译，记录会自动保存在这里
           </p>
         )}
@@ -502,7 +502,7 @@ function ConfirmDialog({
           </div>
           <div>
             <p className="text-[13px] font-semibold text-[var(--text-primary)]">清空所有历史？</p>
-            <p className="text-[11px] text-[var(--text-tertiary)] mt-0.5">此操作不可恢复</p>
+            <p className="text-[12px] text-[var(--text-secondary)] mt-0.5">此操作不可恢复</p>
           </div>
         </div>
         <div className="flex gap-2 justify-end mt-4">

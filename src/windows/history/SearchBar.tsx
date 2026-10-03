@@ -50,7 +50,7 @@ export function SearchBar({ value, onChange, placeholder }: SearchBarProps) {
         onChange={handleChange}
         placeholder={placeholder ?? "搜索…"}
         className={[
-          "w-full pl-8.5 pr-8 py-2 text-[13px]",
+          "w-full pl-9 pr-8 py-2 text-[13.5px]",
           "rounded-lg",
           "border border-[var(--border-primary)]",
           "bg-[var(--surface-primary)] dark:bg-[var(--surface-secondary)]",

@@ -198,7 +198,7 @@ export function SettingsWindow() {
 
   if (!draft) {
     return (
-      <div className="flex items-center justify-center h-full gap-2 text-sm text-[var(--text-tertiary)]">
+      <div className="flex items-center justify-center h-full gap-2 text-sm text-[var(--text-secondary)]">
         <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
         加载中…
       </div>
@@ -214,7 +214,7 @@ export function SettingsWindow() {
             设置
           </h1>
         </div>
-        <p className="text-[11px] text-[var(--text-tertiary)] mt-0.5">
+        <p className="text-[12px] text-[var(--text-secondary)] mt-0.5">
           QuickTranslate
         </p>
       </div>
@@ -230,7 +230,7 @@ export function SettingsWindow() {
                 "px-4 py-1.5 text-[12.5px] font-medium rounded-[7px] transition-all duration-150",
                 activeTab === tab
                   ? "bg-[var(--surface-primary)] dark:bg-[var(--surface-tertiary)] text-[var(--text-primary)] shadow-sm"
-                  : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]",
+                  : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
               ].join(" ")}
             >
               {tab === "general" ? "常规" : "翻译源"}
@@ -371,7 +371,7 @@ function GeneralTab({
             </div>
             {Object.keys(stats.by_provider).length > 0 && (
               <div className="macos-card p-3.5 space-y-2.5">
-                <p className="text-[11px] font-semibold text-[var(--text-tertiary)] uppercase tracking-wide">
+                <p className="text-[11.5px] font-semibold text-[var(--text-secondary)] tracking-wide">
                   按翻译源
                 </p>
                 {(() => {
@@ -382,7 +382,7 @@ function GeneralTab({
                       {entries.map(([provider, count]) => (
                         <div key={provider}>
                           <div className="flex items-center justify-between mb-1">
-                            <span className="text-[12px] text-[var(--text-secondary)]">{provider}</span>
+                            <span className="text-[12.5px] text-[var(--text-secondary)]">{provider}</span>
                             <span className="text-[12px] font-medium text-[var(--text-primary)] tabular-nums">
                               {count} 次
                             </span>
@@ -406,7 +406,7 @@ function GeneralTab({
             )}
           </div>
         ) : (
-          <p className="text-xs text-[var(--text-tertiary)]">统计数据加载失败</p>
+          <p className="text-[12.5px] text-[var(--text-secondary)]">统计数据加载失败</p>
         )}
       </SettingsSection>
     </div>
@@ -416,10 +416,10 @@ function GeneralTab({
 function StatCard({ label, value, unit }: { label: string; value: string; unit: string }) {
   return (
     <div className="macos-card p-3.5">
-      <p className="text-[10px] text-[var(--text-tertiary)] uppercase tracking-wide">{label}</p>
+      <p className="text-[11.5px] font-medium text-[var(--text-secondary)] tracking-wide">{label}</p>
       <p className="text-[22px] font-semibold text-[var(--text-primary)] mt-0.5 tabular-nums leading-none" style={{ fontFamily: "var(--font-display)", letterSpacing: "-0.02em" }}>
         {value}
-        <span className="text-[11px] font-normal text-[var(--text-tertiary)] ml-1">{unit}</span>
+        <span className="text-[12px] font-normal text-[var(--text-secondary)] ml-1">{unit}</span>
       </p>
     </div>
   );
@@ -469,7 +469,7 @@ function ProviderTab({
 
       <div className="h-px bg-[var(--border-secondary)]" />
 
-      <p className="text-[11px] text-[var(--text-tertiary)] -mb-1">
+      <p className="text-[12px] text-[var(--text-secondary)] -mb-1">
         凭证配置（AES-256 本地加密存储）
       </p>
 
@@ -492,18 +492,18 @@ function ProviderTab({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium">Google Translate</span>
-            <span className="text-[10px] bg-[var(--surface-tertiary)] text-[var(--text-tertiary)] px-1.5 py-0.5 rounded-full font-medium">
+            <span className="text-[11px] bg-[var(--surface-tertiary)] text-[var(--text-secondary)] px-1.5 py-0.5 rounded-full font-medium">
               无需配置
             </span>
           </div>
-          <span className="text-[11px] text-green-500 flex items-center gap-1">
+          <span className="text-[12px] text-green-600 dark:text-green-500 flex items-center gap-1">
             <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none">
               <path d="M3 8.5l3.5 3.5 6.5-7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
             始终可用
           </span>
         </div>
-        <p className="text-[11px] text-[var(--text-tertiary)] mt-1">用于 Fallback 兜底，无需任何配置</p>
+        <p className="text-[12px] text-[var(--text-secondary)] mt-1">用于 Fallback 兜底，无需任何配置</p>
       </div>
     </div>
   );
@@ -549,7 +549,7 @@ const STATE_TONE_CLASS: Record<string, string> = {
   ok: "text-green-500",
   warn: "text-amber-500",
   err: "text-red-500",
-  muted: "text-[var(--text-tertiary)]",
+  muted: "text-[var(--text-secondary)]",
 };
 
 function ProviderCard({
@@ -589,7 +589,7 @@ function ProviderCard({
         <div className="flex items-center gap-2.5">
           <span className="text-[13px] font-medium text-[var(--text-primary)]">{provider.name}</span>
           <span
-            className="text-[10px] text-white px-1.5 py-px rounded-full font-semibold"
+            className="text-[11px] text-white px-1.5 py-px rounded-full font-semibold"
             style={{ backgroundColor: provider.badgeColor.includes("purple") ? "#AF52DE" : provider.badgeColor.includes("orange") ? "#FF9500" : provider.badgeColor.includes("blue") ? "#007AFF" : "#5AC8FA" }}
           >
             {provider.badge}
@@ -599,13 +599,13 @@ function ProviderCard({
               const label = providerStateLabel(runtimeStatus, hasCredentials);
               if (!label) return null;
               return (
-                <span className={["text-[10px]", STATE_TONE_CLASS[label.tone]].join(" ")}>
+                <span className={["text-[11.5px] font-medium", STATE_TONE_CLASS[label.tone]].join(" ")}>
                   {label.text}
                 </span>
               );
             })()}
           {testResult === true && (
-            <span className="text-[10px] text-green-500 flex items-center gap-0.5">
+            <span className="text-[11.5px] font-medium text-green-600 dark:text-green-500 flex items-center gap-0.5">
               <svg className="w-3 h-3" viewBox="0 0 16 16" fill="none">
                 <path d="M3 8.5l3.5 3.5 6.5-7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
@@ -613,11 +613,11 @@ function ProviderCard({
             </span>
           )}
           {testResult === false && (
-            <span className="text-[10px] text-red-500">验证失败</span>
+            <span className="text-[11.5px] font-medium text-red-500">验证失败</span>
           )}
         </div>
         <div className="flex items-center gap-2.5">
-          <span className="text-[11px] text-[var(--text-tertiary)]">{provider.freeQuota}</span>
+          <span className="text-[12px] text-[var(--text-secondary)]">{provider.freeQuota}</span>
           <svg
             className={["w-3.5 h-3.5 text-[var(--text-tertiary)] transition-transform duration-200", expanded ? "rotate-180" : ""].join(" ")}
             viewBox="0 0 16 16"
@@ -634,7 +634,7 @@ function ProviderCard({
           {/* 配置步骤 */}
           {provider.setupSteps.length > 0 && (
             <div className="bg-[var(--surface-tertiary)] rounded-lg p-3 space-y-1.5 border border-[var(--border-secondary)]">
-              <p className="text-[10px] font-semibold text-[var(--text-secondary)] flex items-center gap-1">
+              <p className="text-[11.5px] font-semibold text-[var(--text-secondary)] flex items-center gap-1">
                 <svg className="w-3 h-3" viewBox="0 0 16 16" fill="none">
                   <rect x="2" y="2" width="12" height="12" rx="2" stroke="currentColor" strokeWidth="1.3" />
                   <path d="M5 8h6M5 5.5h4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
@@ -642,7 +642,7 @@ function ProviderCard({
                 获取步骤
               </p>
               {provider.setupSteps.map((s, i) => (
-                <p key={i} className="text-[11px] text-[var(--text-secondary)] flex gap-1.5">
+                <p key={i} className="text-[12px] text-[var(--text-secondary)] flex gap-1.5 leading-relaxed">
                   <span className="text-[var(--system-blue)] font-bold shrink-0 mt-0.5">{i + 1}.</span>
                   {s}
                 </p>
@@ -651,7 +651,7 @@ function ProviderCard({
                 <button
                   type="button"
                   onClick={() => openUrl(provider.setupUrl).catch(console.error)}
-                  className="text-[11px] text-[var(--system-blue)] hover:underline inline-flex items-center gap-0.5 mt-0.5"
+                  className="text-[12px] text-[var(--system-blue)] hover:underline inline-flex items-center gap-0.5 mt-0.5 font-medium"
                 >
                   前往控制台
                   <svg className="w-3 h-3" viewBox="0 0 12 12" fill="none">
@@ -665,7 +665,7 @@ function ProviderCard({
           {/* 凭证输入 */}
           {provider.credentialFields.map((field) => (
             <div key={field.key}>
-              <label className="text-[11px] font-medium text-[var(--text-secondary)] mb-1 block">
+              <label className="text-[12px] font-medium text-[var(--text-secondary)] mb-1 block">
                 {field.label}
               </label>
               <input
@@ -688,7 +688,7 @@ function ProviderCard({
           <button
             onClick={onTest}
             disabled={isTesting || !hasCredentials}
-            className="text-[12px] px-3.5 py-1.5 rounded-lg border border-[var(--border-primary)] hover:bg-[var(--hover-bg)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-[var(--text-secondary)] flex items-center gap-1.5"
+            className="text-[12.5px] font-medium px-3.5 py-1.5 rounded-lg border border-[var(--border-primary)] hover:bg-[var(--hover-bg)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-[var(--text-primary)] flex items-center gap-1.5"
           >
             {isTesting ? (
               <>
@@ -715,7 +715,7 @@ function ProviderCard({
 function SettingsSection({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="space-y-2">
-      <p className="text-[11px] font-medium text-[var(--text-tertiary)] uppercase tracking-wide px-1">
+      <p className="text-[12px] font-semibold text-[var(--text-secondary)] tracking-wide px-1">
         {label}
       </p>
       <div className="macos-card divide-y divide-[var(--border-secondary)] overflow-hidden">
@@ -738,7 +738,7 @@ function SettingsRow({
     <div className="px-4 py-3 flex items-center justify-between gap-4">
       <div className="flex-1 min-w-0">
         <p className="text-[13px] font-medium text-[var(--text-primary)]">{label}</p>
-        {hint && <p className="text-[11px] text-[var(--text-tertiary)] mt-0.5 leading-snug">{hint}</p>}
+        {hint && <p className="text-[12px] text-[var(--text-secondary)] mt-0.5 leading-snug">{hint}</p>}
       </div>
       <div className="shrink-0">{children}</div>
     </div>
