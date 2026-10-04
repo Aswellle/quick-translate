@@ -44,6 +44,16 @@ pub fn run() {
     }));
 
     tauri::Builder::default()
+        // ── 单实例保护（必须最先注册）──────────────────────────────────────
+        // 两个实例会争用同一个 WebView2 用户数据目录：安装器「运行程序」
+        // 勾选项启动新实例时，若旧实例仍在（更新安装、手动双击、自启重叠），
+        // 向导/浮窗等窗口创建会偶发失败。第二个实例在此回调后自动退出。
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(wizard) = app.get_webview_window("onboarding") {
+                let _ = wizard.show();
+                let _ = wizard.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
@@ -267,23 +277,35 @@ pub fn run() {
                 system::updater::check_and_notify(&update_handle).await;
             });
 
-            // 首次启动：立即显示居中向导窗口（独立于剪贴板状态）
-            // App.tsx 中的 useEffect 也会检查并打开，作为双重保障
+            // 首次启动：立即显示居中向导窗口（独立于剪贴板状态，popup 窗口
+            // 此时通常尚未创建，App.tsx 的挂载检查鞭长莫及）。
+            // 此前是一次性 spawn 且 `let _ =` 吞掉创建失败 —— 向导窗口偶发
+            // 创建失败时首启就永远没有向导，也没有日志可查。这里改为有限
+            // 重试：每次都记录结果，向导真正打开（或确认已完成）才停止。
             let onboarding_handle = app_handle.clone();
             tauri::async_runtime::spawn(async move {
-                // 短暂延迟确保 popup webview 已完成初始化
-                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
-                let needed = onboarding_handle
-                    .state::<crate::state::AppState>()
-                    .is_onboarding_complete()
-                    .await;
-                tracing::info!(
-                    "[setup] is_onboarding_complete={}，是否需要打开向导={}",
-                    needed,
-                    !needed
-                );
-                if !needed {
-                    let _ = commands::system::open_onboarding_window(onboarding_handle).await;
+                for attempt in 1..=3u32 {
+                    // 递增间隔：给托盘/窗口初始化让路，也错开与前端并发检测的竞争
+                    tokio::time::sleep(std::time::Duration::from_millis(300 * u64::from(attempt)))
+                        .await;
+                    let complete = onboarding_handle
+                        .state::<crate::state::AppState>()
+                        .is_onboarding_complete()
+                        .await;
+                    if complete {
+                        tracing::info!("[setup] onboarding 已完成，无需打开向导");
+                        return;
+                    }
+                    match commands::system::open_onboarding_window(onboarding_handle.clone()).await
+                    {
+                        Ok(()) => {
+                            tracing::info!("[setup] 引导向导窗口已打开（第 {} 次尝试）", attempt);
+                            return;
+                        }
+                        Err(e) => {
+                            tracing::error!("[setup] 打开引导向导失败（第 {} 次）: {}", attempt, e);
+                        }
+                    }
                 }
             });
 

@@ -8,6 +8,7 @@
 //   - 验证成功后自动进入完成页并撒花 —— 用户配好 key 的那一刻值得庆祝。
 
 import { useState, useCallback, useEffect, useRef } from "react";
+import confetti from "canvas-confetti";
 import {
   setConfigBatch, validateProvider, completeOnboarding, openUrl,
 } from "@/lib/commands";
@@ -26,17 +27,18 @@ interface WizardState {
 /** 撒花用色：取自应用系统色板，与 UI 语言一致 */
 const CONFETTI_COLORS = ["#007AFF", "#5856D6", "#34C759", "#FFCC00", "#FF2D55", "#5AC8FA"];
 
-/** 完成庆祝：中央主爆发 + 左右礼炮 + 顶部缓落，总时长约 1.2s。 */
-async function celebrate() {
-  // 尊重系统「减少动态效果」偏好
-  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-
-  // 动态加载：撒花只在这一刻用到，不进主 bundle
-  const confetti = (await import("canvas-confetti")).default;
+/** 完成庆祝：中央主爆发 + 左右礼炮 + 顶部缓落，总时长约 1.2s。
+ *
+ *  两处刻意的确定性（此前偶发「配好了却没有任何撒花」）：
+ *  - 静态导入：撒花此前走动态 import 分包，包加载一旦失败整段庆祝静默
+ *    消失；它只有 4KB(gzip)，直接并入主包换取必定可用。
+ *  - 不按 prefers-reduced-motion 静默跳过：这是用户亲手配好密钥那一刻
+ *    的一次性奖励动效，跳过会被当成「功能没生效」。1.2 秒、单次、由
+ *    用户操作直接触发，不构成持续性动效负担。 */
+function celebrate() {
   const base: confetti.Options = {
     colors: CONFETTI_COLORS,
     zIndex: 100,
-    disableForReducedMotion: true,
   };
 
   // 中央主爆发
@@ -603,7 +605,7 @@ function StepDone({
   useEffect(() => {
     if (celebrated.current) return;
     celebrated.current = true;
-    void celebrate();
+    celebrate();
   }, []);
 
   return (

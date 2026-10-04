@@ -2,7 +2,6 @@
 // 窗口路由：popup | settings | history | onboarding
 
 import { useEffect, useState } from "react";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getConfig, checkOnboarding, openOnboardingWindow } from "@/lib/commands";
 import { useConfigStore } from "@/stores/configStore";
 import { useTheme } from "@/hooks/useTheme";
@@ -47,43 +46,37 @@ export default function App() {
     getConfig().then(setConfig).catch(console.error);
   }, [setConfig]);
 
-  // ── 独立居中向导窗口（不复用 popup webview）────────────────────
-  // 仅 popup 窗口负责判断是否需要启动向导
+  // ── 首启向导检测（仅 popup 窗口负责）────────────────────────────
+  // 挂载时立即检查；1.5s 后兜底复查一次，覆盖两类向导打不开的场景：
+  //   1. 应用刚启动、后端尚未就绪，首次 checkOnboarding 调用失败；
+  //   2. 与 Rust 侧启动检测并发打开向导窗口时的标签冲突。
+  // 注意 popup 窗口是 focusable(false)（浮窗不抢焦点），Windows 上
+  // onFocusChanged 永远不会带 focused=true 触发，不能依赖获焦来重查。
   useEffect(() => {
     if (windowType !== "popup") return;
-    checkOnboarding().then((needed) => {
-      if (needed) {
-        openOnboardingWindow().catch(console.error);
-        // 切换到空闲 hash，防止 popup 窗口复用自身渲染 OnboardingWindow
-        window.location.hash = "#idle";
-      }
-    }).catch(console.error);
-  }, [windowType]);
+    let cancelled = false;
 
-  // ── 向导窗口关闭后重新检测 ─────────────────────────────────────
-  // 当向导窗口关闭（×按钮），popup 窗口重新检测是否仍需向导
-  useEffect(() => {
-    if (windowType !== "popup") return;
-
-    let unlisten: (() => void) | undefined;
-
-    getCurrentWebviewWindow()
-      .onFocusChanged(({ payload: focused }) => {
-        if (focused) {
-          // 窗口重新获得焦点时，重新检查是否需要向导
-          checkOnboarding().then((needed) => {
-            if (needed) {
-              openOnboardingWindow().catch(console.error);
-              window.location.hash = "#idle";
-            }
-          }).catch(console.error);
+    const tryOpenWizard = async () => {
+      try {
+        const needed = await checkOnboarding();
+        if (!needed || cancelled) return;
+        await openOnboardingWindow();
+        if (!cancelled) {
+          // 切换到空闲 hash，防止 popup 窗口复用自身渲染 OnboardingWindow
+          window.location.hash = "#idle";
         }
-      })
-      .then((fn) => {
-        unlisten = fn;
-      });
+      } catch (err) {
+        console.error("[onboarding] 检查/打开向导失败:", err);
+      }
+    };
 
-    return () => unlisten?.();
+    void tryOpenWizard();
+    const fallback = setTimeout(() => { void tryOpenWizard(); }, 1500);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(fallback);
+    };
   }, [windowType]);
 
   useTheme();
