@@ -301,6 +301,8 @@ pub async fn open_onboarding_window(app: AppHandle) -> Result<(), AppError> {
     {
         Ok(window) => {
             let _ = window.show();
+            // 由安装器「运行程序」拉起时进程可能没有前台权限，显式抢一次
+            let _ = window.set_focus();
             tracing::info!("引导向导窗口已打开（居中）");
             Ok(())
         }
