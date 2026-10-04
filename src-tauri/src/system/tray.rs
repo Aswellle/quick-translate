@@ -51,7 +51,10 @@ pub fn init(app: &AppHandle) -> Result<(), AppError> {
         &providers,
     )?;
 
-    TrayIconBuilder::with_id(TRAY_ID)
+    // 此前从未给托盘设置图标 —— Windows 的通知区域拿不到 HICON，
+    // 托盘位置就一直渲染为一片空白。使用打包时嵌入的默认应用图标
+    //（tauri.conf.json bundle.icon 的 icon.ico，随图标更新自动跟随）。
+    let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .tooltip("QuickTranslate")
         .on_menu_event(|app, event| {
@@ -66,7 +69,11 @@ pub fn init(app: &AppHandle) -> Result<(), AppError> {
             {
                 // 左键单击托盘图标：目前无操作，通过右键菜单操作
             }
-        })
+        });
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+    builder
         .build(app)
         .map_err(|e| AppError::WindowError(format!("托盘初始化失败: {}", e)))?;
 
