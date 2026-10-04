@@ -29,6 +29,9 @@
     "windows": {
       "webviewInstallMode": {
         "type": "embedBootstrapper"
+      },
+      "nsis": {
+        "installerHooks": "./windows/installer-hooks.nsh"
       }
     },
     "resources": {}
