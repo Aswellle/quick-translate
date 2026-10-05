@@ -254,8 +254,8 @@ pub fn run_worker(
             continue;
         }
 
-        // 跳过空白或极短内容
-        if current_normalized.trim().len() < 2 {
+        // 跳过空白或极短内容（按字符计数：单个汉字为 3 字节，字节判定会漏放）
+        if current_normalized.trim().chars().count() < 2 {
             pending = None;
             continue;
         }

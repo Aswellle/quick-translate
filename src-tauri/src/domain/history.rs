@@ -1,5 +1,5 @@
 // src-tauri/src/domain/history.rs
-// 翻译历史仓库：CRUD、FIFO 超限清理、FTS5 全文搜索
+// 翻译历史仓库：CRUD、FIFO 超限清理、LIKE 子串搜索（FTS5 已随迁移 v3 移除）
 
 use rusqlite::Connection;
 use std::collections::HashMap;

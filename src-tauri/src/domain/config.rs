@@ -23,6 +23,13 @@ fn is_encrypted(key: &str) -> bool {
     ENCRYPTED_KEYS.contains(&key)
 }
 
+/// 识别掩码形态的凭证值（mask_api_key 生成，如 `********efgh`）：
+/// 以 4 个以上连续掩码字符开头即视为掩码 —— 真实 API Key 不会以
+/// 星号/圆点开头。此类值回写按 no-op 处理。
+fn looks_like_masked_value(value: &str) -> bool {
+    value.chars().take_while(|c| *c == '*' || *c == '•').count() >= 4
+}
+
 /// history_limit 的有效范围（含端点）。
 /// 低于下限会导致 enforce_limit 删除全部非收藏记录；
 /// 过大的值会削弱 FIFO 清理意义并占用内存。
@@ -116,6 +123,11 @@ impl ConfigService {
     }
 
     pub async fn set(&mut self, key: &str, value: &str) -> Result<(), AppError> {
+        if is_encrypted(key) && looks_like_masked_value(value) {
+            // 前端持有的凭证是掩码形态，原样回传会用掩码覆盖真实凭证
+            tracing::debug!("set({}) 传入掩码值，按 no-op 处理", key);
+            return Ok(());
+        }
         let db_value = if is_encrypted(key) {
             crypto::encrypt(value)?
         } else {
@@ -148,6 +160,9 @@ impl ConfigService {
                 .unchecked_transaction()
                 .map_err(|e| AppError::DatabaseError(e.to_string()))?;
             for (key, value) in &updates {
+                if is_encrypted(key) && looks_like_masked_value(value) {
+                    continue;
+                }
                 let db_value = if is_encrypted(key) {
                     crypto::encrypt(value)?
                 } else {
@@ -215,22 +230,27 @@ fn load_config_from_db(conn: &Connection) -> Result<AppConfig, AppError> {
     for (key, raw) in rows {
         match key.as_str() {
             k if is_encrypted(k) => {
-                // 优先尝试新版密钥解密
-                let plain = crypto::decrypt(&raw).unwrap_or_else(|_| {
-                    // 新版密钥失败：尝试旧版密钥（迁移兼容）
-                    let mut found = String::new();
-                    for old_key in crypto::old_key_candidates() {
-                        if let Ok(pt) = crypto::decrypt_with_key(&raw, &old_key) {
-                            found = pt;
-                            break;
+                // 优先尝试新版密钥解密；失败再试旧版密钥（迁移兼容）。
+                // 同一密文只解密一次。
+                let fresh = crypto::decrypt(&raw);
+                let from_legacy_key = fresh.is_err();
+                let plain = match fresh {
+                    Ok(pt) => pt,
+                    Err(_) => {
+                        let mut found = String::new();
+                        for old_key in crypto::old_key_candidates() {
+                            if let Ok(pt) = crypto::decrypt_with_key(&raw, &old_key) {
+                                found = pt;
+                                break;
+                            }
                         }
+                        found
                     }
-                    found
-                });
+                };
                 if plain.is_empty() && !raw.is_empty() {
                     // 新旧密钥均无法解密：可能是损坏数据，保留空值
                     tracing::warn!("凭证 {} 无法解密，已重置为空", k);
-                } else if crypto::decrypt(&raw).is_err() && !plain.is_empty() {
+                } else if from_legacy_key && !plain.is_empty() {
                     // 旧密钥解密成功 → 需要迁移到新版密钥
                     to_migrate.push((k.to_string(), plain.clone()));
                 }
@@ -435,5 +455,55 @@ mod batch_tests {
             .unwrap();
         svc.set("target_lang", "ja").await.unwrap();
         assert_eq!(svc.get("target_lang").as_deref(), Some("ja"));
+    }
+}
+
+#[cfg(test)]
+mod masked_value_tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    #[test]
+    fn detects_mask_patterns() {
+        assert!(looks_like_masked_value("********efgh"));
+        assert!(looks_like_masked_value("••••abcd"));
+        assert!(looks_like_masked_value("****"));
+        assert!(!looks_like_masked_value("sk-abc123def"));
+        assert!(!looks_like_masked_value(""));
+        assert!(!looks_like_masked_value("a**b")); // 掩码字符不足 4 个
+    }
+
+    #[tokio::test]
+    async fn set_ignores_masked_credential_write_back() {
+        // 回归：前端持有掩码值，若原样回传会用掩码覆盖真实凭证，
+        // 重启后所有请求认证失败。掩码值必须在存储层按 no-op 处理。
+        let dir = std::env::temp_dir().join(format!("qt_mask_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::infra::crypto::init_per_install_secret(&dir).unwrap();
+
+        let conn = Connection::open_in_memory().unwrap();
+        crate::infra::database::run_migrations(&conn).unwrap();
+        let db = Db::available(std::sync::Arc::new(tokio::sync::Mutex::new(conn)));
+        let mut svc = ConfigService {
+            db: db.clone(),
+            cache: AppConfig::default(),
+        };
+
+        svc.set("deepl_api_key", "real-key-123").await.unwrap();
+        // 原样回传掩码值：应为 no-op
+        svc.set("deepl_api_key", "********-123").await.unwrap();
+
+        // 直接从库回读并解密，真实凭证未被掩码覆盖
+        let shared = db.try_conn().unwrap();
+        let conn = shared.lock().await;
+        let raw: String = conn
+            .query_row(
+                "SELECT value FROM app_config WHERE key = 'deepl_api_key'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(crate::infra::crypto::decrypt(&raw).unwrap(), "real-key-123");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
