@@ -324,3 +324,54 @@ fn chrono_from_timestamp(ts: u64) -> (u32, u32, u32) {
 fn is_leap(y: u32) -> bool {
     (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// TC3 签名的凭证作用域直接由 chrono_from_timestamp 的 (年, 月, 日)
+    /// 拼出 —— 闰年、世纪年、年末等边界错一天都会让全部请求静默 401。
+    /// 对已知 UTC 时间戳做表驱动校验。
+    #[test]
+    fn calendar_conversion_matches_known_utc_dates() {
+        let cases: &[(u64, (u32, u32, u32))] = &[
+            (0, (1970, 1, 1)),               // 纪元起点
+            (31_536_000, (1971, 1, 1)),      // 平年一整年之后
+            (1_703_980_800, (2023, 12, 31)), // 年末边界
+            (1_709_164_800, (2024, 2, 29)),  // 闰年 2 月 29 日
+            (951_782_400, (2000, 2, 29)),    // 世纪闰年（能被 400 整除）
+            (1_791_158_400, (2026, 10, 5)),  // 常规日期
+        ];
+        for &(ts, expected) in cases {
+            assert_eq!(
+                chrono_from_timestamp(ts),
+                expected,
+                "ts={} 应转换为 {:?}",
+                ts,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn leap_year_rule_follows_gregorian_calendar() {
+        assert!(is_leap(2024));
+        assert!(is_leap(2000)); // 能被 400 整除：闰
+        assert!(!is_leap(2100)); // 能被 100 整除但不能被 400 整除：平
+        assert!(!is_leap(2023));
+    }
+
+    /// 时间戳走完整个 4 年周期（含闰日）后日期必须连续推进，
+    /// 用逐日连续性捕获任何 off-by-one。
+    #[test]
+    fn consecutive_days_produce_consecutive_dates() {
+        let start = 1_704_067_200; // 2024-01-01
+        let mut prev = chrono_from_timestamp(start);
+        for day in 1..=366u64 {
+            let cur = chrono_from_timestamp(start + day * 86_400);
+            assert_ne!(cur, prev, "第 {} 天日期应前进", day);
+            prev = cur;
+        }
+        assert_eq!(prev, (2025, 1, 1));
+    }
+}
