@@ -3218,7 +3218,7 @@ dependencies = [
 
 [[package]]
 name = "quicktranslate"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "aes-gcm",
  "arboard",
