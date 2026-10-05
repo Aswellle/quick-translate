@@ -34,40 +34,77 @@ static PER_INSTALL_SECRET: OnceLock<[u8; PER_INSTALL_SECRET_LEN]> = OnceLock::ne
 ///
 /// 从 `app_data_dir/.machine_secret` 读取；若不存在则生成 256 位随机密钥写入。
 /// 必须在首次调用 `get_machine_key()` 之前执行（lib.rs::setup 中调用）。
+///
+/// 损坏处理遵循启动韧性分级（计划第 26 节）：密钥文件长度异常视为文件
+/// 损坏 —— 重新生成并记录事件，旧密文随后的解密失败由配置加载路径优雅
+/// 处理（重置为空），绝不因一个可再生的文件中止整个应用。密钥文件彻底
+/// 不可写时降级为进程内临时密钥：本次运行加密可用，重启后旧密文需重新
+/// 配置 —— 仍好过拒绝启动。
 pub fn init_per_install_secret(app_data_dir: &Path) -> Result<(), AppError> {
     let path = app_data_dir.join(SECRET_FILE_NAME);
 
-    let secret = if path.exists() {
-        let bytes = std::fs::read(&path).map_err(|e| {
-            AppError::CryptoError(format!("读取机器密钥文件失败 {}: {}", path.display(), e))
-        })?;
-        if bytes.len() != PER_INSTALL_SECRET_LEN {
-            return Err(AppError::CryptoError(format!(
-                "机器密钥文件长度无效（期望 {} 字节，实际 {} 字节），文件可能已损坏",
-                PER_INSTALL_SECRET_LEN,
-                bytes.len()
-            )));
-        }
-        let mut secret = [0u8; PER_INSTALL_SECRET_LEN];
-        secret.copy_from_slice(&bytes);
-        secret
-    } else {
-        let mut secret = [0u8; PER_INSTALL_SECRET_LEN];
-        rand::rngs::OsRng.fill_bytes(&mut secret);
-        std::fs::write(&path, secret).map_err(|e| {
-            AppError::CryptoError(format!("写入机器密钥文件失败 {}: {}", path.display(), e))
-        })?;
-        // app_data_dir 位于用户专属 %APPDATA% 下，继承 OS 级 ACL，
-        // 与数据库文件处于同一保护边界。
-        tracing::info!("已生成新的机器绑定随机密钥: {}", path.display());
-        secret
-    };
+    let secret = load_or_create_secret(&path);
 
-    PER_INSTALL_SECRET
-        .set(secret)
-        .map_err(|_| AppError::CryptoError("机器密钥已被初始化，不可重复设置".into()))?;
-
+    if PER_INSTALL_SECRET.set(secret).is_err() {
+        // 重复初始化只可能出现在测试进程里；保留首个密钥即可
+        tracing::debug!("机器密钥已初始化，保留原值");
+    }
     Ok(())
+}
+
+/// 读取或创建机器密钥文件，处理损坏与不可写两种异常。从不失败。
+fn load_or_create_secret(path: &Path) -> [u8; PER_INSTALL_SECRET_LEN] {
+    let existed_before = path.exists();
+
+    if existed_before {
+        match std::fs::read(path) {
+            Ok(bytes) if bytes.len() == PER_INSTALL_SECRET_LEN => {
+                let mut secret = [0u8; PER_INSTALL_SECRET_LEN];
+                secret.copy_from_slice(&bytes);
+                return secret;
+            }
+            Ok(bytes) => {
+                // 长度异常 = 文件损坏：重新生成。旧密文的解密失败由
+                // 配置加载路径按「无法解密，重置为空」处理。
+                tracing::warn!(
+                    event = "machine_secret_reset",
+                    "机器密钥文件长度无效（期望 {} 字节，实际 {} 字节），已重新生成",
+                    PER_INSTALL_SECRET_LEN,
+                    bytes.len()
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    event = "machine_secret_unreadable",
+                    "机器密钥文件读取失败（{}），将尝试重新生成: {}",
+                    path.display(),
+                    e
+                );
+            }
+        }
+    }
+
+    let mut secret = [0u8; PER_INSTALL_SECRET_LEN];
+    rand::rngs::OsRng.fill_bytes(&mut secret);
+    match std::fs::write(path, secret) {
+        Ok(()) => {
+            if !existed_before {
+                // app_data_dir 位于用户专属 %APPDATA% 下，继承 OS 级 ACL，
+                // 与数据库文件处于同一保护边界。
+                tracing::info!("已生成新的机器绑定随机密钥: {}", path.display());
+            }
+        }
+        Err(e) => {
+            // 文件不可写：降级为进程内临时密钥，本次运行加密仍可用
+            tracing::error!(
+                event = "machine_secret_persist_failed",
+                "机器密钥文件写入失败（{}），本次运行使用临时密钥，重启后需重新配置凭证: {}",
+                path.display(),
+                e
+            );
+        }
+    }
+    secret
 }
 
 /// 获取已初始化的 per-install 随机密钥。
@@ -254,6 +291,50 @@ pub fn mask_api_key(key: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 损坏的机器密钥文件必须触发重新生成，而不是中止启动
+    #[test]
+    fn truncated_secret_file_is_regenerated() {
+        let dir = std::env::temp_dir().join(format!("qt_secret_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(SECRET_FILE_NAME);
+        std::fs::write(&path, [0u8; 10]).unwrap();
+
+        let secret = load_or_create_secret(&path);
+
+        assert_eq!(secret.len(), PER_INSTALL_SECRET_LEN);
+        let rewritten = std::fs::read(&path).unwrap();
+        assert_eq!(rewritten.len(), PER_INSTALL_SECRET_LEN);
+        assert_ne!(rewritten, [0u8; 10]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 全新安装生成密钥并落盘
+    #[test]
+    fn missing_secret_file_is_created() {
+        let dir = std::env::temp_dir().join(format!("qt_secret_fresh_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(SECRET_FILE_NAME);
+
+        let secret = load_or_create_secret(&path);
+
+        assert_eq!(secret.len(), PER_INSTALL_SECRET_LEN);
+        assert_eq!(std::fs::read(&path).unwrap(), secret);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 密钥文件彻底不可写时降级为进程内临时密钥，而不是 panic
+    #[test]
+    fn unwritable_secret_path_falls_back_to_ephemeral_key() {
+        // 传入一个目录路径：读取与写入都会失败
+        let dir = std::env::temp_dir().join(format!("qt_secret_dir_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let secret = load_or_create_secret(&dir);
+
+        assert_eq!(secret.len(), PER_INSTALL_SECRET_LEN);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn mask_api_key_long() {
