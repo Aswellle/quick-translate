@@ -140,15 +140,67 @@ impl From<reqwest::Error> for AppError {
         // 计划第 14 节：reqwest::Error 必须按性质细分，而不是全部折进
         // 一个 NetworkError —— 离线（连不上）与「服务器回了个怪东西」
         // 在日志、诊断与健康统计上应当可辨。
+        //
+        // 注意：reqwest 的 Display 会在末尾附加完整的请求 URL（reqwest 0.12
+        // 格式为 `... for url (<完整URL>)`），而部分翻译源把待翻译原文放在
+        // GET 查询参数里 —— 把原始字符串写进日志等于把用户剪贴板内容写进
+        // 日志。这里统一剥离 URL，只保留错误类别与目标主机名。
         if e.is_timeout() {
             AppError::Timeout { timeout_secs: 5 }
         } else if e.is_connect() {
             // 连接建立失败：TCP/DNS/TLS 握手都在这一层
-            AppError::ConnectError(e.to_string())
+            AppError::ConnectError(describe_reqwest_error(&e))
         } else if e.is_body() || e.is_decode() {
-            AppError::ProtocolError(e.to_string())
+            AppError::ProtocolError(describe_reqwest_error(&e))
         } else {
-            AppError::NetworkError(e.to_string())
+            AppError::NetworkError(describe_reqwest_error(&e))
         }
+    }
+}
+
+/// 生成可安全写入日志的 reqwest 错误描述：剥离 Display 末尾附加的完整
+/// 请求 URL（查询参数可能携带用户原文），仅保留主机名用于定位目标。
+fn describe_reqwest_error(e: &reqwest::Error) -> String {
+    let full = e.to_string();
+    let base = match full.find(" for url") {
+        Some(idx) => full[..idx].to_string(),
+        None => full,
+    };
+    match e.url().and_then(|u| u.host_str()) {
+        Some(host) => format!("{} ({})", base, host),
+        None => base,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 连接失败时错误信息不得携带请求 URL：部分翻译源（Google/百度）
+    /// 把待翻译原文放在 GET 查询参数里，原始字符串进日志等于用户剪贴板
+    /// 内容进日志。主机名保留用于诊断。
+    #[tokio::test]
+    async fn connect_error_strips_url_containing_user_text() {
+        // 端口 1 连接必然被拒绝：构造带敏感查询参数的真实 reqwest 错误
+        let err = reqwest::get("http://127.0.0.1:1/translate?q=top-secret-clipboard-text")
+            .await
+            .err()
+            .expect("对关闭端口的请求应当失败");
+        let mapped = AppError::from(err);
+        let msg = match &mapped {
+            AppError::ConnectError(s) => s.clone(),
+            other => panic!("期望 ConnectError，实际为 {:?}", other),
+        };
+        assert!(
+            !msg.contains("top-secret-clipboard-text"),
+            "错误信息泄漏了查询参数: {}",
+            msg
+        );
+        assert!(
+            !msg.contains("127.0.0.1:1/translate"),
+            "错误信息不应包含完整 URL: {}",
+            msg
+        );
+        assert!(msg.contains("127.0.0.1"), "应保留主机名用于诊断: {}", msg);
     }
 }
