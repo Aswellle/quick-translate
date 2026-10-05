@@ -141,7 +141,12 @@ impl ConfigService {
         {
             let shared = self.db.try_conn().ok_or(AppError::StorageUnavailable)?;
             let conn = shared.lock().await;
-            conn.execute_batch("BEGIN")?;
+            // unchecked_transaction 在提前返回（?）时按 Drop 语义自动回滚，
+            // 不会像手写 BEGIN/COMMIT 那样在中途失败后把事务遗留在共享
+            // 连接上 —— 那会让后续所有写库操作都跑在未提交事务里。
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(|e| AppError::DatabaseError(e.to_string()))?;
             for (key, value) in &updates {
                 let db_value = if is_encrypted(key) {
                     crypto::encrypt(value)?
@@ -149,12 +154,13 @@ impl ConfigService {
                     serde_json::to_string(value)
                         .map_err(|e| AppError::ConfigError(format!("序列化失败: {}", e)))?
                 };
-                conn.execute(
+                tx.execute(
                     "INSERT OR REPLACE INTO app_config (key, value, updated_at) VALUES (?1, ?2, ?3)",
                     rusqlite::params![key, db_value, now],
                 ).map_err(|e| AppError::DatabaseError(e.to_string()))?;
             }
-            conn.execute_batch("COMMIT")?;
+            tx.commit()
+                .map_err(|e| AppError::DatabaseError(e.to_string()))?;
         }
         for (key, value) in &updates {
             self.apply_to_cache(key, value);
@@ -321,7 +327,24 @@ fn decode(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::decode;
+    use super::*;
+    use rusqlite::Connection;
+
+    /// 用与线上完全相同的迁移建内存库，测试表结构不可能与真实漂移。
+    /// 注意 load() 含 blocking_lock，只能在 runtime 之外调用 —— 测试里
+    /// 直接以默认缓存构造（空库上两者等价）。
+    fn test_db() -> Db {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::infra::database::run_migrations(&conn).unwrap();
+        Db::available(std::sync::Arc::new(tokio::sync::Mutex::new(conn)))
+    }
+
+    fn fresh_service(db: Db) -> ConfigService {
+        ConfigService {
+            db,
+            cache: AppConfig::default(),
+        }
+    }
 
     /// 模拟 set() 的写入编码，确保 write → read 往返一致
     fn encode(value: &str) -> String {
@@ -355,5 +378,62 @@ mod tests {
         assert_eq!(decode("true"), "true");
         assert_eq!(decode(" true "), "true");
         assert_eq!(decode("200"), "200");
+    }
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    #[tokio::test]
+    async fn set_batch_persists_every_value_for_a_fresh_read() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::infra::database::run_migrations(&conn).unwrap();
+        let db = Db::available(std::sync::Arc::new(tokio::sync::Mutex::new(conn)));
+        let mut svc = ConfigService {
+            db: db.clone(),
+            cache: AppConfig::default(),
+        };
+
+        svc.set_batch(vec![
+            ("target_lang".to_string(), "en".to_string()),
+            ("theme".to_string(), "dark".to_string()),
+        ])
+        .await
+        .unwrap();
+
+        // 直接从库回读并解码，证明落盘而非只写缓存
+        let shared = db.try_conn().unwrap();
+        let conn = shared.lock().await;
+        let mut stmt = conn
+            .prepare("SELECT value FROM app_config WHERE key = ?1")
+            .unwrap();
+        let mut read = |key: &str| -> String {
+            let raw: String = stmt.query_row([key], |r| r.get(0)).unwrap();
+            decode(&raw)
+        };
+        assert_eq!(read("target_lang"), "en");
+        assert_eq!(read("theme"), "dark");
+    }
+
+    #[tokio::test]
+    async fn set_batch_leaves_connection_reusable_for_followup_writes() {
+        // 回归：手写 BEGIN/COMMIT 的版本在中途失败后会把未提交事务遗留在
+        // 共享连接上，此后所有写库静默失效。现在改用 unchecked_transaction
+        // （提前返回按 Drop 语义自动回滚），本测试钉住「写完还能继续写」。
+        let conn = Connection::open_in_memory().unwrap();
+        crate::infra::database::run_migrations(&conn).unwrap();
+        let db = Db::available(std::sync::Arc::new(tokio::sync::Mutex::new(conn)));
+        let mut svc = ConfigService {
+            db,
+            cache: AppConfig::default(),
+        };
+
+        svc.set_batch(vec![("theme".to_string(), "light".to_string())])
+            .await
+            .unwrap();
+        svc.set("target_lang", "ja").await.unwrap();
+        assert_eq!(svc.get("target_lang").as_deref(), Some("ja"));
     }
 }
