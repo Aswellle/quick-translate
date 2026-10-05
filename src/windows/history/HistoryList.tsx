@@ -198,9 +198,11 @@ export function HistoryList({
 }) {
   const { expandedId, setExpanded, removeRecord, toggleStar } = useHistoryStore();
 
+  // 函数式更新保持引用稳定：否则 expandedId 每次变化都会重建回调，
+  // 令全部 memo 化的 RecordCard 在展开/收起时无谓重渲染
   const handleToggle = useCallback(
-    (id: string) => setExpanded(expandedId === id ? null : id),
-    [expandedId, setExpanded]
+    (id: string) => setExpanded((prev) => (prev === id ? null : id)),
+    [setExpanded]
   );
 
   const handleDelete = useCallback(

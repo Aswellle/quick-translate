@@ -391,7 +391,11 @@ function GeneralTab({
             min={50}
             max={1000}
             value={draft.history_limit}
-            onChange={(e) => onChange("history_limit", parseInt(e.target.value) || 200)}
+            onChange={(e) => {
+              // 清空或非法输入回退默认 200；越界值钳制到有效区间
+              const n = parseInt(e.target.value) || 200;
+              onChange("history_limit", Math.min(1000, Math.max(50, n)));
+            }}
             className="input-field w-24 text-center"
           />
         </SettingsRow>
