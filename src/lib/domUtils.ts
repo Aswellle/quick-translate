@@ -28,10 +28,10 @@ function toElement(target: EventTarget | null): HTMLElement | null {
 export function isKeyConsumingTarget(target: EventTarget | null): boolean {
   const el = toElement(target);
   if (!el) return false;
-  return (
+  return Boolean(
     INPUT_TAGS.has(el.tagName) ||
-    ACTIVATABLE_TAGS.has(el.tagName) ||
-    el.isContentEditable
+      ACTIVATABLE_TAGS.has(el.tagName) ||
+      el.isContentEditable
   );
 }
 
