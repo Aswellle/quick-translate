@@ -1,18 +1,9 @@
 // src/lib/constants.ts
 
-export const APP_NAME = "QuickTranslate";
-export const APP_VERSION = "0.1.0";
-
 export const EVENTS = {
   TRANSLATION_LOADING: "translation-loading",
   TRANSLATION_RESULT: "translation-result",
   TRANSLATION_ERROR: "translation-error",
-} as const;
-
-export const WINDOWS = {
-  POPUP: "popup",
-  SETTINGS: "settings",
-  HISTORY: "history",
 } as const;
 
 export const SUPPORTED_LANGUAGES = [
