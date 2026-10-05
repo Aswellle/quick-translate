@@ -52,13 +52,15 @@ export function ToastItem({ id, message, type = "info", duration = 3500, onClose
 
   useEffect(() => {
     const show = requestAnimationFrame(() => setVisible(true));
+    let fade: ReturnType<typeof setTimeout> | null = null;
     const hide = setTimeout(() => {
       setVisible(false);
-      setTimeout(() => onClose(id), 250);
+      fade = setTimeout(() => onClose(id), 250);
     }, duration);
     return () => {
       cancelAnimationFrame(show);
       clearTimeout(hide);
+      if (fade) clearTimeout(fade);
     };
   }, [id, duration, onClose]);
 

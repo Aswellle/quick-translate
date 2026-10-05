@@ -1,7 +1,7 @@
 // src/components/CopyButton.tsx
 // 复制按钮（macOS 风格）
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { copyToClipboard } from "@/lib/commands";
 
 interface CopyButtonProps {
@@ -13,11 +13,20 @@ interface CopyButtonProps {
 export function CopyButton({ text, className = "", label = "复制" }: CopyButtonProps) {
   const [copied, setCopied] = useState(false);
 
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+    };
+  }, []);
+
   const handleCopy = useCallback(async () => {
     try {
       await copyToClipboard(text);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+      copiedTimer.current = setTimeout(() => setCopied(false), 1200);
     } catch (err) {
       console.error("复制失败:", err);
     }
