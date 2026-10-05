@@ -12,7 +12,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useConfigStore } from "@/stores/configStore";
 
 /** 将 theme 字符串应用到 document.documentElement */
-function applyTheme(theme: string) {
+export function applyTheme(theme: string) {
   const root = document.documentElement;
 
   if (theme === "dark") {
@@ -28,7 +28,6 @@ function applyTheme(theme: string) {
 
 export function useTheme() {
   const config = useConfigStore((s) => s.config);
-  const setConfig = useConfigStore((s) => s.setConfig);
   const theme = config?.theme ?? "system";
 
   // 监听系统主题变化（仅 "system" 模式时生效）
@@ -67,15 +66,17 @@ export function useTheme() {
       const newTheme = event.payload.theme;
       applyTheme(newTheme);
 
-      // 同步到本窗口的 configStore（保证 useTheme 下次渲染也用新值）
-      if (config) {
-        setConfig({ ...config, theme: newTheme });
+      // 同步到本窗口的 configStore（保证 useTheme 下次渲染也用新值）。
+      // 用 getState() 取最新快照 —— 挂载时闭包捕获的 config 尚未异步加载，
+      // 会让这段同步逻辑永久失效。
+      const { config: current, setConfig: set } = useConfigStore.getState();
+      if (current) {
+        set({ ...current, theme: newTheme });
       }
     }).then((fn) => {
       unlisten = fn;
     });
 
     return () => unlisten?.();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // 仅挂载一次，通过闭包外的 config ref 避免重复注册
+  }, []);
 }

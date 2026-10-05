@@ -23,6 +23,7 @@ import {
 import { toast } from "@/components/ToastManager";
 import { SUPPORTED_LANGUAGES, PROVIDERS, ERROR_MESSAGES } from "@/lib/constants";
 import { useConfigStore } from "@/stores/configStore";
+import { applyTheme } from "@/hooks/useTheme";
 
 // 需要特殊处理的凭证字段：getConfig() 返回 masked 值，不能直接写回
 const CREDENTIAL_KEYS = PROVIDERS
@@ -30,17 +31,6 @@ const CREDENTIAL_KEYS = PROVIDERS
   .flatMap((p) => p.credentialFields.map((f) => f.key));
 
 type TabId = "general" | "provider";
-
-function applyThemeNow(theme: string) {
-  const root = document.documentElement;
-  if (theme === "dark") {
-    root.classList.add("dark");
-  } else if (theme === "light") {
-    root.classList.remove("dark");
-  } else {
-    root.classList.toggle("dark", window.matchMedia("(prefers-color-scheme: dark)").matches);
-  }
-}
 
 export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provider" }) {
   const { setConfig } = useConfigStore();
@@ -194,7 +184,7 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
       }
       await setConfigBatch(updates);
       setConfig(draft);
-      applyThemeNow(draft.theme);
+      applyTheme(draft.theme);
       setSaveStatus("ok");
       toast("设置已保存", "success");
       setTimeout(() => setSaveStatus("idle"), 2500);
@@ -373,7 +363,7 @@ function GeneralTab({
             value={draft.theme}
             onChange={(e) => {
               onChange("theme", e.target.value as AppConfig["theme"]);
-              applyThemeNow(e.target.value);
+              applyTheme(e.target.value);
             }}
             className="input-field w-32"
           >
@@ -803,7 +793,7 @@ function ProviderCard({
           <span className="text-[13px] font-medium text-[var(--text-primary)]">{provider.name}</span>
           <span
             className="text-[11px] text-white px-1.5 py-px rounded-full font-semibold"
-            style={{ backgroundColor: provider.badgeColor.includes("purple") ? "#AF52DE" : provider.badgeColor.includes("orange") ? "#FF9500" : provider.badgeColor.includes("blue") ? "#007AFF" : "#5AC8FA" }}
+            style={{ backgroundColor: provider.dotColor }}
           >
             {provider.badge}
           </span>

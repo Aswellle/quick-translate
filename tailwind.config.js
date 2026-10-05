@@ -100,6 +100,7 @@ export default {
         "macos-lg":      "0 8px 40px rgba(0, 0, 0, 0.15), 0 4px 12px rgba(0, 0, 0, 0.08)",
         "glow-blue":     "0 0 20px rgba(0, 122, 255, 0.30)",
         "glow-purple":   "0 0 20px rgba(175, 82, 222, 0.30)",
+        "glow-green":    "0 0 20px rgba(52, 199, 89, 0.30)",
       },
       fontFamily: {
         ui:      ["SF Pro Text", "Segoe UI", "-apple-system", "BlinkMacSystemFont", "system-ui", "sans-serif"],

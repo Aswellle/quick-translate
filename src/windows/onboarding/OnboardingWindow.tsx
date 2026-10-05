@@ -356,11 +356,7 @@ function StepChoose({
                   {/* 品牌色点：与设置页徽章同色 */}
                   <span
                     className="w-2.5 h-2.5 rounded-full shrink-0"
-                    style={{
-                      backgroundColor: p.badgeColor.includes("purple") ? "#AF52DE"
-                        : p.badgeColor.includes("orange") ? "#FF9500"
-                        : p.badgeColor.includes("blue") ? "#007AFF" : "#5AC8FA",
-                    }}
+                    style={{ backgroundColor: p.dotColor }}
                   />
                   <span className="text-[13.5px] font-medium text-[var(--text-primary)] truncate">{p.name}</span>
                   {p.id === "google" && (
