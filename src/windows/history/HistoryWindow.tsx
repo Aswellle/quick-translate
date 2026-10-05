@@ -31,12 +31,16 @@ export function HistoryWindow() {
   } = useHistoryStore();
 
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loadSeqRef = useRef(0);
   const [confirmClear, setConfirmClear] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportFormat, setExportFormat] = useState<"json" | "markdown" | "html">("markdown");
 
   const loadHistory = useCallback(
     async (query: string, pageNum: number, onlyStarred: boolean) => {
+      // 请求序号门：并发加载（防抖窗口内的连续搜索、收藏切换）乱序返回时，
+      // 只让最新一次的结果生效
+      const seq = ++loadSeqRef.current;
       setLoading(true);
       try {
         const searchVal = query.trim() || undefined;
@@ -49,12 +53,15 @@ export function HistoryWindow() {
           }),
           countHistory(searchVal, onlyStarred || undefined),
         ]);
+        if (seq !== loadSeqRef.current) return;
         setRecords(recs, count);
       } catch (err) {
-        toast("加载历史记录失败", "error");
-        console.error(err);
+        if (seq === loadSeqRef.current) {
+          toast("加载历史记录失败", "error");
+          console.error(err);
+        }
       } finally {
-        setLoading(false);
+        if (seq === loadSeqRef.current) setLoading(false);
       }
     },
     [pageSize, setLoading, setRecords]
@@ -324,7 +331,7 @@ type ExportRecord = {
   target_lang: string;
   provider: string;
   created_at: number;
-  duration_ms: number;
+  duration_ms: number | null;
   is_starred: boolean;
 };
 
@@ -351,7 +358,7 @@ function formatAsMarkdown(records: ExportRecord[]): string {
     lines.push(``);
     lines.push(r.translated_text);
     lines.push(``);
-    lines.push(`_${ts}　耗时 ${r.duration_ms} ms_`);
+    lines.push(`_${ts}${r.duration_ms != null ? `　耗时 ${r.duration_ms} ms` : ""}_`);
     lines.push(``);
     lines.push(`---`);
     lines.push(``);

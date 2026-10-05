@@ -15,11 +15,8 @@ interface TranslationState {
   result: TranslationResult | null;
   errorCode: string | null;
   errorMessage: string | null;
-  /** 当前请求的 request_id（loading 事件下发）；迟到的旧结果据此被丢弃 */
-  requestId: string | null;
-
   // Actions
-  setLoading: (requestId: string | null) => void;
+  setLoading: () => void;
   setResult: (result: TranslationResult) => void;
   setError: (code: string, message: string) => void;
   reset: () => void;
@@ -30,15 +27,13 @@ export const useTranslationStore = create<TranslationState>((set) => ({
   result: null,
   errorCode: null,
   errorMessage: null,
-  requestId: null,
 
-  setLoading: (requestId) =>
+  setLoading: () =>
     set({
       status: "loading",
       result: null,
       errorCode: null,
       errorMessage: null,
-      requestId,
     }),
 
   setResult: (result) =>

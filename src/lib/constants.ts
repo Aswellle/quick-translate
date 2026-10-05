@@ -1,18 +1,9 @@
 // src/lib/constants.ts
 
-export const APP_NAME = "QuickTranslate";
-export const APP_VERSION = "0.1.0";
-
 export const EVENTS = {
   TRANSLATION_LOADING: "translation-loading",
   TRANSLATION_RESULT: "translation-result",
   TRANSLATION_ERROR: "translation-error",
-} as const;
-
-export const WINDOWS = {
-  POPUP: "popup",
-  SETTINGS: "settings",
-  HISTORY: "history",
 } as const;
 
 export const SUPPORTED_LANGUAGES = [
@@ -37,6 +28,7 @@ export const PROVIDERS = [
     name: "腾讯翻译",
     badge: "推荐",
     badgeColor: "bg-blue-500",
+    dotColor: "#007AFF",
     freeQuota: "500 万字符/月",
     quality: "high",
     requiresApiKey: true,
@@ -58,6 +50,7 @@ export const PROVIDERS = [
     name: "DeepL",
     badge: "高质量",
     badgeColor: "bg-purple-500",
+    dotColor: "#AF52DE",
     freeQuota: "50 万字符/月",
     quality: "highest",
     requiresApiKey: true,
@@ -78,6 +71,7 @@ export const PROVIDERS = [
     name: "百度翻译",
     badge: "中文优化",
     badgeColor: "bg-red-500",
+    dotColor: "#FF3B30",
     freeQuota: "100 万字符/月",
     quality: "high",
     requiresApiKey: true,
@@ -99,6 +93,7 @@ export const PROVIDERS = [
     name: "有道翻译",
     badge: "备用",
     badgeColor: "bg-green-500",
+    dotColor: "#34C759",
     freeQuota: "按量计费",
     quality: "medium",
     requiresApiKey: true,
@@ -120,6 +115,7 @@ export const PROVIDERS = [
     name: "Google Translate",
     badge: "免费无限",
     badgeColor: "bg-gray-500",
+    dotColor: "#8E8E93",
     freeQuota: "无限制（非官方）",
     quality: "medium",
     requiresApiKey: false,

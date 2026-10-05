@@ -73,19 +73,6 @@ export interface AppError {
   message: string;
 }
 
-// ---- 翻译 Commands ----
-
-export async function translateText(
-  text: string,
-  targetLang?: string
-): Promise<TranslationResult> {
-  return invoke("translate_text", { text, targetLang });
-}
-
-export async function listProviders(): Promise<ProviderInfo[]> {
-  return invoke("list_providers");
-}
-
 /** 翻译源运行时状态（计划第 28/50 节：设置页据此显示七态状态词表） */
 export interface ProviderStatus {
   id: string;
@@ -155,10 +142,6 @@ export async function validateProvider(providerId: string): Promise<boolean> {
 
 export async function getConfig(): Promise<AppConfig> {
   return invoke("get_config");
-}
-
-export async function setConfig(key: string, value: string): Promise<void> {
-  return invoke("set_config", { key, value });
 }
 
 export async function setConfigBatch(
@@ -243,30 +226,10 @@ export async function getPopupGeometry(): Promise<PopupGeometry> {
   return invoke("get_popup_geometry");
 }
 
-export async function getAppVersion(): Promise<string> {
-  return invoke("get_app_version");
-}
-
-// ---- Toast ----
-
-export interface ToastPayload {
-  message: string;
-  kind: "error" | "success" | "warning" | "info";
-  duration?: number;
-}
-
-export async function notifyToast(payload: ToastPayload): Promise<void> {
-  return invoke("notify_toast", { payload });
-}
-
 // ---- 开机自启动 ----
 
 export async function getAutostart(): Promise<boolean> {
   return invoke("get_autostart");
-}
-
-export async function setAutostart(enabled: boolean): Promise<void> {
-  return invoke("set_autostart", { enabled });
 }
 
 // ---- 系统浏览器打开链接 ----

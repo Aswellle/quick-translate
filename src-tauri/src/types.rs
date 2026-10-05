@@ -74,7 +74,7 @@ impl TranslationRecord {
 /// 历史记录查询参数（前端 → Rust）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryQuery {
-    pub search: Option<String>,     // FTS5 搜索关键词
+    pub search: Option<String>,     // LIKE 子串搜索关键词
     pub limit: i64,                 // 默认 50
     pub offset: i64,                // 分页偏移
     pub starred_only: Option<bool>, // 仅显示收藏

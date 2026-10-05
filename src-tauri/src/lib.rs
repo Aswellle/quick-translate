@@ -127,8 +127,16 @@ pub fn run() {
             let http_client = Arc::new(HttpClient::new());
 
             // 初始化机器绑定随机密钥（必须在 ConfigService::load 之前，确保
-            // 加解密使用新版密钥；旧密钥数据会在 load 中自动迁移）
-            crypto::init_per_install_secret(&app_data_dir).expect("机器密钥初始化失败");
+            // 加解密使用新版密钥；旧密钥数据会在 load 中自动迁移）。
+            // 密钥文件损坏/不可写由 init 内部降级处理（重新生成或临时密钥），
+            // 不再用 expect 中止启动。
+            if let Err(e) = crypto::init_per_install_secret(&app_data_dir) {
+                tracing::error!(
+                    event = "machine_secret_init_failed",
+                    "机器密钥初始化失败（加密功能降级）: {}",
+                    e
+                );
+            }
 
             // ── Step 2: 初始化 Domain 层 ─────────────────────────────────────
             let config = ConfigService::load(db.clone());

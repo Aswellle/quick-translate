@@ -22,9 +22,11 @@ pub async fn set_config(
     key: String,
     value: String,
 ) -> Result<(), AppError> {
-    state.config.write().await.set(&key, &value).await?;
-
+    // 副作用先行（与托盘 switch_provider 同序）：未知翻译源、无法构建的
+    // 凭证都会在这一步失败并返回，无效值绝不进入数据库与缓存。副作用
+    // 成功而持久化失败（存储降级）属边缘情形，由运行状态面板如实呈现。
     handle_side_effect(&app, &state, &key, &value).await?;
+    state.config.write().await.set(&key, &value).await?;
     Ok(())
 }
 
@@ -35,8 +37,19 @@ pub async fn set_config_batch(
     app: AppHandle,
     updates: Vec<(String, String)>,
 ) -> Result<(), AppError> {
+    // 逐键预校验：无效值跳过并记录（宽松模式 = 拒之门外，而不是写进
+    // 数据库让引擎与配置持久化各执一词）
+    let mut validated: Vec<(String, String)> = Vec::with_capacity(updates.len());
+    for (key, value) in &updates {
+        if let Err(e) = validate_update(&state, key, value).await {
+            tracing::warn!("[set_config_batch] {} 未通过校验，已跳过: {}", key, e);
+            continue;
+        }
+        validated.push((key.clone(), value.clone()));
+    }
+
     // 批量写入 DB（auto_start 单独处理避免双写）
-    let db_updates: Vec<(String, String)> = updates
+    let db_updates: Vec<(String, String)> = validated
         .iter()
         .filter(|(k, _)| k != "auto_start")
         .cloned()
@@ -48,7 +61,7 @@ pub async fn set_config_batch(
 
     // 逐键应用副作用，委托给 handle_side_effect，与 set_config 共用同一逻辑，消除分歧风险
     // 宽松模式：单键副作用失败仅记录警告，不中止整批次
-    for (key, value) in &updates {
+    for (key, value) in &validated {
         if let Err(e) = handle_side_effect(&app, &state, key, value).await {
             tracing::warn!(
                 "[set_config_batch] side_effect[{}] 失败（已忽略）: {}",
@@ -58,6 +71,27 @@ pub async fn set_config_batch(
         }
     }
 
+    Ok(())
+}
+
+/// 持久化前的值校验：只覆盖无需副作用的纯校验（副作用自身的构建失败
+/// 已经由 handle_side_effect 把关）。
+async fn validate_update(
+    state: &State<'_, AppState>,
+    key: &str,
+    value: &str,
+) -> Result<(), AppError> {
+    if key == "provider" {
+        let exists = state
+            .translator
+            .list_providers()
+            .await
+            .iter()
+            .any(|p| p.id == value);
+        if !exists {
+            return Err(AppError::ConfigError(format!("未知翻译源: {}", value)));
+        }
+    }
     Ok(())
 }
 

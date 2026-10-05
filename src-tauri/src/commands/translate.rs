@@ -6,6 +6,7 @@ use tauri::State;
 
 use crate::error::AppError;
 use crate::state::AppState;
+use crate::system::translation::request::MAX_TEXT_CHARS;
 use crate::types::{ProviderStatus, TranslationRecord, TranslationResult};
 
 /// 前端手动触发翻译
@@ -23,9 +24,9 @@ pub async fn translate_text(
         return Err(AppError::EmptyText);
     }
 
-    // 截断超长文本
-    let (text_to_translate, truncated) = if text.chars().count() > 5000 {
-        (text.chars().take(5000).collect::<String>(), true)
+    // 截断超长文本（与剪贴板路径共用同一上限，避免两处漂移）
+    let (text_to_translate, truncated) = if text.chars().count() > MAX_TEXT_CHARS {
+        (text.chars().take(MAX_TEXT_CHARS).collect::<String>(), true)
     } else {
         (text.clone(), false)
     };

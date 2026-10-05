@@ -19,7 +19,7 @@ interface HistoryState {
   setLoading: (loading: boolean) => void;
   setSearchQuery: (query: string) => void;
   setPage: (page: number) => void;
-  setExpanded: (id: string | null) => void;
+  setExpanded: (id: string | null | ((prev: string | null) => string | null)) => void;
   setStarredOnly: (value: boolean) => void;
   clearAll: () => void;
   removeRecord: (id: string) => void;
@@ -40,7 +40,11 @@ export const useHistoryStore = create<HistoryState>((set) => ({
   setLoading: (isLoading) => set({ isLoading }),
   setSearchQuery: (searchQuery) => set({ searchQuery, page: 0 }),
   setPage: (page) => set({ page }),
-  setExpanded: (expandedId) => set({ expandedId }),
+  setExpanded: (expandedId) =>
+    set((state) => ({
+      expandedId:
+        typeof expandedId === "function" ? expandedId(state.expandedId) : expandedId,
+    })),
   setStarredOnly: (starredOnly) => set({ starredOnly, page: 0 }),
   clearAll: () => set({ records: [], total: 0, expandedId: null }),
   removeRecord: (id) =>

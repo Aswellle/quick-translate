@@ -41,7 +41,7 @@ const FALLBACK_GEOMETRY: PopupGeometry = {
 };
 
 export function PopupWindow() {
-  const { status, result, errorCode, errorMessage, requestId, setLoading, setResult, setError } =
+  const { status, result, errorCode, errorMessage, setLoading, setResult, setError } =
     useTranslationStore();
 
   // popup 容器的 ref，用于判断点击是否在窗体内部
@@ -108,7 +108,7 @@ export function PopupWindow() {
   const handleLoading = useCallback(
     (event: { payload: TranslationLoadingPayload }) => {
       requestIdRef.current = event.payload.request_id;
-      setLoading(event.payload.request_id);
+      setLoading();
       setCollapsed(false);
       resizePopup(width, geometry.height_loading).catch(console.error);
     },
