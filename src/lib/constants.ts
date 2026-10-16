@@ -137,6 +137,8 @@ export const PROVIDER_LABELS: Record<string, string> = {
   google:  "Google",
   // 非翻译源：所有翻译源都连不上时由本地缓存提供结果
   cache:   "本地缓存",
+  // 非翻译源：复制的内容本身就是目标语言，后端原样返回（coordinator "none"）
+  none:    "无需翻译",
 };
 
 export const ERROR_MESSAGES: Record<string, string> = {

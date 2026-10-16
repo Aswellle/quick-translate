@@ -61,6 +61,11 @@ export function PopupWindow() {
   const [collapsed, setCollapsed] = useState(false);
   const [wide, setWide] = useState(false);
 
+  // 浮窗是否已转为可交互态。被动态下键盘事件根本到不了 webview
+  // （focusable(false)），"空格关闭"提示此时只是误导 —— 用户照做会把
+  // 空格打进正在编辑的文档。激活成功后才允许渲染快捷键提示。
+  const [activated, setActivated] = useState(false);
+
   // 后端权威尺寸契约（C3）：挂载时拉取一次，失败则沿用兜底值
   const [geometry, setGeometry] = useState<PopupGeometry>(FALLBACK_GEOMETRY);
   useEffect(() => {
@@ -300,9 +305,11 @@ export function PopupWindow() {
       const moved = Math.hypot(e.clientX - origin.x, e.clientY - origin.y);
       if (moved > CLICK_SLOP_PX) return; // 是拖拽，不是点击
 
-      activatePopup().catch((err) =>
-        console.error("[PopupWindow] 转入交互态失败:", err)
-      );
+      activatePopup()
+        .then(() => setActivated(true))
+        .catch((err) =>
+          console.error("[PopupWindow] 转入交互态失败:", err)
+        );
     };
 
     document.addEventListener("mouseup", handlePressEnd);
@@ -375,6 +382,7 @@ export function PopupWindow() {
             onToggleWide={handleToggleWide}
             collapsed={collapsed}
             wide={wide}
+            activated={activated}
           />
           {collapsed && (
             <span className="popup-titlebar__summary">
@@ -398,7 +406,9 @@ export function PopupWindow() {
               </div>
             )}
             {status === "loading" && <LoadingView />}
-            {status === "success" && result && <ResultView result={result} />}
+            {status === "success" && result && (
+              <ResultView result={result} showKeyboardHint={activated} />
+            )}
             {status === "error" && (
               <ErrorView
                 code={errorCode ?? "UNKNOWN"}

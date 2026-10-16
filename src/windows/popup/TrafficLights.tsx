@@ -11,6 +11,8 @@ interface TrafficLightsProps {
   onToggleWide: () => void;
   collapsed: boolean;
   wide: boolean;
+  /** 浮窗已转为可交互态：关闭 tooltip 才提 Esc/空格（被动态收不到键盘） */
+  activated: boolean;
 }
 
 export function TrafficLights({
@@ -19,6 +21,7 @@ export function TrafficLights({
   onToggleWide,
   collapsed,
   wide,
+  activated,
 }: TrafficLightsProps) {
   return (
     // group：hover 任意一个按钮时统一显出所有字形，与 macOS 行为一致
@@ -26,7 +29,7 @@ export function TrafficLights({
     <div className="traffic-lights group" data-no-drag>
       <TrafficLight
         variant="close"
-        title="关闭 (Esc / 空格)"
+        title={activated ? "关闭 (Esc / 空格)" : "关闭"}
         onClick={onClose}
         glyph={
           <path
