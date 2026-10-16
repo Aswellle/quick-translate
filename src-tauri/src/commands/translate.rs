@@ -59,7 +59,11 @@ pub async fn translate_text(
     // 落盘走有界队列 + 单 worker（计划第 24/41 节），与剪贴板路径同一条管道。
     // 此前这里是「每请求 spawn 一个游离历史写任务」—— 计划第 41 节明确禁止的
     // 唯一残留形态。入队失败只丢一次历史/缓存写入，不影响返回给前端的结果。
-    let record = TranslationRecord::from_result(&result, &text, &target);
+    //
+    // 历史记录存截断后的原文：与实际翻译内容一致（超长输入是先截断再送翻译
+    // 的），HISTORY_LIMIT_MAX 对入库字节数也因此真正有效 —— 存截断前全文
+    // 的话，一次粘贴几 MB 文本就绕过了保留上限。与缓存条目同源。
+    let record = TranslationRecord::from_result(&result, &text_to_translate, &target);
     let job = crate::system::persistence::PersistJob {
         history_limit: state
             .config

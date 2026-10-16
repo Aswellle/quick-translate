@@ -57,15 +57,20 @@ impl HistoryRepository {
         let conn = conn.lock().await;
 
         let starred_only = params.starred_only.unwrap_or(false);
+        // limit/offset 来自前端，直接绑定 SQL：SQLite 里 LIMIT -1 等于
+        // 不限制（一次拖回全部行），负 offset 也会被无声接受 —— 与
+        // enforce_limit 的钳制口径对齐，在这里统一收口。
+        let limit = params.limit.clamp(1, 1000);
+        let offset = params.offset.max(0);
 
         let records = if let Some(search) = &params.search {
             if search.trim().is_empty() {
-                query_all(&conn, params.limit, params.offset, starred_only)?
+                query_all(&conn, limit, offset, starred_only)?
             } else {
-                query_like(&conn, search, params.limit, params.offset, starred_only)?
+                query_like(&conn, search, limit, offset, starred_only)?
             }
         } else {
-            query_all(&conn, params.limit, params.offset, starred_only)?
+            query_all(&conn, limit, offset, starred_only)?
         };
 
         Ok(records)
