@@ -30,6 +30,13 @@ fn looks_like_masked_value(value: &str) -> bool {
     value.chars().take_while(|c| *c == '*' || *c == '•').count() >= 4
 }
 
+/// 该键值对是否为「掩码凭证回写」。公开给 commands 层：副作用处理
+/// （重建活体 provider）与缓存应用同样必须拦截掩码值，只挡持久化
+/// 路径不够 —— 掩码串会绕过数据库直接污染内存里的凭证与引擎实例。
+pub fn is_masked_credential(key: &str, value: &str) -> bool {
+    is_encrypted(key) && looks_like_masked_value(value)
+}
+
 /// history_limit 的有效范围（含端点）。
 /// 低于下限会导致 enforce_limit 删除全部非收藏记录；
 /// 过大的值会削弱 FIFO 清理意义并占用内存。
@@ -178,12 +185,21 @@ impl ConfigService {
                 .map_err(|e| AppError::DatabaseError(e.to_string()))?;
         }
         for (key, value) in &updates {
+            // 与持久化循环同一道守卫：掩码值只许跳过写库，也绝不允许
+            // 覆盖内存缓存 —— 否则数据库里是真凭证、缓存里是掩码串，
+            // 不重启就修不回来。
+            if is_masked_credential(key, value) {
+                continue;
+            }
             self.apply_to_cache(key, value);
         }
         Ok(())
     }
 
     fn apply_to_cache(&mut self, key: &str, value: &str) {
+        if is_masked_credential(key, value) {
+            return;
+        }
         match key {
             "target_lang" => self.cache.target_lang = value.to_string(),
             "provider" => self.cache.provider = value.to_string(),
@@ -505,5 +521,56 @@ mod masked_value_tests {
             .unwrap();
         assert_eq!(crate::infra::crypto::decrypt(&raw).unwrap(), "real-key-123");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn set_batch_skips_masked_values_in_db_and_cache() {
+        // 回归：set_batch 此前只在写库循环里跳过掩码值，第二个循环仍把
+        // 掩码串 apply_to_cache 进内存 —— 数据库是真凭证、缓存是掩码串，
+        // 引擎按缓存重建后全部请求认证失败，不重启修不回来。
+        let dir = std::env::temp_dir().join(format!("qt_mask_batch_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::infra::crypto::init_per_install_secret(&dir).unwrap();
+
+        let conn = Connection::open_in_memory().unwrap();
+        crate::infra::database::run_migrations(&conn).unwrap();
+        let db = Db::available(std::sync::Arc::new(tokio::sync::Mutex::new(conn)));
+        let mut svc = ConfigService {
+            db: db.clone(),
+            cache: AppConfig::default(),
+        };
+
+        svc.set("deepl_api_key", "real-key-123").await.unwrap();
+        // 混合批次：掩码回传 + 一个普通键。普通键照常生效，掩码键全路径 no-op
+        svc.set_batch(vec![
+            ("deepl_api_key".to_string(), "********-123".to_string()),
+            ("target_lang".to_string(), "en".to_string()),
+        ])
+        .await
+        .unwrap();
+
+        assert_eq!(svc.get("target_lang").as_deref(), Some("en"));
+        // 内存缓存未被掩码覆盖
+        assert_eq!(svc.get_credential("deepl_api_key"), "real-key-123");
+        // 数据库同样未被掩码覆盖
+        let shared = db.try_conn().unwrap();
+        let conn = shared.lock().await;
+        let raw: String = conn
+            .query_row(
+                "SELECT value FROM app_config WHERE key = 'deepl_api_key'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(crate::infra::crypto::decrypt(&raw).unwrap(), "real-key-123");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn is_masked_credential_only_applies_to_encrypted_keys() {
+        // 普通键即使值长得像掩码也不是凭证（例如主题字符串），不该被拦截
+        assert!(!is_masked_credential("theme", "********"));
+        assert!(is_masked_credential("deepl_api_key", "********-123"));
+        assert!(!is_masked_credential("deepl_api_key", "real-key"));
     }
 }

@@ -103,6 +103,15 @@ async fn handle_side_effect(
     key: &str,
     value: &str,
 ) -> Result<(), AppError> {
+    // 掩码凭证守卫：前端持有的是脱敏形态，原样回传会把掩码串写进活体
+    // provider（AuthError → 长熔断）。ConfigService::set/set_batch 只挡了
+    // 持久化路径，副作用在持久化**之前**运行，必须在这里同样拦截。
+    // 当前设置页保存前会剥离凭证字段，这是给未来调用方（托盘、同步等）
+    // 加的防线。
+    if crate::domain::config::is_masked_credential(key, value) {
+        tracing::debug!("[side_effect] {} 传入掩码值，跳过副作用", key);
+        return Ok(());
+    }
     match key {
         "provider" => {
             state.translator.set_active_provider(value).await?;

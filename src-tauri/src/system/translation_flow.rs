@@ -233,11 +233,13 @@ fn desktop_for(app: &AppHandle, cursor: (f64, f64)) -> (f64, (f64, f64), popup_g
 ///
 /// 前端量高 → resize_popup → 窗口变高，此时**必须重新定位**：
 ///
-///     Loading（160px，位置合适）
-///       ↓
-///     Result（480px，位置没动）
-///       ↓
-///     下半截跑到屏幕外
+/// ```text
+/// Loading（160px，位置合适）
+///   ↓
+/// Result（480px，位置没动）
+///   ↓
+/// 下半截跑到屏幕外
+/// ```
 ///
 /// 返回 false 表示没有可用锚点（浮窗还没因翻译显示过），此时不动作。
 pub(crate) fn reposition_popup(app: &AppHandle, width: f64, height: f64) -> bool {

@@ -79,7 +79,7 @@ export interface ProviderStatus {
   name: string;
   requires_api_key: boolean;
   is_available: boolean;
-  /** "healthy" | "degraded" | "open" | "half_open" | "unknown" */
+  /** "healthy" | "degraded" | "open" | "half_open" | "unknown"（snake_case，后端 to_snake_case 下发） */
   health_state: string;
   /** 最近一次错误类别："transient" | "rate_limit" | "auth" | "quota" | "permanent" | "same_language" | null */
   last_error_class: string | null;
@@ -112,7 +112,7 @@ export async function getRuntimeDiagnostics(): Promise<RuntimeDiagnostics> {
 }
 
 export interface RuntimeStatusSnapshot {
-  overall: string; // "Healthy" | "Degraded" | "Recovering"
+  overall: string; // "healthy" | "degraded" | "recovering"（Rust RuntimeHealth 带 serde rename_all = "snake_case"）
   uptime_ms: number;
   clipboard: RuntimeComponentHealth;
   network: RuntimeComponentHealth;
