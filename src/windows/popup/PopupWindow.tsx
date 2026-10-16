@@ -244,7 +244,9 @@ export function PopupWindow() {
     const handleMouseDown = async (e: MouseEvent) => {
       // 仅响应左键
       if (e.button !== 0) return;
-      // 点击交互元素或 [data-no-drag] 容器内时跳过拖拽（C5：判定收敛至 domUtils）
+      // 点击交互元素、[data-no-drag] 容器或 .selectable 文本区时跳过拖拽
+      // （C5：判定收敛至 domUtils）。.selectable 必须避开：preventDefault
+      // 会取消 mousedown 默认开启的文本选区，用户划选译文就变成拖窗。
       if (isDragBlockingTarget(e.target)) return;
       e.preventDefault();
       isDragging.current = true;

@@ -61,4 +61,19 @@ describe("isDragBlockingTarget", () => {
     div.appendChild(child);
     expect(isDragBlockingTarget(child)).toBe(false);
   });
+
+  it("译文文本区（.selectable）阻断拖拽，划选不再变成拖窗", () => {
+    const wrap = el("div");
+    const p = el("p");
+    p.className = "selectable px-4 py-3.5";
+    const inner = el("span");
+    p.appendChild(inner);
+    wrap.appendChild(p);
+    // 命中元素本身、内部子元素都应阻断 —— mousedown 上的 preventDefault
+    // 会取消文本选区的建立，不避开这里用户划选译文会启动整窗拖拽
+    expect(isDragBlockingTarget(p)).toBe(true);
+    expect(isDragBlockingTarget(inner)).toBe(true);
+    // 外层容器仍可拖拽
+    expect(isDragBlockingTarget(wrap)).toBe(false);
+  });
 });
