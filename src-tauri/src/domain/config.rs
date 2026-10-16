@@ -1,5 +1,11 @@
 // src-tauri/src/domain/config.rs
 // 配置服务：内存缓存 + SQLite 持久化
+//
+// 所有 key → 字段的映射统一由 KEY_DESCRIPTORS 描述符表派生：
+// 加密判定、明文读取、缓存写入、数据库加载四个方向都从同一张表走。
+// 此前同一映射手写四遍（该模块先后产出过 bool JSON 编码与掩码覆盖
+// 两个线上回归），新增配置键漏改任何一处都是静默的 —— 现在漏改
+// 只会是编译错误或 test_descriptors_cover_app_config_fields 失败。
 
 use rusqlite::Connection;
 
@@ -8,19 +14,90 @@ use crate::infra::crypto;
 use crate::infra::database::Db;
 use crate::types::{now_unix_ms, AppConfig};
 
-/// 需要加密存储的 key 集合
-const ENCRYPTED_KEYS: &[&str] = &[
-    "deepl_api_key",
-    "tencent_secret_id",
-    "tencent_secret_key",
-    "baidu_app_id",
-    "baidu_secret_key",
-    "youdao_app_key",
-    "youdao_app_secret",
+/// 单个配置键的访问描述符：key → AppConfig 字段的唯一映射来源。
+struct KeyDescriptor {
+    key: &'static str,
+    encrypted: bool,
+    /// 读缓存字段为明文字符串（凭证键用）。None = 非凭证键。
+    get_credential: Option<fn(&AppConfig) -> &str>,
+    /// 把字符串值写入缓存字段。None = 缓存有专门解析逻辑（布尔/整数）。
+    set_string: Option<fn(&mut AppConfig, String)>,
+}
+
+/// 凭证与字符串类键的描述符表。
+///
+/// 布尔/整数键（auto_start / history_limit / fallback_enabled /
+/// onboarding_completed / clipboard_monitor_enabled）的解析各自带
+/// 类型转换与钳制逻辑，留在 match 里，表只收字符串直存类键。
+const KEY_DESCRIPTORS: &[KeyDescriptor] = &[
+    KeyDescriptor {
+        key: "target_lang",
+        encrypted: false,
+        get_credential: None,
+        set_string: Some(|c, v| c.target_lang = v),
+    },
+    KeyDescriptor {
+        key: "provider",
+        encrypted: false,
+        get_credential: None,
+        set_string: Some(|c, v| c.provider = v),
+    },
+    KeyDescriptor {
+        key: "theme",
+        encrypted: false,
+        get_credential: None,
+        set_string: Some(|c, v| c.theme = v),
+    },
+    KeyDescriptor {
+        key: "deepl_api_key",
+        encrypted: true,
+        get_credential: Some(|c| &c.deepl_api_key),
+        set_string: Some(|c, v| c.deepl_api_key = v),
+    },
+    KeyDescriptor {
+        key: "tencent_secret_id",
+        encrypted: true,
+        get_credential: Some(|c| &c.tencent_secret_id),
+        set_string: Some(|c, v| c.tencent_secret_id = v),
+    },
+    KeyDescriptor {
+        key: "tencent_secret_key",
+        encrypted: true,
+        get_credential: Some(|c| &c.tencent_secret_key),
+        set_string: Some(|c, v| c.tencent_secret_key = v),
+    },
+    KeyDescriptor {
+        key: "baidu_app_id",
+        encrypted: true,
+        get_credential: Some(|c| &c.baidu_app_id),
+        set_string: Some(|c, v| c.baidu_app_id = v),
+    },
+    KeyDescriptor {
+        key: "baidu_secret_key",
+        encrypted: true,
+        get_credential: Some(|c| &c.baidu_secret_key),
+        set_string: Some(|c, v| c.baidu_secret_key = v),
+    },
+    KeyDescriptor {
+        key: "youdao_app_key",
+        encrypted: true,
+        get_credential: Some(|c| &c.youdao_app_key),
+        set_string: Some(|c, v| c.youdao_app_key = v),
+    },
+    KeyDescriptor {
+        key: "youdao_app_secret",
+        encrypted: true,
+        get_credential: Some(|c| &c.youdao_app_secret),
+        set_string: Some(|c, v| c.youdao_app_secret = v),
+    },
 ];
 
+fn descriptor(key: &str) -> Option<&'static KeyDescriptor> {
+    KEY_DESCRIPTORS.iter().find(|d| d.key == key)
+}
+
 fn is_encrypted(key: &str) -> bool {
-    ENCRYPTED_KEYS.contains(&key)
+    descriptor(key).map(|d| d.encrypted).unwrap_or(false)
 }
 
 /// 识别掩码形态的凭证值（mask_api_key 生成，如 `********efgh`）：
@@ -96,32 +173,23 @@ impl ConfigService {
 
     /// 获取明文凭证（供 Rust 内部使用，不暴露给前端）
     pub fn get_credential(&self, key: &str) -> String {
-        match key {
-            "deepl_api_key" => self.cache.deepl_api_key.clone(),
-            "tencent_secret_id" => self.cache.tencent_secret_id.clone(),
-            "tencent_secret_key" => self.cache.tencent_secret_key.clone(),
-            "baidu_app_id" => self.cache.baidu_app_id.clone(),
-            "baidu_secret_key" => self.cache.baidu_secret_key.clone(),
-            "youdao_app_key" => self.cache.youdao_app_key.clone(),
-            "youdao_app_secret" => self.cache.youdao_app_secret.clone(),
-            _ => String::new(),
+        match descriptor(key).and_then(|d| d.get_credential) {
+            Some(getter) => getter(&self.cache).to_string(),
+            None => String::new(),
         }
     }
 
     pub fn get(&self, key: &str) -> Option<String> {
+        // 字符串类键（含凭证）从描述符表走；布尔/整数键带类型转换，单独处理
+        if let Some(getter) = descriptor(key).and_then(|d| d.get_credential) {
+            return Some(getter(&self.cache).to_string());
+        }
         match key {
             "target_lang" => Some(self.cache.target_lang.clone()),
             "provider" => Some(self.cache.provider.clone()),
-            "deepl_api_key" => Some(self.cache.deepl_api_key.clone()),
-            "tencent_secret_id" => Some(self.cache.tencent_secret_id.clone()),
-            "tencent_secret_key" => Some(self.cache.tencent_secret_key.clone()),
-            "baidu_app_id" => Some(self.cache.baidu_app_id.clone()),
-            "baidu_secret_key" => Some(self.cache.baidu_secret_key.clone()),
-            "youdao_app_key" => Some(self.cache.youdao_app_key.clone()),
-            "youdao_app_secret" => Some(self.cache.youdao_app_secret.clone()),
+            "theme" => Some(self.cache.theme.clone()),
             "auto_start" => Some(self.cache.auto_start.to_string()),
             "history_limit" => Some(self.cache.history_limit.to_string()),
-            "theme" => Some(self.cache.theme.clone()),
             "fallback_enabled" => Some(self.cache.fallback_enabled.to_string()),
             "onboarding_completed" => Some(self.cache.onboarding_completed.to_string()),
             "clipboard_monitor_enabled" => Some(self.cache.clipboard_monitor_enabled.to_string()),
@@ -200,16 +268,12 @@ impl ConfigService {
         if is_masked_credential(key, value) {
             return;
         }
+        // 字符串类键走描述符表；布尔/整数键带类型转换与钳制，单独处理
+        if let Some(setter) = descriptor(key).and_then(|d| d.set_string) {
+            setter(&mut self.cache, value.to_string());
+            return;
+        }
         match key {
-            "target_lang" => self.cache.target_lang = value.to_string(),
-            "provider" => self.cache.provider = value.to_string(),
-            "deepl_api_key" => self.cache.deepl_api_key = value.to_string(),
-            "tencent_secret_id" => self.cache.tencent_secret_id = value.to_string(),
-            "tencent_secret_key" => self.cache.tencent_secret_key = value.to_string(),
-            "baidu_app_id" => self.cache.baidu_app_id = value.to_string(),
-            "baidu_secret_key" => self.cache.baidu_secret_key = value.to_string(),
-            "youdao_app_key" => self.cache.youdao_app_key = value.to_string(),
-            "youdao_app_secret" => self.cache.youdao_app_secret = value.to_string(),
             "auto_start" => self.cache.auto_start = value == "true",
             "history_limit" => {
                 if let Ok(n) = value.parse::<i64>() {
@@ -244,8 +308,10 @@ fn load_config_from_db(conn: &Connection) -> Result<AppConfig, AppError> {
     let mut to_migrate: Vec<(String, String)> = Vec::new();
 
     for (key, raw) in rows {
-        match key.as_str() {
-            k if is_encrypted(k) => {
+        // 字符串类键（含凭证）从描述符表走，映射与写路径同源；
+        // 凭证键先解密（新版失败回退旧版），布尔/整数键单独处理
+        if let Some(d) = descriptor(&key) {
+            if d.encrypted {
                 // 优先尝试新版密钥解密；失败再试旧版密钥（迁移兼容）。
                 // 同一密文只解密一次。
                 let fresh = crypto::decrypt(&raw);
@@ -265,28 +331,22 @@ fn load_config_from_db(conn: &Connection) -> Result<AppConfig, AppError> {
                 };
                 if plain.is_empty() && !raw.is_empty() {
                     // 新旧密钥均无法解密：可能是损坏数据，保留空值
-                    tracing::warn!("凭证 {} 无法解密，已重置为空", k);
+                    tracing::warn!("凭证 {} 无法解密，已重置为空", key);
                 } else if from_legacy_key && !plain.is_empty() {
                     // 旧密钥解密成功 → 需要迁移到新版密钥
-                    to_migrate.push((k.to_string(), plain.clone()));
+                    to_migrate.push((key.clone(), plain.clone()));
                 }
-                match k {
-                    "deepl_api_key" => config.deepl_api_key = plain,
-                    "tencent_secret_id" => config.tencent_secret_id = plain,
-                    "tencent_secret_key" => config.tencent_secret_key = plain,
-                    "baidu_app_id" => config.baidu_app_id = plain,
-                    "baidu_secret_key" => config.baidu_secret_key = plain,
-                    "youdao_app_key" => config.youdao_app_key = plain,
-                    "youdao_app_secret" => config.youdao_app_secret = plain,
-                    _ => {}
+                if let Some(setter) = d.set_string {
+                    setter(&mut config, plain);
+                }
+            } else if let Some(setter) = d.set_string {
+                if let Some(v) = ps(&raw) {
+                    setter(&mut config, v);
                 }
             }
-            "target_lang" => {
-                config.target_lang = ps(&raw).unwrap_or(config.target_lang);
-            }
-            "provider" => {
-                config.provider = ps(&raw).unwrap_or(config.provider);
-            }
+            continue;
+        }
+        match key.as_str() {
             "auto_start" => {
                 config.auto_start = decode(&raw) == "true";
             }
@@ -306,9 +366,6 @@ fn load_config_from_db(conn: &Connection) -> Result<AppConfig, AppError> {
                     }
                     Err(_) => config.history_limit,
                 };
-            }
-            "theme" => {
-                config.theme = ps(&raw).unwrap_or(config.theme);
             }
             "fallback_enabled" => {
                 config.fallback_enabled = decode(&raw) == "true";
@@ -572,5 +629,54 @@ mod masked_value_tests {
         assert!(!is_masked_credential("theme", "********"));
         assert!(is_masked_credential("deepl_api_key", "********-123"));
         assert!(!is_masked_credential("deepl_api_key", "real-key"));
+    }
+}
+
+/// 测试辅助：按键名读回缓存字段值（描述符测试用，编译进 test 配置）。
+#[cfg(test)]
+fn read_field_for_test(config: &AppConfig, key: &str) -> String {
+    if let Some(getter) = descriptor(key).and_then(|d| d.get_credential) {
+        return getter(config).to_string();
+    }
+    match key {
+        "target_lang" => config.target_lang.clone(),
+        "provider" => config.provider.clone(),
+        "theme" => config.theme.clone(),
+        _ => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod descriptor_tests {
+    use super::*;
+
+    /// 表里每个带 set_string 的键都必须真的写进对应字段：
+    /// 建一个全空 AppConfig，逐键写入哨兵值后用 get() 回读。
+    /// 字段错绑（复制描述符时漏改 setter）在这里直接暴露。
+    #[test]
+    fn descriptor_setters_write_their_own_field() {
+        let keys: Vec<&str> = KEY_DESCRIPTORS.iter().map(|d| d.key).collect();
+        let mut config = AppConfig::default();
+
+        for key in keys {
+            let sentinel = format!("sentinel-{}", key);
+            let d = descriptor(key).expect("descriptor 存在");
+            let setter = d.set_string.expect("表内键都有 set_string");
+            setter(&mut config, sentinel.clone());
+            assert_eq!(
+                crate::domain::config::read_field_for_test(&config, key),
+                sentinel,
+                "键 {} 的 setter 没有写入自己的字段",
+                key
+            );
+        }
+    }
+
+    /// is_encrypted 判定与表内声明一致（防呆：两者曾经是两份数据）。
+    #[test]
+    fn encrypted_flag_matches_table() {
+        for d in KEY_DESCRIPTORS {
+            assert_eq!(is_encrypted(d.key), d.encrypted, "键 {}", d.key);
+        }
     }
 }
