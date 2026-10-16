@@ -13,7 +13,6 @@ import {
   getRuntimeStatus,
   getRuntimeDiagnostics,
   onRuntimeStatusChanged,
-  setClipboardMonitorEnabled as invokeSetClipboardMonitor,
   type AppConfig,
   type StatsResult,
   type ProviderStatus,
@@ -37,6 +36,9 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
   // 初始 Tab 可由 URL hash 指定（托盘「配置翻译源…」直达路径）
   const [activeTab, setActiveTab] = useState<TabId>(initialTab ?? "general");
   const [draft, setDraft] = useState<AppConfig | null>(null);
+  // 配置加载失败时置位：只弹 toast 的话，3.5 秒后用户面对的是永久的
+  // 「加载中…」—— draft 恒为 null，窗口只能关掉重开
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState<"idle" | "ok" | "err">("idle");
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -116,7 +118,12 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
     };
   }, []);
 
-  // 加载配置
+  // 加载配置（可重试：loadError 置位后由错误视图的重试按钮重新触发）
+  const retryLoad = useCallback(() => {
+    setLoadError(null);
+    setDraft(null);
+  }, []);
+
   useEffect(() => {
     Promise.all([getConfig(), getAutostart()])
       .then(([cfg, autoStart]) => {
@@ -136,8 +143,11 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
         setConfig(mergedCfg);
         setDraft(mergedCfg);
       })
-      .catch((e) => toast("加载配置失败：" + String(e), "error"));
-  }, [setConfig]);
+      .catch((e) => {
+        toast("加载配置失败：" + String(e), "error");
+        setLoadError(String(e));
+      });
+  }, [setConfig, loadError]);
 
   // 加载使用统计
   useEffect(() => {
@@ -151,15 +161,30 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
 
   const updateDraft = useCallback(<K extends keyof AppConfig>(key: K, value: AppConfig[K]) => {
     setDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
+    // 凭证字段的测试结果随输入失效：否则「验证失败」徽章在用户改完
+    // 密钥后仍然挂着，指向一个已不存在的凭证状态（Onboarding 会重置，
+    // 设置页此前不会 —— 两个入口对同一操作行为不一致）
+    if (key === "theme") return;
+    setTestResults((prev) => {
+      const providerId = PROVIDERS.find((p) =>
+        p.credentialFields.some((f) => f.key === key)
+      )?.id;
+      if (!providerId || !(providerId in prev)) return prev;
+      const next = { ...prev };
+      delete next[providerId];
+      return next;
+    });
   }, []);
 
-  // 剪贴板监控开关：立即生效，同时更新 draft 供下次保存持久化
-  const handleClipboardToggle = useCallback((enabled: boolean) => {
-    updateDraft("clipboard_monitor_enabled", enabled);
-    invokeSetClipboardMonitor(enabled).catch((e) =>
-      toast("切换剪贴板监控失败：" + String(e), "error")
-    );
-  }, [updateDraft]);
+  // 剪贴板监控开关走与其他行一致的草稿模型：设置页此前一半字段即时
+  // 持久化、一半字段等「保存」，两种心智模型并存会让用户无法预判
+  // 「改动何时生效」（关窗不保存后行为回退正是典型的困惑来源）
+  const handleClipboardToggle = useCallback(
+    (enabled: boolean) => {
+      updateDraft("clipboard_monitor_enabled", enabled);
+    },
+    [updateDraft]
+  );
 
   // 保存
   const handleSave = useCallback(async () => {
@@ -229,6 +254,24 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
     }
   }, [draft]);
 
+  if (loadError) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-3 text-[var(--text-secondary)]">
+        <p className="text-[13px]">配置加载失败</p>
+        <p className="text-[12px] text-[var(--text-tertiary)] max-w-[280px] text-center break-all">
+          {loadError}
+        </p>
+        <button
+          type="button"
+          onClick={retryLoad}
+          className="px-4 py-1.5 rounded-lg text-[12.5px] font-medium bg-[var(--system-blue)] text-white hover:brightness-110 transition-all active:scale-95"
+        >
+          重试
+        </button>
+      </div>
+    );
+  }
+
   if (!draft) {
     return (
       <div className="flex items-center justify-center h-full gap-2 text-sm text-[var(--text-secondary)]">
@@ -254,13 +297,19 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
 
       {/* ── macOS 分段 Tab ── */}
       <div className="px-6 pt-3 bg-[var(--bg-secondary)]">
-        <div className="inline-flex rounded-lg bg-[var(--surface-tertiary)] dark:bg-[var(--surface-secondary)] p-0.5 gap-0.5">
+        <div
+          className="inline-flex rounded-lg bg-[var(--surface-tertiary)] dark:bg-[var(--surface-secondary)] p-0.5 gap-0.5"
+          role="tablist"
+          aria-label="设置分组"
+        >
           {(["general", "provider"] as TabId[]).map((tab) => (
             <button
               key={tab}
+              role="tab"
+              aria-selected={activeTab === tab}
               onClick={() => setActiveTab(tab)}
               className={[
-                "px-4 py-1.5 text-[12.5px] font-medium rounded-[7px] transition-all duration-150",
+                "px-4 py-1.5 text-[12.5px] font-medium rounded-[7px] transition-colors duration-150",
                 activeTab === tab
                   ? "bg-[var(--surface-primary)] dark:bg-[var(--surface-tertiary)] text-[var(--text-primary)] shadow-sm"
                   : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
@@ -345,8 +394,9 @@ function GeneralTab({
 
       {/* 外观 */}
       <SettingsSection label="外观">
-        <SettingsRow label="目标语言">
+        <SettingsRow label="目标语言" htmlFor="setting-target-lang">
           <select
+            id="setting-target-lang"
             value={draft.target_lang}
             onChange={(e) => onChange("target_lang", e.target.value as AppConfig["target_lang"])}
             className="input-field w-40"
@@ -358,8 +408,9 @@ function GeneralTab({
             ))}
           </select>
         </SettingsRow>
-        <SettingsRow label="界面主题">
+        <SettingsRow label="界面主题" htmlFor="setting-theme">
           <select
+            id="setting-theme"
             value={draft.theme}
             onChange={(e) => {
               onChange("theme", e.target.value as AppConfig["theme"]);
@@ -385,20 +436,7 @@ function GeneralTab({
         <SettingsRow label="自动 Fallback" hint="主翻译源失败时自动切换备用">
           <Toggle value={draft.fallback_enabled} onChange={(v) => onChange("fallback_enabled", v)} />
         </SettingsRow>
-        <SettingsRow label="历史记录上限" hint="50–1000 条">
-          <input
-            type="number"
-            min={50}
-            max={1000}
-            value={draft.history_limit}
-            onChange={(e) => {
-              // 清空或非法输入回退默认 200；越界值钳制到有效区间
-              const n = parseInt(e.target.value) || 200;
-              onChange("history_limit", Math.min(1000, Math.max(50, n)));
-            }}
-            className="input-field w-24 text-center"
-          />
-        </SettingsRow>
+        <HistoryLimitRow value={draft.history_limit} onChange={onChange} />
       </SettingsSection>
 
       {/* 运行状态（计划第 33/50 节）：消费 Runtime 层快照与诊断计数 */}
@@ -465,6 +503,41 @@ function GeneralTab({
 }
 
 // ──────────── 未配置提示横幅 ────────────
+
+/**
+ * 历史记录上限行：越界输入会被钳制，但静默改值会让用户疑惑「我填的
+ * 5000 怎么变成了 1000」—— 钳制发生时给出一行说明。
+ */
+function HistoryLimitRow({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: <K extends keyof AppConfig>(key: K, value: AppConfig[K]) => void;
+}) {
+  const [clamped, setClamped] = useState(false);
+
+  return (
+    <SettingsRow label="历史记录上限" htmlFor="setting-history-limit" hint={clamped ? "超出 50–1000 范围，已自动调整" : "50–1000 条"}>
+      <input
+        id="setting-history-limit"
+        type="number"
+        min={50}
+        max={1000}
+        value={value}
+        onChange={(e) => {
+          const raw = e.target.value;
+          // 清空或非法输入回退默认 200；越界值钳制到有效区间
+          const n = parseInt(raw) || 200;
+          const clampedValue = Math.min(1000, Math.max(50, n));
+          setClamped(n !== clampedValue);
+          onChange("history_limit", clampedValue);
+        }}
+        className="input-field w-24 text-center"
+      />
+    </SettingsRow>
+  );
+}
 
 /**
  * 跳过首次向导的兜底提示（计划第 5 节的后续路径）：
@@ -935,16 +1008,29 @@ function SettingsSection({ label, children }: { label: string; children: React.R
 function SettingsRow({
   label,
   hint,
+  htmlFor,
   children,
 }: {
   label: string;
   hint?: string;
+  /** 传入时 label 渲染为 <label htmlFor>，控件可被标签点击聚焦、屏幕
+      阅读器可正确关联 —— 纯开关行（Toggle 自带 role=switch）无需传入 */
+  htmlFor?: string;
   children: React.ReactNode;
 }) {
   return (
     <div className="px-4 py-3 flex items-center justify-between gap-4">
       <div className="flex-1 min-w-0">
-        <p className="text-[13px] font-medium text-[var(--text-primary)]">{label}</p>
+        {htmlFor ? (
+          <label
+            htmlFor={htmlFor}
+            className="text-[13px] font-medium text-[var(--text-primary)] block cursor-pointer"
+          >
+            {label}
+          </label>
+        ) : (
+          <p className="text-[13px] font-medium text-[var(--text-primary)]">{label}</p>
+        )}
         {hint && <p className="text-[12px] text-[var(--text-secondary)] mt-0.5 leading-snug">{hint}</p>}
       </div>
       <div className="shrink-0">{children}</div>
