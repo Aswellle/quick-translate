@@ -353,7 +353,7 @@ fn handle_menu_event(app: &AppHandle, event_id: &str) {
     }
 }
 
-fn open_settings_window(app: &AppHandle) {
+pub fn open_settings_window(app: &AppHandle) {
     open_settings_at(app, None);
 }
 
@@ -362,7 +362,7 @@ fn open_settings_window(app: &AppHandle) {
 /// 窗口已存在时发 `settings-navigate` 事件让前端切 Tab；不存在时通过
 /// URL hash（`#settings/provider`）携带初始 Tab —— 新建窗口的 webview
 /// 是异步加载的，事件会跑在订阅之前，hash 是唯一可靠的传递方式。
-fn open_provider_settings(app: &AppHandle) {
+pub fn open_provider_settings(app: &AppHandle) {
     use tauri::Emitter;
     if let Some(window) = app.get_webview_window("settings") {
         let _ = window.show();

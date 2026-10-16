@@ -267,10 +267,23 @@ pub async fn complete_onboarding(app: AppHandle) -> Result<(), AppError> {
     result
 }
 
+/// 打开设置窗口（可选直达某个 Tab）。
+///
+/// 供浮窗错误视图的「前往设置」复用托盘同款路径：窗口已存在时发
+/// `settings-navigate` 切 Tab，不存在时经 URL hash 携带初始 Tab。
+/// `tab` 目前支持 "provider"（翻译源配置）与 "general"。
+#[tauri::command]
+pub async fn open_settings_window(app: AppHandle, tab: Option<String>) -> Result<(), AppError> {
+    match tab.as_deref() {
+        Some("provider") => crate::system::tray::open_provider_settings(&app),
+        _ => crate::system::tray::open_settings_window(&app),
+    }
+    Ok(())
+}
+
 /// 打开居中的引导向导窗口（独立窗口，不复用 popup webview）
 #[tauri::command]
-pub async fn open_onboarding_window(app: AppHandle) -> Result<(), AppError> {
-    // 若向导窗口已存在，则聚焦显示
+pub async fn open_onboarding_window(app: AppHandle) -> Result<(), AppError> {    // 若向导窗口已存在，则聚焦显示
     if let Some(window) = app.get_webview_window("onboarding") {
         let _ = window.show();
         let _ = window.set_focus();

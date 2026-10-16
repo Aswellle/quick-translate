@@ -238,6 +238,11 @@ export async function openUrl(url: string): Promise<void> {
   return invoke("open_url", { url });
 }
 
+/** 打开设置窗口（tab: "provider" 直达翻译源配置页） */
+export async function openSettingsWindow(tab?: "provider" | "general"): Promise<void> {
+  return invoke("open_settings_window", { tab: tab ?? null });
+}
+
 // ---- 剪贴板监控开关 ----
 
 export async function setClipboardMonitorEnabled(enabled: boolean): Promise<void> {

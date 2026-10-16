@@ -348,6 +348,7 @@ pub fn run() {
             commands::system::complete_onboarding,
             commands::system::open_onboarding_window,
             commands::system::open_url,
+            commands::system::open_settings_window,
             commands::system::set_clipboard_monitor_enabled,
             commands::system::get_popup_geometry,
             commands::system::get_runtime_status,
