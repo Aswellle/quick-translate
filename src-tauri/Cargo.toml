@@ -52,6 +52,12 @@ windows-sys = { version = "0.52", features = [
     "Win32_System_DataExchange",
 ] }
 
+# macOS：浮窗被动态的自动关闭需要查询前台应用（popup_watch 的
+# foreground_window）。objc2 只保留 AppKit（NSWorkspace）最小面
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication"] }
+
 [profile.release]
 lto = true
 strip = true
