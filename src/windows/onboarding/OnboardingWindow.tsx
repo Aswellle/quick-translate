@@ -65,12 +65,33 @@ export function OnboardingWindow() {
 
   const providerMeta = PROVIDERS.find(p => p.id === state.selectedProvider)!;
 
+  // 离开验证步骤时清掉自动跳转定时器：验证成功后有 750ms 的自动进完成页，
+  // 用户在此间隙点「← 修改密钥」回到配置页，定时器若不清就会把人从
+  // 配置页硬拽到完成页
+  const clearAutoAdvance = useCallback(() => {
+    if (autoAdvanceTimer.current) {
+      clearTimeout(autoAdvanceTimer.current);
+      autoAdvanceTimer.current = null;
+    }
+  }, []);
+
+  const gotoStep = useCallback((next: Step) => {
+    clearAutoAdvance();
+    setStep(next);
+  }, [clearAutoAdvance]);
+
   useEffect(() => {
     const win = getCurrentWebviewWindow();
     let refocusing = false;
-    // 使用单个监听器并检查 payload，避免在获焦事件上也触发重焦逻辑
+    // 使用单个监听器并检查 payload，避免在获焦事件上也触发重焦逻辑。
+    // 只在配置步之前抢焦点：进入配置步后，向导自己会引导用户打开
+    // 控制台拿密钥 —— 打开浏览器必然切走焦点，此时抢回来只会打断
+    // 用户在控制台的登录/复制操作，制造向导与浏览器的焦点争夺。
+    const shouldRefocus = () =>
+      step === "welcome" || step === "choose";
     const subPromise = win.onFocusChanged(({ payload: focused }) => {
       if (!focused && !refocusing) {
+        if (!shouldRefocus()) return;
         refocusing = true;
         win.setFocus().finally(() => {
           setTimeout(() => { refocusing = false; }, 150);
@@ -83,7 +104,7 @@ export function OnboardingWindow() {
       subPromise.then(fn => fn());
       if (autoAdvanceTimer.current) clearTimeout(autoAdvanceTimer.current);
     };
-  }, []);
+  }, [step]);
 
   const handleChooseProvider = useCallback((id: ProviderId) => {
     setState(prev => ({ ...prev, selectedProvider: id, credentials: {}, testStatus: "idle" }));
@@ -161,12 +182,12 @@ export function OnboardingWindow() {
       {/* 步骤内容：key 驱动的入场动画，每次切步重新播放 */}
       <div className="flex-1 overflow-y-auto relative" key={step}>
         <div className="animate-step-in h-full">
-          {step === "welcome"   && <StepWelcome   onNext={() => setStep("choose")} />}
+          {step === "welcome"   && <StepWelcome   onNext={() => gotoStep("choose")} />}
           {step === "choose"    && (
             <StepChoose
               selected={state.selectedProvider}
               onSelect={handleChooseProvider}
-              onNext={() => setStep(providerMeta.requiresApiKey ? "configure" : "done")}
+              onNext={() => gotoStep(providerMeta.requiresApiKey ? "configure" : "done")}
               onSkip={handleSkipProvider}
             />
           )}
@@ -175,8 +196,8 @@ export function OnboardingWindow() {
               provider={providerMeta}
               credentials={state.credentials}
               onChange={handleCredentialChange}
-              onBack={() => setStep("choose")}
-              onNext={() => setStep("test")}
+              onBack={() => gotoStep("choose")}
+              onNext={() => gotoStep("test")}
             />
           )}
           {step === "test" && (
@@ -184,8 +205,8 @@ export function OnboardingWindow() {
               provider={providerMeta}
               testStatus={state.testStatus}
               onTest={handleTest}
-              onBack={() => setStep("configure")}
-              onNext={() => setStep("done")}
+              onBack={() => gotoStep("configure")}
+              onNext={() => gotoStep("done")}
             />
           )}
           {step === "done" && (
@@ -464,10 +485,14 @@ function StepConfigure({
       <div className="space-y-3 flex-1">
         {provider.credentialFields.map((field) => (
           <div key={field.key}>
-            <label className="text-[12px] font-medium text-[var(--text-secondary)] mb-1 block">
+            <label
+              htmlFor={`onb-${field.key}`}
+              className="text-[12px] font-medium text-[var(--text-secondary)] mb-1 block"
+            >
               {field.label}
             </label>
             <input
+              id={`onb-${field.key}`}
               type={field.type}
               value={credentials[field.key] ?? ""}
               onChange={e => onChange(field.key, e.target.value)}
@@ -480,12 +505,19 @@ function StepConfigure({
         ))}
       </div>
 
+      {/* 禁用原因用行内文字说明：native tooltip 在 disabled 按钮上多数
+          平台根本不弹出，首跑用户会面对一个不响应的主按钮且无处获知原因 */}
+      {!allFilled && (
+        <p className="text-[11.5px] text-[var(--text-tertiary)] text-right -mt-2">
+          请先填写全部密钥字段
+        </p>
+      )}
+
       <div className="flex gap-2.5 pt-1">
         <button onClick={onBack} className="btn-ghost flex-1 text-[13px]">← 返回</button>
         <button
           onClick={onNext}
           disabled={!allFilled}
-          title={allFilled ? undefined : "请先填写全部密钥字段"}
           className="btn-primary flex-1 text-[13px] disabled:opacity-40"
         >
           测试连接 →
@@ -564,6 +596,19 @@ function StepTest({
             {testStatus === "ok"      && `${provider.name} 已准备就绪，马上就好`}
             {testStatus === "fail"   && "请检查密钥是否输入正确，或稍后重试"}
           </p>
+          {/* 失败时把控制台入口放在眼前：验证失败是全流程摩擦最大的时刻，
+              「回上一步找链接」意味着多一次后退、多一次滚动 */}
+          {testStatus === "fail" && provider.setupUrl && (
+            <button
+              onClick={() => openUrl(provider.setupUrl)}
+              className="inline-flex items-center gap-1 text-[12px] font-medium text-[var(--system-blue)] hover:underline"
+            >
+              打开 {provider.name} 控制台核对密钥
+              <svg className="w-3 h-3" viewBox="0 0 12 12" fill="none">
+                <path d="M4 2H2v8h8V8M6 2h4v4M8 2L4 6" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+          )}
         </div>
       </div>
 
