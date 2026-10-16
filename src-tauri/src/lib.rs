@@ -343,7 +343,6 @@ pub fn run() {
             commands::system::notify_toast,
             commands::system::get_autostart,
             commands::system::set_autostart,
-            commands::system::check_update,
             commands::system::check_onboarding,
             commands::system::complete_onboarding,
             commands::system::open_onboarding_window,

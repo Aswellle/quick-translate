@@ -58,9 +58,12 @@ export function useTheme() {
   }, [theme]);
 
   // 监听 Rust 广播的 "theme-changed" 事件
-  // 这是跨窗口实时同步的关键：settings 窗口保存后，popup/history 窗口无需刷新
+  // 这是跨窗口实时同步的关键：settings 窗口保存后，popup/history 窗口无需刷新。
+  // cancelled 标志与 useTauriEvent 同一模式：cleanup 先于 Promise resolve
+  // （StrictMode 双挂载）时首个监听器会泄漏，主题事件被重复应用
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let cancelled = false;
 
     listen<{ theme: string }>("theme-changed", (event) => {
       const newTheme = event.payload.theme;
@@ -74,9 +77,13 @@ export function useTheme() {
         set({ ...current, theme: newTheme });
       }
     }).then((fn) => {
-      unlisten = fn;
+      if (cancelled) fn();
+      else unlisten = fn;
     });
 
-    return () => unlisten?.();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   }, []);
 }

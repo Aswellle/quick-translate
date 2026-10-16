@@ -155,7 +155,6 @@ export const ERROR_MESSAGES: Record<string, string> = {
   // 内部细节丢给普通用户。用户只需知道"暂时连不上、会自己恢复"。
   ALL_PROVIDERS_FAILED:"暂时无法连接翻译服务，恢复网络后会自动继续工作",
   CLIPBOARD_ERROR:     "剪贴板操作失败",
-  HOTKEY_CONFLICT:     "快捷键冲突，请在设置中修改",
   DATABASE_ERROR:      "数据存储错误",
   CONFIG_ERROR:        "配置错误",
   // 计划第 52 节：error code ≠ user message。以下错误码原先缺席，

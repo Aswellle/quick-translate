@@ -8,9 +8,7 @@ interface ConfigState {
   config: AppConfig | null;
   isLoaded: boolean;
 
-  // Actions
   setConfig: (config: AppConfig) => void;
-  updateKey: (key: keyof AppConfig, value: AppConfig[keyof AppConfig]) => void;
 }
 
 export const useConfigStore = create<ConfigState>((set) => ({
@@ -18,9 +16,4 @@ export const useConfigStore = create<ConfigState>((set) => ({
   isLoaded: false,
 
   setConfig: (config) => set({ config, isLoaded: true }),
-
-  updateKey: (key, value) =>
-    set((state) => ({
-      config: state.config ? { ...state.config, [key]: value } : null,
-    })),
 }));

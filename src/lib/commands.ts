@@ -249,12 +249,6 @@ export async function setClipboardMonitorEnabled(enabled: boolean): Promise<void
   return invoke("set_clipboard_monitor_enabled", { enabled });
 }
 
-// ---- 更新检查 ----
-
-export async function checkUpdate(): Promise<void> {
-  return invoke("check_update");
-}
-
 // ---- 引导向导 ----
 
 export async function checkOnboarding(): Promise<boolean> {

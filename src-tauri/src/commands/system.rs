@@ -186,13 +186,6 @@ pub async fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), AppError
     Ok(())
 }
 
-/// 前端手动触发更新检查（委托给 system::updater 模块）
-#[tauri::command]
-pub async fn check_update(app: AppHandle) -> Result<(), AppError> {
-    crate::system::updater::check_and_notify(&app).await;
-    Ok(())
-}
-
 /// 检查是否需要显示首次引导向导
 #[tauri::command]
 pub async fn check_onboarding(app: AppHandle) -> Result<bool, AppError> {
