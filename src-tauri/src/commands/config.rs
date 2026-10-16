@@ -15,6 +15,10 @@ pub async fn get_config(state: State<'_, AppState>) -> Result<AppConfig, AppErro
 }
 
 /// 更新单个配置项，并触发必要的副作用
+///
+/// 统一委托批量管线（校验 → 持久化 → 副作用）：此前单项与批量是两套
+/// 顺序相反的实现，每新增配置键的作者都要猜该模仿哪套。单项更新就是
+/// 长度为 1 的批量。
 #[tauri::command]
 pub async fn set_config(
     state: State<'_, AppState>,
@@ -22,12 +26,7 @@ pub async fn set_config(
     key: String,
     value: String,
 ) -> Result<(), AppError> {
-    // 副作用先行（与托盘 switch_provider 同序）：未知翻译源、无法构建的
-    // 凭证都会在这一步失败并返回，无效值绝不进入数据库与缓存。副作用
-    // 成功而持久化失败（存储降级）属边缘情形，由运行状态面板如实呈现。
-    handle_side_effect(&app, &state, &key, &value).await?;
-    state.config.write().await.set(&key, &value).await?;
-    Ok(())
+    set_config_batch_inner(&state, &app, vec![(key, value)]).await
 }
 
 /// 批量更新配置（设置面板保存时调用）
@@ -37,12 +36,29 @@ pub async fn set_config_batch(
     app: AppHandle,
     updates: Vec<(String, String)>,
 ) -> Result<(), AppError> {
-    // 逐键预校验：无效值跳过并记录（宽松模式 = 拒之门外，而不是写进
-    // 数据库让引擎与配置持久化各执一词）
+    set_config_batch_inner(&state, &app, updates).await
+}
+
+/// 配置写入的单一管线：校验 → 持久化 → 幂等副作用。
+///
+/// 单项与批量共用同一条路径 —— 顺序不一致曾是本仓库最年长的结构性
+/// 隐患（副作用先行会在持久化失败后留下引擎/数据库各执一词的状态）。
+async fn set_config_batch_inner(
+    state: &State<'_, AppState>,
+    app: &AppHandle,
+    updates: Vec<(String, String)>,
+) -> Result<(), AppError> {
+    // 逐键预校验 + 掩码凭证过滤：无效值跳过并记录（宽松模式 = 拒之门外，
+    // 而不是写进数据库让引擎与配置持久化各执一词）
     let mut validated: Vec<(String, String)> = Vec::with_capacity(updates.len());
     for (key, value) in &updates {
-        if let Err(e) = validate_update(&state, key, value).await {
-            tracing::warn!("[set_config_batch] {} 未通过校验，已跳过: {}", key, e);
+        // 掩码凭证在进入管线前丢弃：持久化与副作用两条路径都无需再各自设防
+        if crate::domain::config::is_masked_credential(key, value) {
+            tracing::debug!("[set_config] {} 传入掩码值，已跳过", key);
+            continue;
+        }
+        if let Err(e) = validate_update(state, key, value).await {
+            tracing::warn!("[set_config] {} 未通过校验，已跳过: {}", key, e);
             continue;
         }
         validated.push((key.clone(), value.clone()));
@@ -59,12 +75,11 @@ pub async fn set_config_batch(
         state.config.write().await.set_batch(db_updates).await?;
     }
 
-    // 逐键应用副作用，委托给 handle_side_effect，与 set_config 共用同一逻辑，消除分歧风险
-    // 宽松模式：单键副作用失败仅记录警告，不中止整批次
+    // 逐键应用副作用：宽松模式，单键失败仅记录警告，不中止整批次
     for (key, value) in &validated {
-        if let Err(e) = handle_side_effect(&app, &state, key, value).await {
+        if let Err(e) = handle_side_effect(app, state, key, value).await {
             tracing::warn!(
-                "[set_config_batch] side_effect[{}] 失败（已忽略）: {}",
+                "[set_config] side_effect[{}] 失败（已忽略）: {}",
                 key,
                 e
             );
@@ -103,15 +118,8 @@ async fn handle_side_effect(
     key: &str,
     value: &str,
 ) -> Result<(), AppError> {
-    // 掩码凭证守卫：前端持有的是脱敏形态，原样回传会把掩码串写进活体
-    // provider（AuthError → 长熔断）。ConfigService::set/set_batch 只挡了
-    // 持久化路径，副作用在持久化**之前**运行，必须在这里同样拦截。
-    // 当前设置页保存前会剥离凭证字段，这是给未来调用方（托盘、同步等）
-    // 加的防线。
-    if crate::domain::config::is_masked_credential(key, value) {
-        tracing::debug!("[side_effect] {} 传入掩码值，跳过副作用", key);
-        return Ok(());
-    }
+    // 掩码凭证已在管线入口（set_config_batch_inner）统一过滤，
+    // 这里只处理确认为真实值的键。
     match key {
         "provider" => {
             state.translator.set_active_provider(value).await?;
