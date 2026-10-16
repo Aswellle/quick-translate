@@ -49,6 +49,7 @@ export function SearchBar({ value, onChange, placeholder }: SearchBarProps) {
         value={localValue}
         onChange={handleChange}
         placeholder={placeholder ?? "搜索…"}
+        aria-label={placeholder ?? "搜索"}
         className={[
           "w-full pl-9 pr-8 py-2 text-[13.5px]",
           "rounded-lg",
@@ -57,7 +58,7 @@ export function SearchBar({ value, onChange, placeholder }: SearchBarProps) {
           "text-[var(--text-primary)] placeholder:text-[var(--text-placeholder)]",
           "focus:outline-none focus:border-[var(--system-blue)]",
           "focus:shadow-[0_0_0_3px_rgba(0,122,255,0.18)]",
-          "transition-all duration-150",
+          "transition-colors duration-150",
         ].join(" ")}
       />
       {localValue && (

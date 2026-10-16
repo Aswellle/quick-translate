@@ -1,8 +1,9 @@
 // src/windows/history/HistoryList.tsx
 // 历史记录列表（macOS 风格 — 简约明亮灵动）
 
-import { useCallback, memo, useMemo } from "react";
+import { useCallback, memo, useMemo, useState } from "react";
 import { CopyButton } from "@/components/CopyButton";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { getLangName, PROVIDER_LABELS } from "@/lib/constants";
 import { useHistoryStore } from "@/stores/historyStore";
 import { deleteHistoryRecord, toggleStarRecord } from "@/lib/commands";
@@ -72,13 +73,24 @@ const RecordCard = memo(function RecordCard({
   return (
     <div
       className={[
-        "rounded-xl overflow-hidden transition-all duration-150 cursor-pointer",
+        "rounded-xl overflow-hidden transition-colors duration-150 cursor-pointer",
         "border",
         isExpanded
           ? "bg-[var(--surface-primary)] dark:bg-[var(--surface-secondary)] border-[var(--system-blue)]/25 dark:border-[var(--system-blue)]/40 shadow-sm"
           : "bg-[var(--card-bg)] border-[var(--card-border)] hover:border-[var(--system-blue)]/25 dark:hover:border-[var(--system-blue)]/40 hover:shadow-sm",
       ].join(" ")}
+      role="button"
+      tabIndex={0}
+      aria-expanded={isExpanded}
       onClick={() => onToggle(record.id)}
+      onKeyDown={(e) => {
+        // 卡片是键盘可达的展开/收起开关：展开视图里的收藏/删除/复制
+        // 只在展开后存在，没有这条路径键盘用户就完全够不到这些操作
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onToggle(record.id);
+        }
+      }}
     >
       {/* ── 折叠视图 ── */}
       <div className="px-4 py-3">
@@ -197,6 +209,9 @@ export function HistoryList({
   searchQuery: string;
 }) {
   const { expandedId, setExpanded, removeRecord, toggleStar } = useHistoryStore();
+  // 待确认删除的记录：单条删除此前点击即永久删除，而误点风险更高的
+  // 小按钮（22px）紧邻收藏 —— 与「清空全部」的保护倒挂了
+  const [pendingDelete, setPendingDelete] = useState<TranslationRecord | null>(null);
 
   // 函数式更新保持引用稳定：否则 expandedId 每次变化都会重建回调，
   // 令全部 memo 化的 RecordCard 在展开/收起时无谓重渲染
@@ -210,6 +225,7 @@ export function HistoryList({
       try {
         await deleteHistoryRecord(id);
         removeRecord(id);
+        toast("已删除", "success");
       } catch (err) {
         toast("删除失败，请重试", "error");
         console.error(err);
@@ -240,10 +256,23 @@ export function HistoryList({
           isExpanded={expandedId === record.id}
           searchQuery={searchQuery}
           onToggle={handleToggle}
-          onDelete={handleDelete}
+          onDelete={(id) => setPendingDelete(records.find((r) => r.id === id) ?? null)}
           onStar={handleStar}
         />
       ))}
+      {pendingDelete && (
+        <ConfirmDialog
+          title="删除这条记录？"
+          description="删除后无法恢复"
+          confirmLabel="确认删除"
+          onConfirm={() => {
+            const id = pendingDelete.id;
+            setPendingDelete(null);
+            void handleDelete(id);
+          }}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
     </div>
   );
 }
