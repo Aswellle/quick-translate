@@ -134,7 +134,8 @@ fn recover_database(db_path: &Path) -> Result<(), AppError> {
     let shm_path = db_path.with_extension("db-shm");
     for (sidecar, suffix) in [(&wal_path, "-wal"), (&shm_path, "-shm")] {
         if sidecar.exists() {
-            let sidecar_corrupt = db_path.with_extension(format!("db.corrupt.{}{}", timestamp, suffix));
+            let sidecar_corrupt =
+                db_path.with_extension(format!("db.corrupt.{}{}", timestamp, suffix));
             match std::fs::rename(sidecar, &sidecar_corrupt) {
                 Ok(()) => info!("已随主库移走损坏 sidecar: {:?}", sidecar_corrupt),
                 Err(e) => {
@@ -147,7 +148,10 @@ fn recover_database(db_path: &Path) -> Result<(), AppError> {
                             e
                         );
                     } else {
-                        warn!(event = "database_sidecar_removed", "sidecar 重命名失败，已删除: {}", e);
+                        warn!(
+                            event = "database_sidecar_removed",
+                            "sidecar 重命名失败，已删除: {}", e
+                        );
                     }
                 }
             }

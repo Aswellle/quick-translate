@@ -177,16 +177,40 @@ mod tests {
         use crate::domain::translator::error_class::ErrorClass;
         use crate::domain::translator::health::ProviderHealthState;
 
-        assert_eq!(to_snake_case(&format!("{:?}", ProviderHealthState::Healthy)), "healthy");
-        assert_eq!(to_snake_case(&format!("{:?}", ProviderHealthState::Degraded)), "degraded");
-        assert_eq!(to_snake_case(&format!("{:?}", ProviderHealthState::Open)), "open");
-        assert_eq!(to_snake_case(&format!("{:?}", ProviderHealthState::HalfOpen)), "half_open");
+        assert_eq!(
+            to_snake_case(&format!("{:?}", ProviderHealthState::Healthy)),
+            "healthy"
+        );
+        assert_eq!(
+            to_snake_case(&format!("{:?}", ProviderHealthState::Degraded)),
+            "degraded"
+        );
+        assert_eq!(
+            to_snake_case(&format!("{:?}", ProviderHealthState::Open)),
+            "open"
+        );
+        assert_eq!(
+            to_snake_case(&format!("{:?}", ProviderHealthState::HalfOpen)),
+            "half_open"
+        );
 
-        assert_eq!(to_snake_case(&format!("{:?}", ErrorClass::Transient)), "transient");
-        assert_eq!(to_snake_case(&format!("{:?}", ErrorClass::RateLimit)), "rate_limit");
+        assert_eq!(
+            to_snake_case(&format!("{:?}", ErrorClass::Transient)),
+            "transient"
+        );
+        assert_eq!(
+            to_snake_case(&format!("{:?}", ErrorClass::RateLimit)),
+            "rate_limit"
+        );
         assert_eq!(to_snake_case(&format!("{:?}", ErrorClass::Auth)), "auth");
         assert_eq!(to_snake_case(&format!("{:?}", ErrorClass::Quota)), "quota");
-        assert_eq!(to_snake_case(&format!("{:?}", ErrorClass::Permanent)), "permanent");
-        assert_eq!(to_snake_case(&format!("{:?}", ErrorClass::SameLanguage)), "same_language");
+        assert_eq!(
+            to_snake_case(&format!("{:?}", ErrorClass::Permanent)),
+            "permanent"
+        );
+        assert_eq!(
+            to_snake_case(&format!("{:?}", ErrorClass::SameLanguage)),
+            "same_language"
+        );
     }
 }

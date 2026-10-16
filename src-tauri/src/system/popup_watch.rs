@@ -51,8 +51,8 @@ fn foreground_window() -> isize {
 /// 切换变化，语义与 Windows 的 GetForegroundWindow 等价。
 #[cfg(target_os = "macos")]
 fn foreground_window() -> isize {
-    use objc2_app_kit::{NSApplicationActivationPolicy, NSWorkspace};
     use objc2::msg_send;
+    use objc2_app_kit::{NSApplicationActivationPolicy, NSWorkspace};
 
     let workspace = unsafe { NSWorkspace::sharedWorkspace() };
     let front = unsafe { workspace.frontmostApplication() };
@@ -67,7 +67,8 @@ fn foreground_window() -> isize {
             // 的信号（与 Windows 行为一致 —— activate 后看守已停，这里是
             // 兜底防线）
             if unsafe { app.activationPolicy() } == NSApplicationActivationPolicy::Regular
-                && app.bundleIdentifier()
+                && app
+                    .bundleIdentifier()
                     .map(|b| b.to_string().contains("quicktranslate"))
                     .unwrap_or(false)
             {
