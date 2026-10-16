@@ -165,8 +165,9 @@ jobs:
   # ── 构建验证 ─────────────────────────────────────────────────────────────
   build-verify:
     name: Build verification (${{ matrix.target }})
-    # 仅在 push 到 main 时运行完整构建验证，PR 只做快速检查以节省资源
-    if: github.event_name == 'push'
+    # PR 也运行完整构建：release 模式（panic="abort" + LTO + codegen-units=1）
+    # 与 debug 模式的代码生成差异只有 cargo build --release 能暴露，
+    # 此前 PR 只跑快速检查，破坏 release 构建的改动可以直接合进 main
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
