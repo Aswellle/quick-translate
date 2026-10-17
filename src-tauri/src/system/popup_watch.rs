@@ -51,11 +51,12 @@ fn foreground_window() -> isize {
 /// 切换变化，语义与 Windows 的 GetForegroundWindow 等价。
 #[cfg(target_os = "macos")]
 fn foreground_window() -> isize {
-    use objc2::msg_send;
+    // objc2 0.6 中这些 NSWorkspace/NSRunningApplication 方法标注为安全
+    // （无指针解引用风险），不需要 unsafe 块
     use objc2_app_kit::{NSApplicationActivationPolicy, NSWorkspace};
 
-    let workspace = unsafe { NSWorkspace::sharedWorkspace() };
-    let front = unsafe { workspace.frontmostApplication() };
+    let workspace = NSWorkspace::sharedWorkspace();
+    let front = workspace.frontmostApplication();
     match front {
         Some(app) => {
             // 守护进程/后台常驻可能返回 nil policy；pid 本身即够作前台标识
@@ -66,7 +67,7 @@ fn foreground_window() -> isize {
             // 浮窗属于本应用：本应用成为最前应用时不该作为「用户切走」
             // 的信号（与 Windows 行为一致 —— activate 后看守已停，这里是
             // 兜底防线）
-            if unsafe { app.activationPolicy() } == NSApplicationActivationPolicy::Regular
+            if app.activationPolicy() == NSApplicationActivationPolicy::Regular
                 && app
                     .bundleIdentifier()
                     .map(|b| b.to_string().contains("quicktranslate"))
