@@ -10,6 +10,7 @@ import {
   resizePopup,
   getPopupGeometry,
   activatePopup,
+  rememberPopupPosition,
   type PopupGeometry,
 } from "@/lib/commands";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
@@ -66,6 +67,9 @@ export function PopupWindow() {
   // 空格打进正在编辑的文档。激活成功后才允许渲染快捷键提示。
   const [activated, setActivated] = useState(false);
 
+  // 正在播放退场动效：渲染层据此挂上淡出类
+  const [closing, setClosing] = useState(false);
+
   // 后端权威尺寸契约（C3）：挂载时拉取一次，失败则沿用兜底值
   const [geometry, setGeometry] = useState<PopupGeometry>(FALLBACK_GEOMETRY);
   useEffect(() => {
@@ -83,7 +87,15 @@ export function PopupWindow() {
   const width = wide ? geometry.width_wide : geometry.width_normal;
 
   const handleClose = useCallback(() => {
-    hidePopup().catch(console.error);
+    // 90ms 淡出后再真正隐藏：窗口级 hide() 是瞬时消失，直接调用会让
+    // 浮窗「啪」地断掉。淡出只动 opacity/transform（compositor 层），
+    // 90ms 远低于「察觉为等待」的阈值，且不阻塞任何输入 —— 用户在淡出
+    // 期间继续操作其他窗口完全不受影响。
+    setClosing(true);
+    window.setTimeout(() => {
+      hidePopup().catch(console.error);
+      setClosing(false);
+    }, 90);
   }, []);
 
   // 折叠/宽度切换后主动 blur：点击按钮会让 DOM 焦点停留在按钮上，
@@ -268,12 +280,17 @@ export function PopupWindow() {
       }
     };
 
-    // mouseup 兜底重置：当 startDragging() 立即 resolve 时确保标志能被清除
+    // mouseup 兜底重置 + 位置固化：OS 接管 startDragging 后前端收不到
+    // 拖拽结束事件，松手这一刻是唯一可靠的「位置已定」时机 —— 上报给
+    // 后端记住，下次翻译沿用该位置而不是回到光标锚点
     const handleMouseUp = () => {
       if (isDragging.current) {
         setTimeout(() => {
           isDragging.current = false;
         }, 100);
+        rememberPopupPosition().catch((err) =>
+          console.error("[PopupWindow] 上报位置失败:", err)
+        );
       }
     };
 
@@ -371,7 +388,10 @@ export function PopupWindow() {
     <ErrorBoundary>
       <div
         ref={popupRef}
-        className="popup-container w-full overflow-hidden cursor-grab active:cursor-grabbing select-none"
+        className={[
+          "popup-container w-full overflow-hidden cursor-grab active:cursor-grabbing select-none",
+          closing ? "animate-popup-out" : "",
+        ].join(" ")}
         onMouseDown={handlePopupMouseDown}
       >
         {/* ── 标题栏：红绿灯 + 折叠态摘要 ── */}

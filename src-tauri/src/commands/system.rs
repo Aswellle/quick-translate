@@ -53,6 +53,10 @@ pub async fn activate_popup(app: AppHandle) -> Result<(), AppError> {
         return Ok(());
     };
 
+    // 顺手记住当前位置：用户点浮窗往往伴随拖动，把「此刻窗口在哪」固化
+    // 下来，下次翻译直接回到这里，而不是被光标锚点冲掉
+    remember_popup_position(&window);
+
     window
         .set_focusable(true)
         .map_err(|e: tauri::Error| AppError::WindowError(e.to_string()))?;
@@ -75,6 +79,43 @@ pub async fn activate_popup(app: AppHandle) -> Result<(), AppError> {
         event = "popup_activated_by_user",
         "[popup] 用户点击，进入交互态"
     );
+    Ok(())
+}
+
+/// 把窗口当前位置固化进拖拽位置记忆（逻辑像素）。
+///
+/// 读取失败（窗口刚销毁等）只跳过 —— 位置记忆是锦上添花，不该阻断交互。
+fn remember_popup_position(window: &tauri::WebviewWindow) {
+    if let (Ok(pos), Ok(scale)) = (window.outer_position(), window.scale_factor()) {
+        let logical_x = pos.x as f64 / scale;
+        let logical_y = pos.y as f64 / scale;
+        crate::system::popup_geometry::remember_dragged(logical_x, logical_y);
+        tracing::info!(
+            event = "popup_position_remembered",
+            "[popup] 记住当前位置 ({:.0}, {:.0})",
+            logical_x,
+            logical_y
+        );
+    }
+}
+
+/// 前端在拖拽结束后主动上报窗口位置。
+///
+/// `startDragging()` 由 OS 接管移动，前端拿不到移动结束事件；用户拖动后
+/// 松开鼠标的那一刻是最可靠的「位置已定」时机（前端 mouseup 里调用）。
+#[tauri::command]
+pub async fn remember_popup_position_now(app: AppHandle) -> Result<(), AppError> {
+    if let Some(window) = app.get_webview_window("popup") {
+        remember_popup_position(&window);
+    }
+    Ok(())
+}
+
+/// 清除拖拽位置记忆，回到「跟随光标」的默认行为。
+#[tauri::command]
+pub async fn reset_popup_position() -> Result<(), AppError> {
+    crate::system::popup_geometry::forget_dragged();
+    tracing::info!("[popup] 位置记忆已清除，恢复跟随光标");
     Ok(())
 }
 

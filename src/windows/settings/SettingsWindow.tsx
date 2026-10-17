@@ -20,7 +20,7 @@ import {
   type RuntimeDiagnostics,
 } from "@/lib/commands";
 import { toast } from "@/components/ToastManager";
-import { SUPPORTED_LANGUAGES, PROVIDERS, ERROR_MESSAGES } from "@/lib/constants";
+import { SUPPORTED_LANGUAGES, PROVIDERS, PROVIDER_LABELS, ERROR_MESSAGES } from "@/lib/constants";
 import { useConfigStore } from "@/stores/configStore";
 import { applyTheme } from "@/hooks/useTheme";
 import { AboutTab } from "./AboutTab";
@@ -394,6 +394,19 @@ function GeneralTab({
 }) {
   return (
     <div className="space-y-4">
+      {/* ── 顶部仪表盘：先回答「现在怎么样」，再让用户去调参数 ──
+          指标前置的理由：打开设置的人多半想确认「用得好不好/在不在跑」，
+          而不是立刻改配置。此前统计沉在页面最底部，等于把最常看的
+          信息放在最难到达的位置。 */}
+      <Dashboard
+        stats={stats}
+        statsLoading={statsLoading}
+        runtimeSnapshot={runtimeSnapshot}
+        runtimeDiag={runtimeDiag}
+        providerStatus={providerStatus}
+        onNavigate={onNavigate}
+      />
+
       {/* 跳过向导的兜底提示：没有任何密钥时给出显眼的配置入口 */}
       <UnconfiguredBanner providerStatus={providerStatus} onNavigate={() => onNavigate("provider")} />
 
@@ -446,63 +459,168 @@ function GeneralTab({
 
       {/* 运行状态（计划第 33/50 节）：消费 Runtime 层快照与诊断计数 */}
       <RuntimeStatusSection snapshot={runtimeSnapshot} diag={runtimeDiag} />
+    </div>
+  );
+}
 
-      {/* 使用统计 */}
-      <SettingsSection label="使用统计">
-        {statsLoading ? (
-          <div className="grid grid-cols-2 gap-2.5">
-            {[1, 2, 3, 4].map((i) => (
-              <div key={i} className="skeleton h-16 rounded-xl" />
-            ))}
+// ──────────── 顶部仪表盘 ────────────
+
+/**
+ * 设置页首屏仪表盘：把「现在怎么样」放在最前面。
+ *
+ * 布局意图（自上而下的信息优先级）：
+ *   1. 健康态 —— 一句话回答「应用是否正常工作」，异常时带原因；
+ *   2. 关键指标 —— 累计翻译/字符 + 近期活跃度，2×2 紧凑网格；
+ *   3. 翻译源分布 —— 横向条形，一眼看出主力源。
+ *
+ * 数据全部来自 Runtime 层与本地统计（不上传），缺失时降级为占位骨架，
+ * 不阻塞其余设置的编辑。
+ */
+function Dashboard({
+  stats,
+  statsLoading,
+  runtimeSnapshot,
+  runtimeDiag,
+  providerStatus,
+  onNavigate,
+}: {
+  stats: StatsResult | null;
+  statsLoading: boolean;
+  runtimeSnapshot: RuntimeStatusSnapshot | null;
+  runtimeDiag: RuntimeDiagnostics | null;
+  providerStatus: Record<string, ProviderStatus>;
+  onNavigate: (tab: TabId) => void;
+}) {
+  const overall = runtimeSnapshot?.overall;
+  const health =
+    overall === "healthy"
+      ? { text: "运行正常", tone: "ok" as const }
+      : overall === "recovering"
+        ? { text: "正在恢复", tone: "warn" as const }
+        : overall
+          ? { text: "部分功能异常", tone: "warn" as const }
+          : { text: "状态读取中…", tone: "muted" as const };
+
+  const degradedProviders = Object.values(providerStatus).filter(
+    (p) => p.requires_api_key && p.is_available && p.health_state !== "healthy"
+  );
+  const activeProvider = Object.values(providerStatus).find(
+    (p) => p.is_available && p.requires_api_key
+  );
+
+  return (
+    <div className="space-y-3">
+      {/* ── 健康态横幅 ── */}
+      <div className="macos-card px-4 py-3 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <span
+            className={[
+              "w-2 h-2 rounded-full shrink-0",
+              health.tone === "ok"
+                ? "bg-green-500"
+                : health.tone === "warn"
+                  ? "bg-amber-500"
+                  : "bg-[var(--text-tertiary)]",
+            ].join(" ")}
+          />
+          <div className="min-w-0">
+            <p className="text-[13px] font-medium text-[var(--text-primary)]">
+              {health.text}
+            </p>
+            <p className="text-[11.5px] text-[var(--text-secondary)] mt-0.5 truncate">
+              {runtimeDiag
+                ? `已运行 ${formatUptime(runtimeDiag.uptime_ms)}` +
+                  (activeProvider ? ` · 主力翻译源 ${activeProvider.name}` : "")
+                : "正在读取运行状态…"}
+            </p>
           </div>
-        ) : stats ? (
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-2.5">
-              <StatCard label="累计翻译" value={String(stats.total_records)} unit="次" />
-              <StatCard label="累计字符" value={formatBigNum(stats.total_chars)} unit="字符" />
-              <StatCard label="近 7 天" value={String(stats.last_7_days)} unit="次" />
-              <StatCard label="近 30 天" value={String(stats.last_30_days)} unit="次" />
-            </div>
-            {Object.keys(stats.by_provider).length > 0 && (
-              <div className="macos-card p-3.5 space-y-2.5">
-                <p className="text-[11.5px] font-semibold text-[var(--text-secondary)] tracking-wide">
-                  按翻译源
-                </p>
-                {(() => {
-                  const entries = Object.entries(stats.by_provider).sort(([, a], [, b]) => b - a);
-                  const max = Math.max(...entries.map(([, c]) => c), 1);
-                  return (
-                    <div className="space-y-2">
-                      {entries.map(([provider, count]) => (
-                        <div key={provider}>
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-[12.5px] text-[var(--text-secondary)]">{provider}</span>
-                            <span className="text-[12px] font-medium text-[var(--text-primary)] tabular-nums">
-                              {count} 次
-                            </span>
-                          </div>
-                          <div className="h-1 rounded-full bg-[var(--surface-tertiary)] overflow-hidden">
-                            <div
-                              className="h-full rounded-full"
-                              style={{
-                                width: `${Math.max((count / max) * 100, 4)}%`,
-                                backgroundColor: "var(--system-blue)",
-                                opacity: 0.7,
-                              }}
-                            />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  );
-                })()}
-              </div>
-            )}
-          </div>
+        </div>
+        {degradedProviders.length > 0 ? (
+          <button
+            type="button"
+            onClick={() => onNavigate("provider")}
+            className="shrink-0 text-[11.5px] font-medium px-2.5 py-1 rounded-md bg-amber-50 dark:bg-amber-950/25 text-amber-600 dark:text-amber-500 hover:brightness-95 transition-colors"
+          >
+            {degradedProviders.length} 个翻译源异常
+          </button>
         ) : (
-          <p className="text-[12.5px] text-[var(--text-secondary)]">统计数据加载失败</p>
+          <button
+            type="button"
+            onClick={() => onNavigate("provider")}
+            className="shrink-0 text-[11.5px] font-medium px-2.5 py-1 rounded-md border border-[var(--border-primary)] text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] transition-colors"
+          >
+            翻译源
+          </button>
         )}
-      </SettingsSection>
+      </div>
+
+      {/* ── 关键指标 2×2 ── */}
+      {statsLoading ? (
+        <div className="grid grid-cols-2 gap-2.5">
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="skeleton h-[68px] rounded-xl" />
+          ))}
+        </div>
+      ) : stats ? (
+        <div className="grid grid-cols-2 gap-2.5">
+          <StatCard label="累计翻译" value={formatBigNum(stats.total_records)} unit="次" />
+          <StatCard label="累计字符" value={formatBigNum(stats.total_chars)} unit="字符" />
+          <StatCard label="近 7 天" value={String(stats.last_7_days)} unit="次" />
+          <StatCard label="近 30 天" value={String(stats.last_30_days)} unit="次" />
+        </div>
+      ) : (
+        <div className="macos-card px-4 py-3">
+          <p className="text-[12.5px] text-[var(--text-secondary)]">统计数据暂不可用</p>
+        </div>
+      )}
+
+      {/* ── 翻译源使用分布 ── */}
+      {stats && Object.keys(stats.by_provider).length > 0 && (
+        <div className="macos-card p-3.5 space-y-2.5">
+          <div className="flex items-center justify-between">
+            <p className="text-[11.5px] font-semibold text-[var(--text-secondary)] tracking-wide">
+              翻译源分布
+            </p>
+            <p className="text-[11px] text-[var(--text-tertiary)] tabular-nums">
+              {Object.keys(stats.by_provider).length} 个来源
+            </p>
+          </div>
+          {(() => {
+            const entries = Object.entries(stats.by_provider).sort(([, a], [, b]) => b - a);
+            const max = Math.max(...entries.map(([, c]) => c), 1);
+            const total = entries.reduce((sum, [, c]) => sum + c, 0) || 1;
+            return (
+              <div className="space-y-2">
+                {entries.map(([provider, count]) => (
+                  <div key={provider}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[12px] text-[var(--text-secondary)]">
+                        {PROVIDER_LABELS[provider] ?? provider}
+                      </span>
+                      <span className="text-[11.5px] font-medium text-[var(--text-primary)] tabular-nums">
+                        {count} 次
+                        <span className="text-[var(--text-tertiary)] font-normal ml-1.5">
+                          {Math.round((count / total) * 100)}%
+                        </span>
+                      </span>
+                    </div>
+                    <div className="h-1.5 rounded-full bg-[var(--surface-tertiary)] overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-[width] duration-300"
+                        style={{
+                          width: `${Math.max((count / max) * 100, 4)}%`,
+                          backgroundColor: "var(--system-blue)",
+                          opacity: 0.75,
+                        }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+        </div>
+      )}
     </div>
   );
 }

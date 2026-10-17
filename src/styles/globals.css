@@ -58,9 +58,9 @@
   --focus-ring:           rgba(0, 122, 255, 0.35);
 
   /* ── Popup / Card ── */
-  --popup-bg:            rgba(255, 255, 255, 0.82);
-  --popup-border:        rgba(0, 0, 0, 0.08);
-  --popup-shadow:        0 8px 32px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.08);
+  --popup-bg:            rgba(255, 255, 255, 0.55);
+  --popup-border:        rgba(255, 255, 255, 0.55);
+  --popup-shadow:        0 12px 40px rgba(0, 0, 0, 0.18), 0 2px 10px rgba(0, 0, 0, 0.10), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
   --card-bg:             rgba(255, 255, 255, 0.60);
   --card-border:         rgba(0, 0, 0, 0.06);
   --card-shadow:         0 2px 8px rgba(0, 0, 0, 0.06);
@@ -113,9 +113,9 @@
   --active-bg:            rgba(255, 255, 255, 0.10);
   --focus-ring:           rgba(0, 122, 255, 0.45);
 
-  --popup-bg:            rgba(28, 28, 30, 0.85);
-  --popup-border:        rgba(255, 255, 255, 0.10);
-  --popup-shadow:        0 8px 32px rgba(0, 0, 0, 0.50), 0 2px 8px rgba(0, 0, 0, 0.35);
+  --popup-bg:            rgba(28, 28, 30, 0.58);
+  --popup-border:        rgba(255, 255, 255, 0.16);
+  --popup-shadow:        0 14px 44px rgba(0, 0, 0, 0.55), 0 2px 12px rgba(0, 0, 0, 0.38), 0 0 0 0.5px rgba(255, 255, 255, 0.10);
   --card-bg:             rgba(44, 44, 46, 0.60);
   --card-border:         rgba(255, 255, 255, 0.08);
   --card-shadow:         0 2px 8px rgba(0, 0, 0, 0.25);
@@ -154,14 +154,21 @@ html, body, #root {
 ::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
 
 /* ============================================================
-   Popup Container — macOS Vibrancy
+   Popup Container — Liquid Glass
    ============================================================ */
 
+/* 液态玻璃的三层结构（缺一层就会退化成「半透明色块」）：
+     1. 系统材质层 —— Windows Acrylic / macOS NSVisualEffectView，
+        由 Rust 侧 set_effects 施加，负责真正的桌面模糊采样；
+     2. CSS 着色层 —— 极薄的白/黑着色 + backdrop-filter 兜底
+        （材质不可用的平台仍保有磨砂感）；
+     3. 光学层 —— ::before 顶部高光 + ::after 边缘折射描边。
+   窗口本身已 transparent(true)，三层才能叠出玻璃观感。 */
 .popup-container {
   position: relative;
   background: var(--popup-bg);
-  backdrop-filter: blur(28px) saturate(180%) brightness(1.02);
-  -webkit-backdrop-filter: blur(28px) saturate(180%) brightness(1.02);
+  backdrop-filter: blur(30px) saturate(185%) brightness(1.03);
+  -webkit-backdrop-filter: blur(30px) saturate(185%) brightness(1.03);
   border: 1px solid var(--popup-border);
   border-radius: var(--radius-lg);
   box-shadow: var(--popup-shadow);
@@ -171,31 +178,62 @@ html, body, #root {
      会与 PopupWindow 的两段式量高（F6）互相打架 */
 }
 
-/* 液态玻璃质感强化：顶部内高光 + 极淡渐变，模拟玻璃边缘折射。
-   用 ::before 叠加而非改 background，保留 backdrop-filter 的透明模糊。 */
+/* 光学层 1：顶部内高光 + 上半区渐变 —— 模拟玻璃受光面 */
 .popup-container::before {
   content: "";
   position: absolute;
   inset: 0;
   pointer-events: none;
   border-radius: inherit;
-  background: linear-gradient(
-    to bottom,
-    rgba(255, 255, 255, 0.14) 0%,
-    rgba(255, 255, 255, 0.04) 22%,
-    transparent 55%
-  );
-  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.28);
+  background:
+    /* 左上角一点镜面高光 */
+    radial-gradient(120% 60% at 8% 0%, rgba(255, 255, 255, 0.30) 0%, transparent 60%),
+    /* 纵向受光渐变 */
+    linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.16) 0%,
+      rgba(255, 255, 255, 0.05) 24%,
+      transparent 58%
+    );
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.42);
+  z-index: 1;
+}
+
+/* 光学层 2：边缘折射 —— 内圈一道极细的亮边，玻璃厚度感 */
+.popup-container::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.22),
+    inset 0 -1px 0 0 rgba(255, 255, 255, 0.06);
+  z-index: 1;
 }
 
 :root.dark .popup-container::before {
-  background: linear-gradient(
-    to bottom,
-    rgba(255, 255, 255, 0.07) 0%,
-    rgba(255, 255, 255, 0.02) 22%,
-    transparent 55%
-  );
-  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.10);
+  background:
+    radial-gradient(120% 60% at 8% 0%, rgba(255, 255, 255, 0.14) 0%, transparent 62%),
+    linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.09) 0%,
+      rgba(255, 255, 255, 0.025) 24%,
+      transparent 58%
+    );
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.16);
+}
+
+:root.dark .popup-container::after {
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.10),
+    inset 0 -1px 0 0 rgba(255, 255, 255, 0.03);
+}
+
+/* 内容必须压在光学层之上（两层伪元素都是 z-index:1） */
+.popup-container > * {
+  position: relative;
+  z-index: 2;
 }
 
 /* ============================================================
@@ -447,11 +485,25 @@ select.input-field {
 }
 
 /* Content fade in */
-@keyframes fadeInUp {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: translateY(0);   }
+/* 浮窗进出场：快、不阻塞、不产生位移错觉。
+ *
+ * 时长取 140ms（此前 200ms）：浮窗是「看一眼就走」的瞬时界面，动效一旦
+ * 超过约 150ms 就会被感知为「等它出现」，而且会拖慢用户点复制的手速。
+ * 只用 opacity + 极轻的 scale（0.985 → 1），去掉 translateY —— 位移会让
+ * 窗口看起来「从别处飞过来」，与「就地淡入」的预期不符，也更容易让用户
+ * 误以为窗口位置在变（那正是位置记忆要消除的困惑）。
+ *
+ * 变换只走 compositor，不触发布局，因此不阻塞任何后续操作。 */
+@keyframes popupIn {
+  from { opacity: 0; transform: scale(0.985); }
+  to   { opacity: 1; transform: scale(1);     }
 }
-.animate-popup { animation: fadeInUp 200ms var(--ease-out-expo) forwards; }
+@keyframes popupOut {
+  from { opacity: 1; transform: scale(1);     }
+  to   { opacity: 0; transform: scale(0.99);  }
+}
+.animate-popup { animation: popupIn 140ms var(--ease-out-expo) both; }
+.animate-popup-out { animation: popupOut 90ms ease-in both; }
 
 /* 引导向导：步骤切换（fade + 上浮，略带弹性） */
 @keyframes stepIn {
