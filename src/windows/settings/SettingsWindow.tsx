@@ -23,15 +23,16 @@ import { toast } from "@/components/ToastManager";
 import { SUPPORTED_LANGUAGES, PROVIDERS, ERROR_MESSAGES } from "@/lib/constants";
 import { useConfigStore } from "@/stores/configStore";
 import { applyTheme } from "@/hooks/useTheme";
+import { AboutTab } from "./AboutTab";
 
 // 需要特殊处理的凭证字段：getConfig() 返回 masked 值，不能直接写回
 const CREDENTIAL_KEYS = PROVIDERS
   .filter((p) => p.requiresApiKey)
   .flatMap((p) => p.credentialFields.map((f) => f.key));
 
-type TabId = "general" | "provider";
+type TabId = "general" | "provider" | "about";
 
-export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provider" }) {
+export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provider" | "about" }) {
   const { setConfig } = useConfigStore();
   // 初始 Tab 可由 URL hash 指定（托盘「配置翻译源…」直达路径）
   const [activeTab, setActiveTab] = useState<TabId>(initialTab ?? "general");
@@ -102,7 +103,7 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
     import("@tauri-apps/api/event")
       .then(({ listen }) =>
         listen<{ tab: string }>("settings-navigate", (e) => {
-          if (e.payload.tab === "provider" || e.payload.tab === "general") {
+          if (e.payload.tab === "provider" || e.payload.tab === "general" || e.payload.tab === "about") {
             setActiveTab(e.payload.tab);
           }
         })
@@ -302,7 +303,7 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
           role="tablist"
           aria-label="设置分组"
         >
-          {(["general", "provider"] as TabId[]).map((tab) => (
+          {(["general", "provider", "about"] as TabId[]).map((tab) => (
             <button
               key={tab}
               role="tab"
@@ -315,7 +316,7 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
                   : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
               ].join(" ")}
             >
-              {tab === "general" ? "常规" : "翻译源"}
+              {tab === "general" ? "常规" : tab === "provider" ? "翻译源" : "关于"}
             </button>
           ))}
         </div>
@@ -337,29 +338,33 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
             maskedCredentials={maskedCredentials}
           />
         )}
+        {activeTab === "about" && <AboutTab />}
       </div>
 
       {/* ── 底部保存栏 ── */}
-      <div className="px-6 py-3.5 bg-[var(--surface-primary)] dark:bg-[var(--surface-secondary)] border-t border-[var(--border-secondary)] flex items-center justify-end gap-3">
-        {saveStatus === "ok" && (
-          <span className="text-[12px] text-green-500 flex items-center gap-1">
-            <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none">
-              <path d="M3 8.5l3.5 3.5 6.5-7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            已保存
-          </span>
-        )}
-        {saveStatus === "err" && (
-          <span className="text-[12px] text-red-500">保存失败</span>
-        )}
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="btn-primary disabled:opacity-40"
-        >
-          {saving ? "保存中…" : "保存"}
-        </button>
-      </div>
+      {/* 「关于」页无草稿配置，不显示保存栏 */}
+      {activeTab !== "about" && (
+        <div className="px-6 py-3.5 bg-[var(--surface-primary)] dark:bg-[var(--surface-secondary)] border-t border-[var(--border-secondary)] flex items-center justify-end gap-3">
+          {saveStatus === "ok" && (
+            <span className="text-[12px] text-green-500 flex items-center gap-1">
+              <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none">
+                <path d="M3 8.5l3.5 3.5 6.5-7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              已保存
+            </span>
+          )}
+          {saveStatus === "err" && (
+            <span className="text-[12px] text-red-500">保存失败</span>
+          )}
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="btn-primary disabled:opacity-40"
+          >
+            {saving ? "保存中…" : "保存"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

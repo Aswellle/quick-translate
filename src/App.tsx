@@ -23,14 +23,16 @@ function getWindowType(): WindowType {
 }
 
 /** 从 hash 中解析 settings 的初始 Tab（托盘「配置翻译源…」的直达路径） */
-function getSettingsInitialTab(): "general" | "provider" {
+function getSettingsInitialTab(): "general" | "provider" | "about" {
   const hash = window.location.hash.replace("#", "");
-  return hash.startsWith("settings/provider") ? "provider" : "general";
+  if (hash.startsWith("settings/provider")) return "provider";
+  if (hash.startsWith("settings/about")) return "about";
+  return "general";
 }
 
 export default function App() {
   const [windowType, setWindowType] = useState<WindowType>(getWindowType);
-  const [settingsInitialTab, setSettingsInitialTab] = useState<"general" | "provider">(getSettingsInitialTab);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<"general" | "provider" | "about">(getSettingsInitialTab);
   const setConfig = useConfigStore((s) => s.setConfig);
 
   useEffect(() => {
