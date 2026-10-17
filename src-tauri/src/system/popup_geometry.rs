@@ -34,6 +34,12 @@ pub const MAX_WIDTH: f64 = WIDTH_WIDE;
 pub const MIN_HEIGHT: f64 = 40.0;
 pub const MAX_HEIGHT: f64 = 480.0;
 
+/// 浮窗圆角（逻辑像素）—— 与 globals.css 的 `--radius-lg` 保持一致。
+///
+/// 系统级材质（macOS NSVisualEffectView 的圆角裁剪、Windows Acrylic 的
+/// 窗口形状）需要这个值在 Rust 侧也可见；CSS 变量无法跨进程传递。
+pub const RADIUS_LG: f64 = 14.0;
+
 /// 浮窗与光标之间的距离
 const OFFSET: f64 = 14.0;
 /// 所有方向都放不下时的内缩量
@@ -172,6 +178,12 @@ pub fn place_popup(cursor: (f64, f64), work_area: Rect, popup: (f64, f64)) -> (f
 static ACTUAL_SIZE: Mutex<Option<(f64, f64)>> = Mutex::new(None);
 /// 本次浮窗的定位锚点（屏幕物理像素，与 GetCursorPos 同坐标系）
 static ANCHOR: Mutex<Option<(f64, f64)>> = Mutex::new(None);
+/// 用户手动拖拽后的窗口位置（逻辑像素）。
+///
+/// 与 ANCHOR 的区别是语义：ANCHOR 是「这次翻译该出现在哪」的光标依据，
+/// DRAGGED 是「用户把它挪到哪了」。用户一旦拖过窗口，后续出现就不该再
+/// 按光标重算 —— 那会把用户精心摆好的位置每次复制都冲掉。
+static DRAGGED: Mutex<Option<(f64, f64)>> = Mutex::new(None);
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -197,6 +209,24 @@ pub fn anchor() -> Option<(f64, f64)> {
     *lock(&ANCHOR)
 }
 
+/// 记住用户拖拽后的窗口位置（逻辑像素）。
+///
+/// 由 `activate_popup` / 拖拽结束路径调用。一旦记录，后续浮窗出现优先
+/// 使用它而不是光标重算 —— 用户摆好的位置比「跟着光标跑」更符合预期。
+pub fn remember_dragged(x: f64, y: f64) {
+    *lock(&DRAGGED) = Some((x, y));
+}
+
+/// 用户最近一次拖拽到的位置（逻辑像素）。从未拖过则为 None。
+pub fn dragged_position() -> Option<(f64, f64)> {
+    *lock(&DRAGGED)
+}
+
+/// 清除拖拽位置记忆（浮窗被销毁/重建时调用，避免沿用失效坐标）。
+pub fn forget_dragged() {
+    *lock(&DRAGGED) = None;
+}
+
 /// 测试用：清掉跨用例残留的全局状态。
 ///
 /// 这两个 static 是进程级的，测试并行跑时互相污染 —— 每个涉及它们的用例
@@ -205,6 +235,7 @@ pub fn anchor() -> Option<(f64, f64)> {
 pub fn reset_state_for_test() {
     *lock(&ACTUAL_SIZE) = None;
     *lock(&ANCHOR) = None;
+    *lock(&DRAGGED) = None;
 }
 
 #[cfg(test)]

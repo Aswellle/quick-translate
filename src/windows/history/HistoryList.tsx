@@ -10,19 +10,63 @@ import { deleteHistoryRecord, toggleStarRecord } from "@/lib/commands";
 import { toast } from "@/components/ToastManager";
 import type { TranslationRecord } from "@/lib/commands";
 
-const TRUNCATE_LEN = 80;
+const TRUNCATE_LEN = 110;
 
-function truncate(text: string, len = TRUNCATE_LEN) {
-  return text.length > len ? text.slice(0, len) + "…" : text;
+/**
+ * 命中感知截断：搜索时把命中词移到可见区，而不是死板地取前 110 字。
+ *
+ * 修复前的问题：搜索「季度报告」时，如果命中出现在第 300 字，列表里
+ * 那一行只显示前 80 字 —— 用户看到一条结果却看不到它为什么匹配，
+ * 只能逐条展开确认。命中感知截断让高亮词一定落在可见窗口内。
+ */
+function truncateAround(text: string, query: string, len = TRUNCATE_LEN) {
+  if (text.length <= len) return text;
+  const q = query.trim().toLowerCase();
+  if (!q) return text.slice(0, len) + "…";
+  const idx = text.toLowerCase().indexOf(q);
+  if (idx < 0) return text.slice(0, len) + "…";
+  // 命中点前留 1/3 上下文，保证命中词落在中前部且不被截断
+  const start = Math.max(0, idx - Math.floor(len / 3));
+  const end = Math.min(text.length, start + len);
+  const prefix = start > 0 ? "…" : "";
+  const suffix = end < text.length ? "…" : "";
+  return prefix + text.slice(start, end) + suffix;
 }
 
-function formatTime(ms: number) {
-  return new Date(ms).toLocaleString("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+/** 相对时间：刚刚 / N 分钟前 / 今天 HH:mm / 昨天 HH:mm / MM-DD */
+function formatRelative(ms: number): string {
+  const d = new Date(ms);
+  const now = new Date();
+  const diffMin = Math.floor((now.getTime() - ms) / 60_000);
+  if (diffMin < 1) return "刚刚";
+  if (diffMin < 60) return `${diffMin} 分钟前`;
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  const hhmm = d.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  if (sameDay) return `今天 ${hhmm}`;
+  const yest = new Date(now);
+  yest.setDate(now.getDate() - 1);
+  if (
+    d.getFullYear() === yest.getFullYear() &&
+    d.getMonth() === yest.getMonth() &&
+    d.getDate() === yest.getDate()
+  ) {
+    return `昨天 ${hhmm}`;
+  }
+  return d.toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" });
+}
+
+/** 分组标题：今天 / 昨天 / 本周 / YYYY年M月 */
+function groupLabel(ms: number): string {
+  const d = new Date(ms);
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  if (ms >= startOfToday) return "今天";
+  if (ms >= startOfToday - 86_400_000) return "昨天";
+  if (ms >= startOfToday - 6 * 86_400_000) return "最近一周";
+  return `${d.getFullYear()} 年 ${d.getMonth() + 1} 月`;
 }
 
 function Highlight({ text, query }: { text: string; query: string }) {
@@ -92,21 +136,30 @@ const RecordCard = memo(function RecordCard({
         }
       }}
     >
-      {/* ── 折叠视图 ── */}
+      {/* ── 折叠视图 ──
+          信息层级：译文（主）> 原文（次）> 语言/来源/时间（元信息）。
+          译文用 2 行显示而不是单行截断 —— 单行在 110 字窗口里通常只剩
+          前半句，用户要判断「是不是我要的那条」必须展开，扫读效率很低。 */}
       <div className="px-4 py-3">
         <div className="flex items-start justify-between gap-2">
-          <div className="flex-1 min-w-0 space-y-1">
-            {/* 原文 */}
-            <p className="text-[12px] text-[var(--text-secondary)] truncate font-mono">
-              <Highlight text={truncate(record.source_text)} query={searchQuery} />
+          <div className="flex-1 min-w-0 space-y-1.5">
+            {/* 译文：主信息，允许两行 */}
+            <p className="text-[13px] text-[var(--text-primary)] leading-snug line-clamp-2">
+              <Highlight
+                text={truncateAround(record.translated_text, searchQuery)}
+                query={searchQuery}
+              />
             </p>
-            {/* 译文 */}
-            <p className="text-[13px] text-[var(--text-primary)] truncate leading-snug">
-              <Highlight text={truncate(record.translated_text)} query={searchQuery} />
+            {/* 原文：次信息，单行 */}
+            <p className="text-[12px] text-[var(--text-secondary)] truncate font-mono">
+              <Highlight
+                text={truncateAround(record.source_text, searchQuery)}
+                query={searchQuery}
+              />
             </p>
           </div>
           {/* 收藏星标 + 展开箭头 */}
-          <div className="flex items-center gap-1.5 mt-1 flex-shrink-0">
+          <div className="flex items-center gap-1.5 mt-0.5 flex-shrink-0">
             {record.is_starred && (
               <svg className="w-3.5 h-3.5 text-yellow-400" viewBox="0 0 16 16" fill="currentColor">
                 <path d="M8 1.5l1.75 3.5 3.9.57-2.82 2.74.66 3.88L8 10.35l-3.49 1.84.66-3.88-2.82-2.74 3.9-.57L8 1.5z" />
@@ -133,8 +186,16 @@ const RecordCard = memo(function RecordCard({
           <span className="text-[11px] font-medium text-[var(--text-secondary)] bg-[var(--surface-tertiary)] dark:bg-[var(--surface-secondary)] px-1.5 py-px rounded-full">
             {PROVIDER_LABELS[record.provider] ?? record.provider}
           </span>
-          <span className="text-[11px] text-[var(--text-secondary)] ml-auto tabular-nums">
-            {formatTime(record.created_at)}
+          {record.duration_ms != null && (
+            <span className="text-[11px] text-[var(--text-tertiary)] tabular-nums">
+              {record.duration_ms}ms
+            </span>
+          )}
+          <span
+            className="text-[11px] text-[var(--text-secondary)] ml-auto tabular-nums"
+            title={new Date(record.created_at).toLocaleString("zh-CN")}
+          >
+            {formatRelative(record.created_at)}
           </span>
         </div>
       </div>
@@ -247,18 +308,45 @@ export function HistoryList({
     [toggleStar]
   );
 
+  // 按时间分组渲染：记录天然按 created_at 倒序，只需在标签变化处插入分隔。
+  // 没有分组时，一屏 50 条全是同质卡片，用户很难判断「这条是刚才的还是上周的」
+  // —— 而时间恰恰是回忆翻译内容时最常用的线索。
+  const groups: Array<{ label: string; items: TranslationRecord[] }> = [];
+  for (const record of records) {
+    const label = groupLabel(record.created_at);
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) {
+      last.items.push(record);
+    } else {
+      groups.push({ label, items: [record] });
+    }
+  }
+
   return (
     <div className="overflow-y-auto h-full px-5 py-3 space-y-2">
-      {records.map((record) => (
-        <RecordCard
-          key={record.id}
-          record={record}
-          isExpanded={expandedId === record.id}
-          searchQuery={searchQuery}
-          onToggle={handleToggle}
-          onDelete={(id) => setPendingDelete(records.find((r) => r.id === id) ?? null)}
-          onStar={handleStar}
-        />
+      {groups.map((group) => (
+        <div key={group.label} className="space-y-2">
+          <div className="flex items-center gap-2 pt-1 first:pt-0">
+            <span className="text-[11px] font-semibold text-[var(--text-tertiary)] tracking-wide">
+              {group.label}
+            </span>
+            <span className="flex-1 h-px bg-[var(--border-secondary)]" />
+            <span className="text-[10.5px] text-[var(--text-tertiary)] tabular-nums">
+              {group.items.length} 条
+            </span>
+          </div>
+          {group.items.map((record) => (
+            <RecordCard
+              key={record.id}
+              record={record}
+              isExpanded={expandedId === record.id}
+              searchQuery={searchQuery}
+              onToggle={handleToggle}
+              onDelete={(id) => setPendingDelete(records.find((r) => r.id === id) ?? null)}
+              onStar={handleStar}
+            />
+          ))}
+        </div>
       ))}
       {pendingDelete && (
         <ConfirmDialog

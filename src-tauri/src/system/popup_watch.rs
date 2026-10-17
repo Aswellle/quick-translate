@@ -120,6 +120,9 @@ pub fn hide_popup_now(app: &AppHandle) {
     let state = app.state::<AppState>();
     state.popup_watch.stop();
     state.clipboard_monitor.reset_last_text();
+    // 注意：**不清除**拖拽位置记忆。用户拖到某处后关闭浮窗，下次翻译
+    // 应当回到同一位置 —— 那是用户明确表达过的偏好。只有窗口被销毁
+    // （应用退出/窗口重建）时才由 forget_dragged 清掉。
 }
 
 /// 被动态看守。

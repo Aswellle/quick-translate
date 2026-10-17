@@ -206,6 +206,16 @@ export async function activatePopup(): Promise<void> {
   return invoke("activate_popup");
 }
 
+/** 拖拽结束后上报窗口位置：下次翻译沿用它而不是跟随光标 */
+export async function rememberPopupPosition(): Promise<void> {
+  return invoke("remember_popup_position_now");
+}
+
+/** 清除位置记忆，恢复「跟随光标」的默认定位 */
+export async function resetPopupPosition(): Promise<void> {
+  return invoke("reset_popup_position");
+}
+
 export async function resizePopup(width: number, height: number): Promise<void> {
   return invoke("resize_popup", { width, height });
 }

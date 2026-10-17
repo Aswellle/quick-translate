@@ -7,9 +7,8 @@
 // 就是 coordinator 的代际闸门。
 //
 // 依赖方向单向：coordinator → translation_flow，反向没有任何引用。
-// Phase 8 会重构本模块的窗口激活策略与几何计算。
 
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 
 use crate::system::popup_geometry;
 use crate::types::{
@@ -22,6 +21,91 @@ pub(crate) const POPUP_LABEL: &str = "popup";
 /// 浮窗初始逻辑尺寸 —— 取自 popup_geometry（尺寸契约唯一来源，C3）
 const POPUP_LOGICAL_W: f64 = popup_geometry::WIDTH_NORMAL;
 const POPUP_LOGICAL_H: f64 = popup_geometry::HEIGHT_INITIAL;
+
+/// 给浮窗套上系统级材质（PRD 5.4：Windows Acrylic / macOS NSVisualEffectView）。
+///
+/// 为什么必须有这一步：CSS 的 `backdrop-filter` 只能模糊「同一 webview 内
+/// 已经绘制的内容」。窗口本身不透明时，窗口背后是桌面/其他应用，webview
+/// 采不到那些像素，`backdrop-filter` 等于作用在纯色底上 —— 视觉上就是一块
+/// 不透明板，这正是「PRD 要求液态玻璃但看不到」的根因。
+///
+/// 只有先让窗口透明（`transparent(true)`）再让 OS 画材质，背后的桌面才会
+/// 真正透过来。两者缺一不可：
+///   - Windows：Acrylic 由 DWM 合成，需要 `transparent` + 非装饰窗口
+///   - macOS：NSVisualEffectView 需要 `macOSPrivateApi` 才允许透明背景
+///
+/// 失败不致命：材质不可用时退回 CSS 的半透明背景（观感退化为磨砂纯色，
+/// 功能不受影响），因此只记 warn。
+fn apply_popup_material(window: &WebviewWindow) {
+    use tauri::window::{Effect, EffectsBuilder};
+
+    #[cfg(target_os = "windows")]
+    let effects = EffectsBuilder::new()
+        // Acrylic：Windows 10 1803+ 的实时模糊 + 噪点，最接近「液态玻璃」
+        .effect(Effect::Acrylic)
+        // 极淡的白色着色：让深色桌面背景下文字仍可读
+        .color(tauri::utils::config::Color(255, 255, 255, 18))
+        .build();
+
+    #[cfg(target_os = "macos")]
+    let effects = {
+        use tauri::window::EffectState;
+        EffectsBuilder::new()
+            // Popover：macOS 原生弹出层材质，带正确的明暗自适应
+            .effect(Effect::Popover)
+            .state(EffectState::FollowsWindowActiveState)
+            .radius(popup_geometry::RADIUS_LG)
+            .build()
+    };
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let effects = {
+        let _ = Effect::Acrylic;
+        EffectsBuilder::new().build()
+    };
+
+    if let Err(e) = window.set_effects(effects) {
+        tracing::warn!(
+            event = "popup_material_unavailable",
+            "系统级浮窗材质应用失败，退回 CSS 半透明背景: {}",
+            e
+        );
+    }
+}
+
+/// 浮窗窗口的唯一构建入口。
+///
+/// 三条创建路径（ensure_popup_window / show_popup_loading / 未来新增）
+/// 共用同一份属性集：透明、无装饰、置顶、免激活。属性分散复制是这份
+/// 代码里已经发生过两次漂移的地方（材质只在一条路径上缺失就会表现为
+/// 「有时是玻璃有时不是」）。
+fn build_popup_window(
+    app: &AppHandle,
+    position: (f64, f64),
+    visible: bool,
+) -> tauri::Result<WebviewWindow> {
+    let window =
+        WebviewWindowBuilder::new(app, POPUP_LABEL, WebviewUrl::App("index.html#popup".into()))
+            .title("QuickTranslate")
+            .additional_browser_args(crate::system::BROWSER_ARGS)
+            .decorations(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            // 非激活窗口（Windows 上即 WS_EX_NOACTIVATE）：显示时不抢焦点，
+            // 不把用户从正在编辑的地方带走（Phase 8b / 计划第 19 节）
+            .focusable(false)
+            .visible(visible)
+            .resizable(false)
+            // 透明背景：CSS 的圆角与阴影需要它才能真正透出桌面，
+            // 也是系统级材质生效的前提（见 apply_popup_material）
+            .transparent(true)
+            .inner_size(POPUP_LOGICAL_W, POPUP_LOGICAL_H)
+            .position(position.0, position.1)
+            .build()?;
+
+    apply_popup_material(&window);
+    Ok(window)
+}
 
 /// 确保 popup 浮窗已创建（onboarding 关闭后调用，此时 popup 可能从未被创建）
 pub fn ensure_popup_window(app: &AppHandle) {
@@ -38,22 +122,7 @@ pub fn ensure_popup_window(app: &AppHandle) {
     // 创建失败必须留痕：这条路径跑在 onboarding 关闭之后，浮窗缺失的
     // 现场极难重现，静默吞掉 Result 会让排查无从下手（孪生路径
     // show_popup_loading 是有 error! 的，此处此前独缺）
-    if let Err(e) =
-        WebviewWindowBuilder::new(app, POPUP_LABEL, WebviewUrl::App("index.html#popup".into()))
-            .title("QuickTranslate")
-            .additional_browser_args(crate::system::BROWSER_ARGS)
-            .decorations(false)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            // 非激活窗口（Windows 上即 WS_EX_NOACTIVATE）：显示时不抢焦点，
-            // 不把用户从正在编辑的地方带走（Phase 8b / 计划第 19 节）
-            .focusable(false)
-            .visible(true)
-            .resizable(false)
-            .inner_size(POPUP_LOGICAL_W, POPUP_LOGICAL_H)
-            .position(fallback_pos.x, fallback_pos.y)
-            .build()
-    {
+    if let Err(e) = build_popup_window(app, (fallback_pos.x, fallback_pos.y), true) {
         tracing::error!("[ensure_popup] 创建浮窗失败: {}", e);
         app.state::<crate::state::AppState>().runtime.report_popup(
             crate::runtime::ComponentState::Degraded,
@@ -70,32 +139,30 @@ pub(crate) async fn show_popup_loading(
     position: &PopupPosition,
     request_id: &str,
 ) -> bool {
+    // 位置策略：用户拖拽过窗口就沿用拖拽位置，否则按光标锚点重算。
+    //
+    // 这是「拖到任意位置后被下次翻译冲掉」的修复点。此前每次显示都无条件
+    // set_position(光标锚点)，用户摆好的位置在下次复制时立刻失效 —— 对
+    // 于习惯把浮窗固定在一角的用户，这等于每次都要重新拖一次。
+    // 拖拽位置是显式用户意图，优先级高于「跟着光标跑」的默认行为。
+    let target = match popup_geometry::dragged_position() {
+        Some((x, y)) => {
+            tracing::info!("[show_popup_loading] 沿用用户拖拽位置 ({}, {})", x, y);
+            (x, y)
+        }
+        None => (position.x, position.y),
+    };
+
     if let Some(window) = app.get_webview_window(POPUP_LABEL) {
-        tracing::info!("[show_popup_loading] 找到 popup，设置位置={:?}", position);
-        let _ = window.set_position(tauri::LogicalPosition::new(position.x, position.y));
+        tracing::info!("[show_popup_loading] 找到 popup，设置位置={:?}", target);
+        let _ = window.set_position(tauri::LogicalPosition::new(target.0, target.1));
         // 每次显示都复位为非激活：用户上一次点过浮窗的话，窗口仍是可激活的，
         // 不复位就会在这一轮直接抢走焦点（Phase 8b）
         let _ = window.set_focusable(false);
         let _ = window.show();
     } else {
         tracing::info!("[show_popup_loading] popup 不存在，创建新窗口并立即 show()");
-        match WebviewWindowBuilder::new(
-            app,
-            POPUP_LABEL,
-            WebviewUrl::App("index.html#popup".into()),
-        )
-        .title("QuickTranslate")
-        .additional_browser_args(crate::system::BROWSER_ARGS)
-        .decorations(false)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .focusable(false)
-        .visible(false)
-        .resizable(false)
-        .inner_size(POPUP_LOGICAL_W, POPUP_LOGICAL_H)
-        .position(position.x, position.y)
-        .build()
-        {
+        match build_popup_window(app, target, false) {
             Ok(window) => {
                 tracing::info!("[show_popup_loading] 新窗口创建成功，调用 show()");
                 let _ = window.show();
