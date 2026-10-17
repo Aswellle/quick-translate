@@ -251,12 +251,15 @@ jobs:
             echo "ERROR: latest.json 版本不是 $TAG"
             MISSING=1
           fi
-          # 双平台条目：Windows 走 .msi/.nsis 签名，macOS 走 .app.tar.gz 签名
-          if ! grep -q '\.msi\.' latest.json && ! grep -q '\.nsis\.' latest.json; then
+          # 双平台更新条目：直接检查 Tauri updater 的平台键（platforms 对象
+          # 的键名以平台标识开头，msi/nsis/app 是其变体后缀）。不能按文件
+          # 扩展名匹配 —— nsis 条目的 url 是 -setup.exe 结尾，而 url 值本身
+          # 以引号收尾，按扩展名匹配两头都落空（v0.6.0 误报根因）
+          if ! grep -q '"windows-x86_64' latest.json; then
             echo "ERROR: latest.json 缺少 Windows 平台更新条目"
             MISSING=1
           fi
-          if ! grep -q '\.app\.tar\.gz' latest.json; then
+          if ! grep -q '"darwin-aarch64' latest.json; then
             echo "ERROR: latest.json 缺少 macOS 平台更新条目"
             MISSING=1
           fi
