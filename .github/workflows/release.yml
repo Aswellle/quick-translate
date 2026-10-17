@@ -208,3 +208,61 @@ jobs:
           releaseDraft: false
           prerelease: false
           args: --target aarch64-apple-darwin
+
+  # ── 更新清单校验 ─────────────────────────────────────────────────────────
+  # 两个构建 job 并发向同一 release 上传产物并各自组装 latest.json，最终
+  # 内容由后完成的一方决定 —— 若清单缺失某一平台条目，那个平台的自动
+  # 更新会指向不存在的文件而静默失效（v0.3.0 事故的同类形态，发布当时
+  # 无法察觉）。此 job 在双平台完成后强制核验，缺任一平台即宣告失败。
+  verify-updater-manifest:
+    name: Verify updater manifest
+    runs-on: ubuntu-latest
+    needs: [build-windows, build-macos]
+    if: github.event_name == 'push'
+
+    steps:
+      - name: Validate latest.json covers both platforms
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME#v}"
+          BASE="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}"
+
+          # 等待 release 资产就绪（上传与清单生成有先后）
+          for i in $(seq 1 12); do
+            if curl -fsSL -o latest.json "$BASE/latest.json" 2>/dev/null; then
+              break
+            fi
+            if [ "$i" = "12" ]; then
+              echo "ERROR: latest.json 在发布后仍不可下载"
+              exit 1
+            fi
+            echo "等待 latest.json 就绪（第 $i 次）…"
+            sleep 10
+          done
+
+          echo "── latest.json ──"
+          cat latest.json
+          echo ""
+
+          MISSING=0
+          # 版本号必须与 tag 一致
+          if ! grep -q "\"version\":\"$TAG\"" latest.json && ! grep -q "\"version\": *\"$TAG\"" latest.json; then
+            echo "ERROR: latest.json 版本不是 $TAG"
+            MISSING=1
+          fi
+          # 双平台条目：Windows 走 .msi/.nsis 签名，macOS 走 .app.tar.gz 签名
+          if ! grep -q '\.msi\.' latest.json && ! grep -q '\.nsis\.' latest.json; then
+            echo "ERROR: latest.json 缺少 Windows 平台更新条目"
+            MISSING=1
+          fi
+          if ! grep -q '\.app\.tar\.gz' latest.json; then
+            echo "ERROR: latest.json 缺少 macOS 平台更新条目"
+            MISSING=1
+          fi
+
+          if [ "$MISSING" = "1" ]; then
+            echo "自动更新清单不完整，请检查 tauri-action 的清单合并行为"
+            exit 1
+          fi
+          echo "OK: latest.json 覆盖 Windows 与 macOS 双平台，版本 $TAG"

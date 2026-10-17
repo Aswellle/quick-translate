@@ -41,8 +41,11 @@ export function ToastManager() {
   }, [addToast]);
 
   // 监听 Rust 广播的 "toast" 事件
+  // cancelled 标志与 useTauriEvent 同一模式：cleanup 先于 Promise resolve
+  // （StrictMode 双挂载）时首个监听器会被泄漏，toast 全部重复弹出
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let cancelled = false;
 
     listen<{ message: string; kind: string; duration?: number }>("toast", (event) => {
       const { message, kind, duration } = event.payload;
@@ -51,9 +54,15 @@ export function ToastManager() {
         ? (kind as ToastType)
         : "info";
       addToast({ message, type, duration });
-    }).then((fn) => { unlisten = fn; });
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
 
-    return () => unlisten?.();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   }, [addToast]);
 
   if (toasts.length === 0) return null;

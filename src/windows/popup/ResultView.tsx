@@ -7,9 +7,12 @@ import type { TranslationResult } from "@/lib/commands";
 
 interface ResultViewProps {
   result: TranslationResult;
+  /** 浮窗已转为可交互态（用户点击过）才显示键盘提示 —— 被动态下
+      键盘事件到不了 webview，提示只会误导用户往文档里打空格 */
+  showKeyboardHint?: boolean;
 }
 
-export function ResultView({ result }: ResultViewProps) {
+export function ResultView({ result, showKeyboardHint = false }: ResultViewProps) {
   const sourceLang = getLangName(result.detected_source_lang);
   const targetLang = getLangName(result.target_lang);
   const providerLabel = PROVIDER_LABELS[result.provider] ?? result.provider;
@@ -68,12 +71,19 @@ export function ResultView({ result }: ResultViewProps) {
 
         {/* 右：meta 信息 */}
         <div className="flex items-center gap-2.5">
-          {/* 快捷键提示：让"空格关闭"可被发现。
+          {/* 快捷键提示仅在可交互态显示：被动态下 Esc/空格收不到，
+              "点击浮窗后按空格关闭"告知正确的两步操作。
               不加响应式前缀 —— sm: 断点是 640px，浮窗视口仅 280–520px，
               `hidden sm:flex` 会让本提示永不渲染（F7） */}
           <span className="flex items-center gap-1 text-[10px] text-[var(--text-tertiary)]">
-            <kbd className="kbd-hint">空格</kbd>
-            关闭
+            {showKeyboardHint ? (
+              <>
+                <kbd className="kbd-hint">空格</kbd>
+                关闭
+              </>
+            ) : (
+              "点击后空格关闭"
+            )}
           </span>
           {import.meta.env.DEV && (
             <span className="text-[10px] text-[var(--text-tertiary)] tabular-nums">

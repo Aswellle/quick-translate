@@ -1,19 +1,35 @@
 // src/windows/popup/ErrorView.tsx
 // 翻译错误状态展示（macOS 风格）
+//
+// 错误视图带操作行：认证/额度类错误指向「前往设置」，其余提示「重新复制
+// 即可重试」（剪贴板监控会在新内容到来时自动重译 —— 这是实际存在的重试
+// 路径，此前 UI 从不告诉用户）。浮窗失焦即关，"请在设置中检查"若只靠
+// 用户记住托盘入口，这条引导基本等于没写。
 
 import { ERROR_MESSAGES } from "@/lib/constants";
+import { openSettingsWindow } from "@/lib/commands";
 
 interface ErrorViewProps {
   code: string;
   message?: string;
 }
 
+/** 指向设置页的错误类别：修复动作在配置里，不在重试里 */
+const SETTINGS_FIX_CODES = new Set(["AUTH_ERROR", "QUOTA_EXHAUSTED"]);
+
 export function ErrorView({ code, message }: ErrorViewProps) {
   const displayMessage =
     ERROR_MESSAGES[code] ?? message ?? ERROR_MESSAGES["UNKNOWN"];
+  const settingsFix = SETTINGS_FIX_CODES.has(code);
+
+  const goSettings = () => {
+    openSettingsWindow("provider").catch((err) =>
+      console.error("[ErrorView] 打开设置失败:", err)
+    );
+  };
 
   return (
-    <div className="animate-popup px-5 pb-6 pt-2 flex flex-col items-center gap-3 text-center">
+    <div className="animate-popup px-5 pb-5 pt-2 flex flex-col items-center gap-3 text-center">
       {/* 错误图标 — macOS SF Symbol 风格 */}
       <div className="w-11 h-11 rounded-full bg-gradient-to-br from-red-50 to-red-100 dark:from-red-950/30 dark:to-red-900/20 flex items-center justify-center shadow-sm">
         <svg
@@ -31,6 +47,22 @@ export function ErrorView({ code, message }: ErrorViewProps) {
       <p className="text-sm text-[var(--text-secondary)] leading-relaxed max-w-[280px]">
         {displayMessage}
       </p>
+
+      {/* 操作行：按错误类别给出可执行的下一步，而不是让用户自己找托盘 */}
+      <div className="flex items-center gap-2">
+        {settingsFix && (
+          <button
+            type="button"
+            onClick={goSettings}
+            className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-[var(--system-blue)] hover:brightness-110 text-white transition-all active:scale-95 shadow-sm"
+          >
+            前往设置
+          </button>
+        )}
+        <span className="text-[11px] text-[var(--text-tertiary)]">
+          重新复制文字即可重试
+        </span>
+      </div>
 
       {/* 错误码（开发模式） */}
       {import.meta.env.DEV && (

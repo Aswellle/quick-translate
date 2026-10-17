@@ -31,7 +31,7 @@ use crate::error::AppError;
 use crate::state::AppState;
 use crate::system::persistence::{OwnedCacheEntry, PersistJob};
 use crate::system::translation_flow;
-use crate::types::{now_unix_ms, TranslationRecord, TranslationResult};
+use crate::types::{TranslationRecord, TranslationResult};
 
 use super::request::{RequestGeneration, RequestId, TranslationRequest};
 
@@ -194,7 +194,7 @@ async fn run_translation(app: &AppHandle, request: TranslationRequest) {
     let state = app.state::<AppState>();
     let coordinator = state.coordinator.clone();
     let id = request.id;
-    let start_ms = now_unix_ms();
+    let started = std::time::Instant::now();
 
     tracing::info!(
         event = "translation_request_started",
@@ -222,7 +222,9 @@ async fn run_translation(app: &AppHandle, request: TranslationRequest) {
     match outcome {
         Ok(mut result) => {
             result.truncated = request.truncated;
-            result.duration_ms = (now_unix_ms() - start_ms) as u64;
+            // Instant 计时：墙钟回拨时 (now - start) 为负，as u64 会绕成
+            // 巨大值。provider 内部早已用 Instant，只有这层聚合此前漏了
+            result.duration_ms = started.elapsed().as_millis() as u64;
 
             let emitted = coordinator.run_if_current(id, || {
                 translation_flow::emit_result(app, &result, &id.full());

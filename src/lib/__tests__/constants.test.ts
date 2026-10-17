@@ -18,7 +18,6 @@ const RUST_APP_ERROR_CODES = [
   "PROVIDER_REJECTED",
   "ALL_PROVIDERS_FAILED",
   "CLIPBOARD_ERROR",
-  "HOTKEY_CONFLICT",
   "DATABASE_ERROR",
   "CONFIG_ERROR",
   "STORAGE_UNAVAILABLE",
@@ -34,6 +33,19 @@ describe("ERROR_MESSAGES 覆盖契约", () => {
   it("Rust 侧每个错误码都有中文文案", () => {
     const missing = RUST_APP_ERROR_CODES.filter((code) => !(code in ERROR_MESSAGES));
     expect(missing).toEqual([]);
+  });
+
+  it("ERROR_MESSAGES 不包含 Rust 不存在的死键", () => {
+    // 死键会让读者以为后端存在对应场景（HOTKEY_CONFLICT 此前就是这样
+    // 一直被沿用下来的 —— Rust 侧从未有过这个变体）。
+    // UNKNOWN 是前端保留的兜底文案（ErrorView 在 code 未匹配时使用），
+    // 不是死键。
+    const dead = Object.keys(ERROR_MESSAGES).filter(
+      (code) =>
+        code !== "UNKNOWN" &&
+        !RUST_APP_ERROR_CODES.includes(code as (typeof RUST_APP_ERROR_CODES)[number])
+    );
+    expect(dead).toEqual([]);
   });
 
   it("文案非空且不包含 Rust 调试串痕迹", () => {

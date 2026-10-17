@@ -130,7 +130,7 @@ impl TranslationProvider for BaiduProvider {
             return match code.as_str() {
                 "52001" => Err(AppError::Timeout { timeout_secs: 5 }),
                 "52002" => Err(AppError::NetworkError("百度翻译系统错误".into())),
-                "52003" => Err(AppError::AuthError {
+                "52003" | "54001" => Err(AppError::AuthError {
                     provider: "baidu".into(),
                 }),
                 "54003" | "54004" => Err(AppError::RateLimit {

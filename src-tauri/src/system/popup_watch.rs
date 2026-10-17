@@ -42,7 +42,46 @@ fn foreground_window() -> isize {
     unsafe { GetForegroundWindow() as isize }
 }
 
-#[cfg(not(target_os = "windows"))]
+/// macOS：以最前应用的进程 ID 作为前台标识。
+///
+/// 被动态浮窗在此平台同样不会收到焦点事件（focusable(false)），若不
+/// 提供前台查询，看守永远无法判定「用户切走了」，浮窗只能靠用户手动
+/// 点掉 —— 发布流水线实际在分发 macOS dmg，这条路径每个用户每次翻译
+/// 都会踩到。NSWorkspace.frontmostApplication 的进程 ID 天然随应用
+/// 切换变化，语义与 Windows 的 GetForegroundWindow 等价。
+#[cfg(target_os = "macos")]
+fn foreground_window() -> isize {
+    // objc2 0.6 中这些 NSWorkspace/NSRunningApplication 方法标注为安全
+    // （无指针解引用风险），不需要 unsafe 块
+    use objc2_app_kit::{NSApplicationActivationPolicy, NSWorkspace};
+
+    let workspace = NSWorkspace::sharedWorkspace();
+    let front = workspace.frontmostApplication();
+    match front {
+        Some(app) => {
+            // 守护进程/后台常驻可能返回 nil policy；pid 本身即够作前台标识
+            let pid = app.processIdentifier();
+            if pid == 0 {
+                return 0;
+            }
+            // 浮窗属于本应用：本应用成为最前应用时不该作为「用户切走」
+            // 的信号（与 Windows 行为一致 —— activate 后看守已停，这里是
+            // 兜底防线）
+            if app.activationPolicy() == NSApplicationActivationPolicy::Regular
+                && app
+                    .bundleIdentifier()
+                    .map(|b| b.to_string().contains("quicktranslate"))
+                    .unwrap_or(false)
+            {
+                return 0;
+            }
+            pid as isize
+        }
+        None => 0,
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn foreground_window() -> isize {
     0
 }

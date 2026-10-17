@@ -113,7 +113,12 @@ fn open_connection(db_path: &Path) -> Result<Connection, AppError> {
     Ok(conn)
 }
 
-/// 损坏恢复：将损坏文件重命名并重建空数据库
+/// 损坏恢复：将损坏文件连同 WAL/SHM sidecar 一起重命名，重建空数据库。
+///
+/// sidecar 必须随主文件移走：WAL 模式常开，残留的 `-wal` 在新库启用 WAL
+/// 时会被 SQLite 按自身校验链回放 —— 旧库的半写页可能被灌进刚重建的库，
+/// 且重建路径不再跑 integrity_check，污染不会被发现。salvage 以只读打开
+/// 旧库时同样会被旧 sidecar 干扰（只读连接通常无法做 WAL 恢复）。
 fn recover_database(db_path: &Path) -> Result<(), AppError> {
     let timestamp = now_unix_ms();
     let corrupt_path = db_path.with_extension(format!("db.corrupt.{}", timestamp));
@@ -122,6 +127,35 @@ fn recover_database(db_path: &Path) -> Result<(), AppError> {
         std::fs::rename(db_path, &corrupt_path)
             .map_err(|e| AppError::DatabaseError(format!("备份损坏文件失败: {}", e)))?;
         error!("数据库损坏，已备份至 {:?}，重建空数据库", corrupt_path);
+    }
+
+    // WAL/SHM 与主库同名派生（quicktranslate.db-wal / -shm）
+    let wal_path = db_path.with_extension("db-wal");
+    let shm_path = db_path.with_extension("db-shm");
+    for (sidecar, suffix) in [(&wal_path, "-wal"), (&shm_path, "-shm")] {
+        if sidecar.exists() {
+            let sidecar_corrupt =
+                db_path.with_extension(format!("db.corrupt.{}{}", timestamp, suffix));
+            match std::fs::rename(sidecar, &sidecar_corrupt) {
+                Ok(()) => info!("已随主库移走损坏 sidecar: {:?}", sidecar_corrupt),
+                Err(e) => {
+                    // 移不走（被占用等）则删除：残留比丢失更危险（见上）
+                    if let Err(e2) = std::fs::remove_file(sidecar) {
+                        warn!(
+                            event = "database_sidecar_cleanup_failed",
+                            reason = %e2,
+                            "sidecar 重命名失败且删除也失败: {}",
+                            e
+                        );
+                    } else {
+                        warn!(
+                            event = "database_sidecar_removed",
+                            "sidecar 重命名失败，已删除: {}", e
+                        );
+                    }
+                }
+            }
+        }
     }
 
     Ok(())

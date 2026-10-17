@@ -59,7 +59,11 @@ pub async fn translate_text(
     // 落盘走有界队列 + 单 worker（计划第 24/41 节），与剪贴板路径同一条管道。
     // 此前这里是「每请求 spawn 一个游离历史写任务」—— 计划第 41 节明确禁止的
     // 唯一残留形态。入队失败只丢一次历史/缓存写入，不影响返回给前端的结果。
-    let record = TranslationRecord::from_result(&result, &text, &target);
+    //
+    // 历史记录存截断后的原文：与实际翻译内容一致（超长输入是先截断再送翻译
+    // 的），HISTORY_LIMIT_MAX 对入库字节数也因此真正有效 —— 存截断前全文
+    // 的话，一次粘贴几 MB 文本就绕过了保留上限。与缓存条目同源。
+    let record = TranslationRecord::from_result(&result, &text_to_translate, &target);
     let job = crate::system::persistence::PersistJob {
         history_limit: state
             .config
@@ -107,6 +111,30 @@ pub async fn validate_provider(
         .await
 }
 
+/// 枚举调试名 → 前端契约的 snake_case。
+///
+/// `ProviderStatus.health_state` / `last_error_class` 的前端契约是小写
+/// snake_case（`"half_open"`、`"rate_limit"`，见 types.rs 与 commands.ts
+/// 注释）。此前 `format!("{:?}", ...)` 直接下发 PascalCase（"HalfOpen"），
+/// 设置页的状态词表 switch 全部落进 default，健康状态从未显示过；
+/// `RateLimit` 小写后是 "ratelimit"，也命不中前端的 "rate_limit" 分支。
+/// 与 `RuntimeHealth`/`ComponentState` 的 `#[serde(rename_all =
+/// "snake_case")]` 保持同一命名约定。
+fn to_snake_case(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() + 4);
+    for (i, ch) in name.chars().enumerate() {
+        if ch.is_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.extend(ch.to_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 /// 获取所有翻译源的运行时健康状态（用于托盘菜单与诊断）
 #[tauri::command]
 pub async fn get_provider_status(
@@ -119,13 +147,13 @@ pub async fn get_provider_status(
             .translator
             .provider_health(&info.id)
             .await
-            .map(|s| format!("{:?}", s))
+            .map(|s| to_snake_case(&format!("{:?}", s)))
             .unwrap_or_else(|| "unknown".to_string());
         let last_error_class = state
             .translator
             .provider_last_error_class(&info.id)
             .await
-            .map(|c| format!("{:?}", c).to_lowercase());
+            .map(|c| to_snake_case(&format!("{:?}", c)));
         result.push(ProviderStatus {
             id: info.id,
             name: info.name,
@@ -136,4 +164,53 @@ pub async fn get_provider_status(
         });
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::to_snake_case;
+
+    /// 前端契约（SettingsWindow::providerStateLabel 的 switch 值）：
+    /// 这组值一旦漂移，设置页的健康状态词表会整体静默消失。
+    #[test]
+    fn snake_case_matches_frontend_contract() {
+        use crate::domain::translator::error_class::ErrorClass;
+        use crate::domain::translator::health::ProviderHealthState;
+
+        assert_eq!(
+            to_snake_case(&format!("{:?}", ProviderHealthState::Healthy)),
+            "healthy"
+        );
+        assert_eq!(
+            to_snake_case(&format!("{:?}", ProviderHealthState::Degraded)),
+            "degraded"
+        );
+        assert_eq!(
+            to_snake_case(&format!("{:?}", ProviderHealthState::Open)),
+            "open"
+        );
+        assert_eq!(
+            to_snake_case(&format!("{:?}", ProviderHealthState::HalfOpen)),
+            "half_open"
+        );
+
+        assert_eq!(
+            to_snake_case(&format!("{:?}", ErrorClass::Transient)),
+            "transient"
+        );
+        assert_eq!(
+            to_snake_case(&format!("{:?}", ErrorClass::RateLimit)),
+            "rate_limit"
+        );
+        assert_eq!(to_snake_case(&format!("{:?}", ErrorClass::Auth)), "auth");
+        assert_eq!(to_snake_case(&format!("{:?}", ErrorClass::Quota)), "quota");
+        assert_eq!(
+            to_snake_case(&format!("{:?}", ErrorClass::Permanent)),
+            "permanent"
+        );
+        assert_eq!(
+            to_snake_case(&format!("{:?}", ErrorClass::SameLanguage)),
+            "same_language"
+        );
+    }
 }

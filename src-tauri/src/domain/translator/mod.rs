@@ -13,7 +13,7 @@ pub mod youdao;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
 use crate::error::AppError;
@@ -189,6 +189,21 @@ async fn try_provider(
                 "[provider] 总预算已耗尽，停止 fallback 链"
             );
             errors.push((provider_id, "总预算已耗尽".to_string()));
+            return AttemptOutcome::BudgetExhausted;
+        }
+        // 残余预算过小时同样不再发起尝试：attempt_timeout 取剩余预算，
+        // 只剩几毫秒的"尝试"必然超时，而这次超时会按 Transient 记入熔断
+        // —— provider 根本没被真正接触就进了冷却，链尾健康源会被
+        // 三个必败请求白白熔断十分钟。500ms 是一次 TLS 握手都完不成的
+        // 下限，低于它失败是确定的，等待是纯浪费。
+        else if budget.remaining() < Duration::from_millis(500) {
+            tracing::debug!(
+                event = "translation_budget_below_floor",
+                provider = %provider_id,
+                remaining_ms = budget.remaining().as_millis() as u64,
+                "[provider] 剩余预算不足 500ms，放弃注定失败的尝试"
+            );
+            errors.push((provider_id, "总预算即将耗尽".to_string()));
             return AttemptOutcome::BudgetExhausted;
         }
 

@@ -10,6 +10,8 @@ import {
 } from "@/lib/commands";
 import { toast } from "@/components/ToastManager";
 import { useHistoryStore } from "@/stores/historyStore";
+import { formatAsMarkdown, formatAsHtml } from "@/lib/export";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SearchBar } from "./SearchBar";
 import { HistoryList } from "./HistoryList";
 
@@ -134,7 +136,6 @@ export function HistoryWindow() {
         mimeType = "text/html";
         ext = "html";
       }
-
       const blob = new Blob([content], { type: mimeType });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -315,113 +316,16 @@ export function HistoryWindow() {
 
       {/* ── 清空确认浮层 ── */}
       {confirmClear && (
-        <ConfirmDialog onConfirm={handleClearConfirm} onCancel={handleClearCancel} />
+        <ConfirmDialog
+          title="清空所有历史？"
+          description="此操作不可恢复"
+          confirmLabel="确认清空"
+          onConfirm={handleClearConfirm}
+          onCancel={handleClearCancel}
+        />
       )}
     </div>
   );
-}
-
-// ──────────── 导出格式化函数 ────────────
-
-type ExportRecord = {
-  id: string;
-  source_text: string;
-  translated_text: string;
-  source_lang: string;
-  target_lang: string;
-  provider: string;
-  created_at: number;
-  duration_ms: number | null;
-  is_starred: boolean;
-};
-
-function formatAsMarkdown(records: ExportRecord[]): string {
-  const date = new Date().toLocaleString("zh-CN");
-  const lines: string[] = [
-    `# QuickTranslate 翻译历史`,
-    ``,
-    `> 导出时间：${date}　共 ${records.length} 条记录`,
-    ``,
-    `---`,
-    ``,
-  ];
-  for (const r of records) {
-    const ts = new Date(r.created_at).toLocaleString("zh-CN");
-    const star = r.is_starred ? " ⭐" : "";
-    lines.push(`## ${r.source_lang} → ${r.target_lang}　\`${r.provider}\`${star}`);
-    lines.push(``);
-    lines.push(`**原文**`);
-    lines.push(``);
-    lines.push(r.source_text);
-    lines.push(``);
-    lines.push(`**译文**`);
-    lines.push(``);
-    lines.push(r.translated_text);
-    lines.push(``);
-    lines.push(`_${ts}${r.duration_ms != null ? `　耗时 ${r.duration_ms} ms` : ""}_`);
-    lines.push(``);
-    lines.push(`---`);
-    lines.push(``);
-  }
-  return lines.join("\n");
-}
-
-function formatAsHtml(records: ExportRecord[]): string {
-  const esc = (s: string) =>
-    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const date = new Date().toLocaleString("zh-CN");
-  const rows = records
-    .map((r) => {
-      const ts = new Date(r.created_at).toLocaleString("zh-CN");
-      return `
-    <tr>
-      <td>${esc(r.source_text)}</td>
-      <td>${esc(r.translated_text)}</td>
-      <td>${esc(r.source_lang)} → ${esc(r.target_lang)}</td>
-      <td>${esc(r.provider)}</td>
-      <td>${r.is_starred ? "⭐" : ""}</td>
-      <td>${esc(ts)}</td>
-      <td>${r.duration_ms} ms</td>
-    </tr>`;
-    })
-    .join("\n");
-
-  return `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<title>QuickTranslate 翻译历史</title>
-<style>
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 24px; color: #1a1a1a; }
-  h1 { font-size: 20px; margin-bottom: 4px; }
-  p.meta { color: #888; font-size: 13px; margin-bottom: 20px; }
-  table { border-collapse: collapse; width: 100%; font-size: 13px; }
-  th { background: #f5f5f5; padding: 8px 12px; text-align: left; border-bottom: 2px solid #ddd; }
-  td { padding: 8px 12px; border-bottom: 1px solid #eee; vertical-align: top; white-space: pre-wrap; max-width: 320px; }
-  tr:hover td { background: #fafafa; }
-</style>
-</head>
-<body>
-<h1>QuickTranslate 翻译历史</h1>
-<p class="meta">导出时间：${esc(date)}　共 ${records.length} 条记录</p>
-<table>
-  <thead>
-    <tr>
-      <th>原文</th>
-      <th>译文</th>
-      <th>语言</th>
-      <th>引擎</th>
-      <th>收藏</th>
-      <th>时间</th>
-      <th>耗时</th>
-    </tr>
-  </thead>
-  <tbody>
-${rows}
-  </tbody>
-</table>
-</body>
-</html>`;
 }
 
 // ──────────── 子组件 ────────────
@@ -485,48 +389,3 @@ function EmptyState({
   );
 }
 
-function ConfirmDialog({
-  onConfirm,
-  onCancel,
-}: {
-  onConfirm: () => void;
-  onCancel: () => void;
-}) {
-  return (
-    <div
-      className="absolute inset-0 z-50 flex items-center justify-center bg-black/20 dark:bg-black/40 backdrop-blur-sm"
-      onClick={onCancel}
-    >
-      <div
-        className="mx-6 p-5 rounded-2xl shadow-macos-lg w-full max-w-xs animate-scale-in bg-[var(--surface-primary)] dark:bg-[var(--surface-secondary)] border border-[var(--border-secondary)]"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full bg-red-50 dark:bg-red-950/30 flex items-center justify-center shrink-0">
-            <svg className="w-5 h-5 text-red-500" viewBox="0 0 20 20" fill="none">
-              <path d="M9 11V7m0 6v.5M5.07 16h9.86A2 2 0 0016.8 13L11.9 4a2 2 0 00-3.8 0L3.2 13a2 2 0 001.87 3z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-            </svg>
-          </div>
-          <div>
-            <p className="text-[13px] font-semibold text-[var(--text-primary)]">清空所有历史？</p>
-            <p className="text-[12px] text-[var(--text-secondary)] mt-0.5">此操作不可恢复</p>
-          </div>
-        </div>
-        <div className="flex gap-2 justify-end mt-4">
-          <button
-            onClick={onCancel}
-            className="px-4 py-1.5 rounded-lg text-[12.5px] font-medium border border-[var(--border-primary)] text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] transition-colors"
-          >
-            取消
-          </button>
-          <button
-            onClick={onConfirm}
-            className="px-4 py-1.5 rounded-lg text-[12.5px] font-medium bg-[var(--system-red)] hover:bg-[#E62E24] text-white transition-all active:scale-95 shadow-sm"
-          >
-            确认清空
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}

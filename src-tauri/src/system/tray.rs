@@ -60,14 +60,22 @@ pub fn init(app: &AppHandle) -> Result<(), AppError> {
         .on_menu_event(|app, event| {
             handle_menu_event(app, event.id.as_ref());
         })
-        .on_tray_icon_event(|_tray, event| {
+        .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
                 ..
             } = event
             {
-                // 左键单击托盘图标：目前无操作，通过右键菜单操作
+                // 左键单击托盘图标：打开翻译历史。Windows 用户对托盘图标
+                // 的肌肉记忆是左键就有反应 —— 此前这里完全无操作，应用
+                // 的全部功能都要先右键才能看到
+                if let Some(app) = tray.app_handle().get_webview_window("history") {
+                    let _ = app.show();
+                    let _ = app.set_focus();
+                } else {
+                    open_history_window(tray.app_handle());
+                }
             }
         });
     if let Some(icon) = app.default_window_icon() {
@@ -162,7 +170,9 @@ fn build_menu(
         .map(|i| i as &dyn tauri::menu::IsMenuItem<tauri::Wry>)
         .collect();
 
-    let provider_submenu = Submenu::with_items(app, "翻译服务", true, &provider_items_ref)
+    // 与设置页「翻译源」Tab 同名：同一概念此前在托盘叫「翻译服务」、
+    // 设置行叫「默认翻译源」，三种叫法徒增查找成本
+    let provider_submenu = Submenu::with_items(app, "翻译源", true, &provider_items_ref)
         .map_err(|e| AppError::WindowError(e.to_string()))?;
 
     // ---- 目标语言子菜单 ----
@@ -329,6 +339,11 @@ fn status_details(status: &RuntimeStatusSnapshot) -> Vec<String> {
 fn handle_menu_event(app: &AppHandle, event_id: &str) {
     tracing::debug!("托盘菜单事件: {}", event_id);
 
+    // setup 阶段注册完毕后同步读取 provider 可用性（与 build_menu 同源）
+    fn state_ready_providers(app: &AppHandle) -> Vec<ProviderInfo> {
+        app.state::<AppState>().translator.list_providers_sync()
+    }
+
     match event_id {
         "settings" => open_settings_window(app),
         "provider_config" => open_provider_settings(app),
@@ -343,6 +358,22 @@ fn handle_menu_event(app: &AppHandle, event_id: &str) {
         }
         id if id.starts_with("provider:") => {
             let provider_id = id["provider:".len()..].to_string();
+            // ⚠ 未配置的翻译源不切换：切换成功只会让托盘打上 ✓，随后每次
+            // 翻译都静默降级或报认证错误。改为直达它的密钥配置页 —— 用户
+            // 点 ⚠ 项的真实意图几乎总是「我想配它」。
+            let needs_key_but_unconfigured = state_ready_providers(app)
+                .into_iter()
+                .find(|p| p.id == provider_id)
+                .map(|p| p.requires_api_key && !p.is_available)
+                .unwrap_or(false);
+            if needs_key_but_unconfigured {
+                tracing::info!(
+                    "[tray] provider '{}' 未配置凭证，转达配置页而非切换",
+                    provider_id
+                );
+                open_provider_settings(app);
+                return;
+            }
             switch_provider(app.clone(), provider_id);
         }
         id if id.starts_with("lang:") => {
@@ -353,7 +384,7 @@ fn handle_menu_event(app: &AppHandle, event_id: &str) {
     }
 }
 
-fn open_settings_window(app: &AppHandle) {
+pub fn open_settings_window(app: &AppHandle) {
     open_settings_at(app, None);
 }
 
@@ -362,7 +393,7 @@ fn open_settings_window(app: &AppHandle) {
 /// 窗口已存在时发 `settings-navigate` 事件让前端切 Tab；不存在时通过
 /// URL hash（`#settings/provider`）携带初始 Tab —— 新建窗口的 webview
 /// 是异步加载的，事件会跑在订阅之前，hash 是唯一可靠的传递方式。
-fn open_provider_settings(app: &AppHandle) {
+pub fn open_provider_settings(app: &AppHandle) {
     use tauri::Emitter;
     if let Some(window) = app.get_webview_window("settings") {
         let _ = window.show();

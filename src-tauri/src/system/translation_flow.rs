@@ -35,20 +35,31 @@ pub fn ensure_popup_window(app: &AppHandle) {
     // 不存在，创建新的
     tracing::info!("[ensure_popup] popup 不存在，创建新窗口");
     let fallback_pos = compute_popup_position_dpi(app, 400.0, 400.0);
-    let _ = WebviewWindowBuilder::new(app, POPUP_LABEL, WebviewUrl::App("index.html#popup".into()))
-        .title("QuickTranslate")
-        .additional_browser_args(crate::system::BROWSER_ARGS)
-        .decorations(false)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        // 非激活窗口（Windows 上即 WS_EX_NOACTIVATE）：显示时不抢焦点，
-        // 不把用户从正在编辑的地方带走（Phase 8b / 计划第 19 节）
-        .focusable(false)
-        .visible(true)
-        .resizable(false)
-        .inner_size(POPUP_LOGICAL_W, POPUP_LOGICAL_H)
-        .position(fallback_pos.x, fallback_pos.y)
-        .build();
+    // 创建失败必须留痕：这条路径跑在 onboarding 关闭之后，浮窗缺失的
+    // 现场极难重现，静默吞掉 Result 会让排查无从下手（孪生路径
+    // show_popup_loading 是有 error! 的，此处此前独缺）
+    if let Err(e) =
+        WebviewWindowBuilder::new(app, POPUP_LABEL, WebviewUrl::App("index.html#popup".into()))
+            .title("QuickTranslate")
+            .additional_browser_args(crate::system::BROWSER_ARGS)
+            .decorations(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            // 非激活窗口（Windows 上即 WS_EX_NOACTIVATE）：显示时不抢焦点，
+            // 不把用户从正在编辑的地方带走（Phase 8b / 计划第 19 节）
+            .focusable(false)
+            .visible(true)
+            .resizable(false)
+            .inner_size(POPUP_LOGICAL_W, POPUP_LOGICAL_H)
+            .position(fallback_pos.x, fallback_pos.y)
+            .build()
+    {
+        tracing::error!("[ensure_popup] 创建浮窗失败: {}", e);
+        app.state::<crate::state::AppState>().runtime.report_popup(
+            crate::runtime::ComponentState::Degraded,
+            Some("POPUP_CREATE_FAILED"),
+        );
+    }
 }
 
 /// 创建或复用浮窗，发送 loading 事件。
@@ -233,11 +244,13 @@ fn desktop_for(app: &AppHandle, cursor: (f64, f64)) -> (f64, (f64, f64), popup_g
 ///
 /// 前端量高 → resize_popup → 窗口变高，此时**必须重新定位**：
 ///
-///     Loading（160px，位置合适）
-///       ↓
-///     Result（480px，位置没动）
-///       ↓
-///     下半截跑到屏幕外
+/// ```text
+/// Loading（160px，位置合适）
+///   ↓
+/// Result（480px，位置没动）
+///   ↓
+/// 下半截跑到屏幕外
+/// ```
 ///
 /// 返回 false 表示没有可用锚点（浮窗还没因翻译显示过），此时不动作。
 pub(crate) fn reposition_popup(app: &AppHandle, width: f64, height: f64) -> bool {

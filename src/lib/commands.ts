@@ -79,7 +79,7 @@ export interface ProviderStatus {
   name: string;
   requires_api_key: boolean;
   is_available: boolean;
-  /** "healthy" | "degraded" | "open" | "half_open" | "unknown" */
+  /** "healthy" | "degraded" | "open" | "half_open" | "unknown"（snake_case，后端 to_snake_case 下发） */
   health_state: string;
   /** 最近一次错误类别："transient" | "rate_limit" | "auth" | "quota" | "permanent" | "same_language" | null */
   last_error_class: string | null;
@@ -112,7 +112,7 @@ export async function getRuntimeDiagnostics(): Promise<RuntimeDiagnostics> {
 }
 
 export interface RuntimeStatusSnapshot {
-  overall: string; // "Healthy" | "Degraded" | "Recovering"
+  overall: string; // "healthy" | "degraded" | "recovering"（Rust RuntimeHealth 带 serde rename_all = "snake_case"）
   uptime_ms: number;
   clipboard: RuntimeComponentHealth;
   network: RuntimeComponentHealth;
@@ -238,16 +238,15 @@ export async function openUrl(url: string): Promise<void> {
   return invoke("open_url", { url });
 }
 
+/** 打开设置窗口（tab: "provider" 直达翻译源配置页） */
+export async function openSettingsWindow(tab?: "provider" | "general"): Promise<void> {
+  return invoke("open_settings_window", { tab: tab ?? null });
+}
+
 // ---- 剪贴板监控开关 ----
 
 export async function setClipboardMonitorEnabled(enabled: boolean): Promise<void> {
   return invoke("set_clipboard_monitor_enabled", { enabled });
-}
-
-// ---- 更新检查 ----
-
-export async function checkUpdate(): Promise<void> {
-  return invoke("check_update");
 }
 
 // ---- 引导向导 ----

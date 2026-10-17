@@ -38,8 +38,13 @@ export function isKeyConsumingTarget(target: EventTarget | null): boolean {
 /**
  * 该元素是否应阻止整窗拖拽。
  *
- * 比 isKeyConsumingTarget 多一条 `[data-no-drag]` 祖先判定 —— 用于标记
- * 那些本身不是控件、但内部承载控件的容器（如红绿灯分组）。
+ * 比 isKeyConsumingTarget 多两条祖先判定：
+ *   - `[data-no-drag]` —— 标记那些本身不是控件、但内部承载控件的容器
+ *     （如红绿灯分组）；
+ *   - `.selectable` —— 承载用户可选文本的区域（浮窗译文、历史展开正文）。
+ *     拖拽判定若不避开它们，mousedown 上的 preventDefault 会取消文本
+ *     选区的建立（DOM 规范：mousedown 的默认行为之一是开始选择），
+ *     用户划选译文会变成拖动整窗。
  */
 export function isDragBlockingTarget(target: EventTarget | null): boolean {
   if (isKeyConsumingTarget(target)) return true;
@@ -48,5 +53,8 @@ export function isDragBlockingTarget(target: EventTarget | null): boolean {
   // data-no-drag 祖先。此前漏掉这条路径会让字形点击触发 startDragging()，
   // 窗口进入 OS 拖拽、click 被吞，按钮看似失效（C5 回归）。
   const el = target instanceof Element ? target : null;
-  return el !== null && el.closest("[data-no-drag]") !== null;
+  return (
+    el !== null &&
+    (el.closest("[data-no-drag]") !== null || el.closest(".selectable") !== null)
+  );
 }

@@ -3,6 +3,7 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import { copyToClipboard } from "@/lib/commands";
+import { toast } from "@/components/ToastManager";
 
 interface CopyButtonProps {
   text: string;
@@ -28,7 +29,9 @@ export function CopyButton({ text, className = "", label = "复制" }: CopyButto
       if (copiedTimer.current) clearTimeout(copiedTimer.current);
       copiedTimer.current = setTimeout(() => setCopied(false), 1200);
     } catch (err) {
+      // 复制是浮窗的主操作，静默失败看起来像按钮坏了 —— 走全局 toast
       console.error("复制失败:", err);
+      toast("复制失败，请重试", "error");
     }
   }, [text]);
 

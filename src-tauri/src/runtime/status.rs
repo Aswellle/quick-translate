@@ -186,6 +186,11 @@ impl RuntimeStatus {
     }
 
     /// 本地诊断快照（计划第 33 节）：debug / support 用，不参与状态广播。
+    ///
+    /// fallback_count 不在本层维护（真实计数在 TranslationEngine 的原子量里，
+    /// runtime 依赖 domain 会成环）—— 它由 commands 层在组装响应时覆写
+    /// （get_runtime_diagnostics）。本函数给出的 0 是占位而非错误值，
+    /// 任何新增调用方都必须走 commands 层的同款覆写，否则计数恒为 0。
     pub fn diagnostics(&self) -> crate::runtime::lifecycle::RuntimeDiagnostics {
         use std::sync::atomic::Ordering;
         crate::runtime::lifecycle::RuntimeDiagnostics {

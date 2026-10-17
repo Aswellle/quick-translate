@@ -129,7 +129,10 @@ impl MonitorController {
     /// 换行（LF↔CRLF），原文哈希会永远匹配不上导致吸收失效；两侧统一
     /// 归一化后比较即可免疫。
     pub fn mark_app_write(&self, text: &str) {
-        let mut slot = self.expected_write.lock().unwrap();
+        let mut slot = self
+            .expected_write
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         *slot = Some(ExpectedWrite {
             text_hash: hash_text(&super::normalize_text(text)),
             at: Instant::now(),
@@ -139,7 +142,10 @@ impl MonitorController {
 
     /// 撤销登记：写剪贴板失败时调用，避免残留期望（F5）。
     pub fn unmark_app_write(&self) {
-        *self.expected_write.lock().unwrap() = None;
+        *self
+            .expected_write
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
         tracing::info!("[MonitorController] unmark_app_write() 已撤销（写入失败）");
     }
 
@@ -148,7 +154,10 @@ impl MonitorController {
     /// 不匹配 → 保留登记（写入可能尚未落地），但超过 EXPECT_TTL 则丢弃
     /// （写入已被用户复制覆盖，期望永远无法匹配）。
     pub(crate) fn consume_if_expected(&self, current_normalized: &str) -> bool {
-        let mut slot = self.expected_write.lock().unwrap();
+        let mut slot = self
+            .expected_write
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         match *slot {
             Some(exp) if exp.text_hash == hash_text(current_normalized) => {
                 *slot = None;
