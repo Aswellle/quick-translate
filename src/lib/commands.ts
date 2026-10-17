@@ -232,6 +232,13 @@ export async function getAutostart(): Promise<boolean> {
   return invoke("get_autostart");
 }
 
+// ---- 应用信息 ----
+
+/** 当前应用版本号（tauri.conf.json 的 version） */
+export async function getAppVersion(): Promise<string> {
+  return invoke("get_app_version");
+}
+
 // ---- 系统浏览器打开链接 ----
 
 export async function openUrl(url: string): Promise<void> {

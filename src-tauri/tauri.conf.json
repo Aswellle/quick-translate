@@ -18,7 +18,12 @@
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": true,
-    "targets": ["msi", "nsis", "app", "dmg"],
+    "targets": [
+      "msi",
+      "nsis",
+      "app",
+      "dmg"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -31,7 +36,8 @@
         "type": "embedBootstrapper"
       },
       "nsis": {
-        "installerHooks": "./windows/installer-hooks.nsh"
+        "installerHooks": "./windows/installer-hooks.nsh",
+        "installMode": "both"
       }
     },
     "resources": {}
