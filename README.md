@@ -308,20 +308,4 @@ git push origin v0.7.0
 
 ## 许可证
 
-本项目基于 **[MIT 许可证](LICENSE)** 开源——可自由使用、修改、分发，包括商业用途。
-
-> 版权持有者保留在未来版本中按需修改或补充许可条款的权利：每一版本软件适用其发布时所附带的许可条款，已获得的版本继续按其附带条款使用。
-
----
-
-<div align="center">
-
-### ⭐ 如果它帮你省下了那些来回切换
-
-点个 Star，让更多被同样问题困扰的人找到它。
-
-**[⬇ 下载最新版](https://github.com/Aswellle/quick-translate/releases/latest)** · [🐛 报告问题](https://github.com/Aswellle/quick-translate/issues) · [💡 功能建议](https://github.com/Aswellle/quick-translate/issues) · [📋 更新日志](https://github.com/Aswellle/quick-translate/releases)
-
-<sub>QuickTranslate · Copyright © 2026 welle · MIT License</sub>
-
-</div>
+本项目基于 [MIT 许可证](LICENSE) 开源。

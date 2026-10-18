@@ -308,20 +308,4 @@ Result pushed to the frontend
 
 ## License
 
-Released under the **[MIT License](LICENSE)** — free to use, modify and distribute, including commercially.
-
-> The copyright holder reserves the right to modify or supplement the license terms for future releases: each release is governed by the license terms published with that release, and copies already obtained remain governed by the terms they came with.
-
----
-
-<div align="center">
-
-### ⭐ If it saved you the back-and-forth
-
-Star the repo so others with the same problem can find it.
-
-**[⬇ Download Latest](https://github.com/Aswellle/quick-translate/releases/latest)** · [🐛 Report a Bug](https://github.com/Aswellle/quick-translate/issues) · [💡 Request a Feature](https://github.com/Aswellle/quick-translate/issues) · [📋 Changelog](https://github.com/Aswellle/quick-translate/releases)
-
-<sub>QuickTranslate · Copyright © 2026 welle · MIT License</sub>
-
-</div>
+Released under the [MIT License](LICENSE).
