@@ -1,14 +1,14 @@
 <div align="center">
 
-<img src="assets/banner.jpg" alt="QuickTranslate" width="720">
+<img src="assets/banner.jpg" alt="QuickTranslate" width="100%">
 
 # QuickTranslate
 
-### Copy, and it's translated.
+**Copy. That's the translation. Any app, any language.**
 
-**See unfamiliar text, `Ctrl+C`. A translation popup appears next to your cursor.**
+Select text anywhere on screen, press `Ctrl+C` (or `⌘C` on macOS), and a translation popup opens beside your cursor.
 
-No window switching, no browser, no paste box. Your hands never leave the keyboard.
+No window switching, no browser, no paste box — your hands never leave the keyboard.
 
 [中文](README.md) · [English](README.en.md)
 
@@ -23,91 +23,135 @@ No window switching, no browser, no paste box. Your hands never leave the keyboa
 ![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6?logo=typescript&logoColor=white)
 
+**[⬇ Download Latest](https://github.com/Aswellle/quick-translate/releases/latest)** · [🐛 Report a Bug](https://github.com/Aswellle/quick-translate/issues) · [💡 Request a Feature](https://github.com/Aswellle/quick-translate/issues) · [📋 Changelog](https://github.com/Aswellle/quick-translate/releases)
+
+<sub>Windows 10/11 · macOS 13+ (Apple Silicon) · ~5 MB installer · under 50 MB idle RAM</sub>
+
 </div>
 
 ---
 
-## Table of Contents
+## The Problem It Solves
 
-- [Introduction](#introduction)
-- [Features](#features)
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [Controls & Shortcuts](#controls--shortcuts)
-- [Translation Provider Configuration](#translation-provider-configuration)
-- [Reliability & Stability](#reliability--stability)
-- [Building from Source](#building-from-source)
-- [Technical Architecture](#technical-architecture)
-- [FAQ](#faq)
-- [License](#license)
+Translation itself takes two seconds. The switching is what costs you.
 
----
+> Select text → switch to browser → open translator → paste → wait → read → switch back → find the line you were on.
 
-## Introduction
+A dozen times per document. What gets consumed isn't just those ten seconds — it's the **reading continuity** that every context switch breaks.
 
-QuickTranslate is a **copy-to-translate** utility for Windows and macOS. It lives in your system tray, monitoring your clipboard — whenever you copy text, a translation popup appears near your cursor.
+QuickTranslate compresses that chain into a single action: **copy**. The translation appears beside your cursor, you press `Space`, and you never left the window you were in.
 
-> It removes those ten-second cycles of "switch to browser → open translator → paste → wait → switch back → find where you were." Dozens of times per document. What's really consumed isn't time — it's the focus you just built up.
+It isn't built for "learning English". It's built for **any moment you need to read across a language boundary**:
 
-It is designed to the standard of always-on software: network outages, provider failures and clipboard contention never take it down; recoverable faults heal themselves in the background — no restarts, no re-configuration.
+- Reading foreign papers, docs, RFCs, release notes
+- Handling emails, Slack / Teams messages, support tickets in another language
+- Subtitles, social posts, in-game text you can select and copy
+- Terminal errors, stack traces, CI logs
+- Foreign field names and descriptions in Figma / Jira / Notion
+- Japanese, Korean, German, French, Russian, Arabic — any language you don't yet read
+- And the **reverse direction**: write in your language, translate, paste into an email or issue
 
-**Use cases**: Reading English documents and papers, handling foreign emails, browsing overseas content, terminal compiler errors, English terms in Figma/Jira... anywhere you can select and copy text.
+If it can be selected and copied on screen, QuickTranslate works on it.
 
 ---
 
-## Features
+## Why Not Just Use a Web Translator
 
-### Core Experience
+| | Web translators / browser extensions | QuickTranslate |
+|:--|:--|:--|
+| **Scope** | Inside the browser only | **Any application**: editors, terminals, PDF readers, chat, design tools |
+| **Trigger** | Open a page / select / right-click | **Copy** — a habit you already have, zero learning curve |
+| **Interruption** | Window or tab switching | **No switching**; the popup never steals focus |
+| **On failure** | Blank page or an error | **Automatic failover** to the next provider; local cache when offline |
+| **Privacy** | Text passes through a third-party site | Sent only to **providers you configure yourself**; keys encrypted locally |
 
-| Feature | Description |
-|:--|:--|
-| **Copy to Translate** | Clipboard monitoring triggers translation — no hotkeys, no window switching |
-| **Smart Popup Positioning** | DPI-aware, multi-monitor support; positions by real window size and monitor work area; auto-flips to stay on screen |
-| **Non-activating Popup** | Doesn't steal foreground focus; closes automatically when you switch to another app |
-| **Five Translation Providers** | DeepL / Tencent / Baidu / Youdao / Google — configure multiple for automatic failover |
-| **Multi-language** | 11 languages supported; auto-detect source, selectable target (default: Simplified Chinese) |
+In one line: web translators serve "I'm browsing a web page." QuickTranslate serves "I'm doing something else and just need the meaning right now."
 
-### Provider Comparison
+---
 
-| Provider | Requires Setup | Free Quota | Highlights |
+## Up and Running in 30 Seconds
+
+**1. Install and launch** (~30 seconds on first run)
+
+The installer is about 5 MB. The first launch opens an onboarding wizard — pick your target language. You can skip provider setup entirely: the built-in Google provider needs no configuration.
+
+**2. Copy text in any application**
+
+`Ctrl+C` on Windows, `⌘C` on macOS.
+
+**3. Read it, dismiss it**
+
+The popup appears next to your cursor. Press `Space` or `Esc` and get back to what you were doing.
+
+After that it lives quietly in the system tray. Right-click the tray icon to open settings, browse history, or temporarily pause clipboard monitoring.
+
+> The popup is **non-activating**: it never takes the focus you're typing into, and it closes when you switch to another app. Once you drag it, it remembers where you put it.
+
+---
+
+## What It Does
+
+### Copy-to-Translate
+
+- **No hotkeys** — it reuses the copy action you already perform, so there's nothing new to memorize
+- **Non-activating popup** — no focus stealing, auto-closes on app switch, never interrupts typing
+- **Smart positioning** — DPI-aware and multi-monitor aware, computed from the real window size and monitor work area; avoids the cursor and flips to stay on screen
+- **Position memory** — drag it once and it reopens where you left it; only a fresh copy returns it to the cursor
+- **Liquid glass material** — Acrylic on Windows, NSVisualEffectView on macOS, so the popup blurs the real desktop behind it instead of painting a flat panel
+
+### 12 Languages, Both Directions
+
+简体中文 · 繁體中文 · English · 日本語 · 한국어 · Français · Deutsch · Español · Русский · Português · Italiano · العربية
+
+Source language is detected automatically; the target language is selected in Settings (Simplified Chinese by default). If the copied text is already in the target language it passes straight through — no pointless round trip.
+
+### Five Providers, Automatic Failover
+
+| Provider | Setup | Free quota | Best for |
 |:--|:--|:--|:--|
-| **Google Translate** | ❌ None | Unlimited | Works out of the box as fallback |
-| **DeepL** | API Key | 500K chars/month | Best-in-class for European languages |
-| **Tencent TMT** | SecretId + SecretKey | 5M chars/month | Excellent Chinese-English |
-| **Baidu Translate** | APP ID + Secret Key | 1M chars/month | Strong with CJK languages |
-| **Youdao** | App ID + App Secret | Trial credit for new users | Broad language support |
+| **Google Translate** | None | Unlimited (unofficial endpoint) | Works out of the box as the fallback |
+| **DeepL** | API key | 500K chars/month | Best-in-class European languages |
+| **Tencent TMT** | SecretId + SecretKey | 5M chars/month | Excellent Chinese ↔ English |
+| **Baidu Translate** | APP ID + secret key | 1M chars/month | Strong CJK coverage |
+| **Youdao** | App ID + app secret | Trial credit for new users | Broad language support |
 
-### Reliability
+Failover order: **DeepL → Tencent → Baidu → Youdao → Google**. Configure one, or all of them.
 
-| Feature | Description |
+- When the primary provider fails or is rate-limited, traffic moves to the next one automatically — and moves back once it recovers
+- Each provider card in Settings shows live health: healthy / recovering / rate-limited / auth failed / quota exhausted
+- The **Verify** button validates credentials instantly, **without consuming quota**
+
+### History and Privacy
+
+- **Local history** — SQLite storage with search, starring, deletion, and export
+- **Built for scanning** — search hits are centered in the truncated text; timestamps read "just now / 12 minutes ago / yesterday"; records are grouped by Today / Yesterday / This Week
+- **Encrypted at rest** — API keys are encrypted with AES-256-GCM and bound to the current machine
+- **FIFO cleanup** — when the limit is exceeded, the oldest **unstarred** records go first; starred records are never auto-deleted
+- **No silent uploads** — only the text you copy goes to the providers you configured. Everything else stays on your machine
+
+### Lightweight by Design
+
+- ~5 MB installer, under 50 MB idle RAM, effectively 0% idle CPU
+- Dark / light / follow-system themes
+- Launch at login, tray residency, silent auto-update
+- 5000-character limit per translation, truncated with a clear notice beyond that
+
+---
+
+## Why It Doesn't Break
+
+QuickTranslate is built to the standard of **long-running resident software**: failures in external services, the network, and local data are isolated to their own scope, and recoverable faults heal in the background.
+
+| What happens | What you see |
 |:--|:--|
-| **Automatic Provider Failover** | When the primary provider fails or gets rate-limited, traffic switches to the next one automatically — and switches back once it recovers. Zero manual intervention |
-| **Live Health Panel** | Settings and tray show each provider's current state (healthy / recovering / rate-limited / auth failed / quota exhausted) |
-| **Offline Cache Fallback** | While offline, previously translated content still displays (labeled as from local cache); translation resumes automatically when the network returns |
-| **Graceful Degradation** | Local data trouble never takes translation down — history degrades temporarily and the app keeps running, no crash, no exit |
-| **Credential Protection** | Saved API keys are automatically salvaged if the database is corrupted — no need to re-enter provider credentials after a repair |
-| **Latest-Wins Results** | Copy several passages in quick succession — only the last one is ever shown; a late stale result can never overwrite it |
-| **Clipboard Self-healing** | Clipboard contention or handle errors trigger automatic backoff recovery — without re-popping old content as if it were a fresh copy |
+| Provider outage or rate limiting | Automatic switch to the next available provider; translations keep coming, and the failed one rejoins when it recovers |
+| Network offline | Popup, settings and history keep working; previously translated content is served from local cache and labeled as such; the next copy after reconnecting just works |
+| Clipboard held by another app | Monitoring backs off and retries; once recovered it won't mistake stale content for a fresh copy and re-pop |
+| Local database corruption | Translation keeps running unaffected; history degrades temporarily with an honest status; saved API keys are salvaged automatically, no reconfiguration needed |
+| Rapid consecutive copies | Only the last copy is ever shown — a late stale result can never overwrite fresh content |
+| Long-running sessions | Stable memory and resource footprint; bounded write queues that don't grow with uptime |
 
-### Data & Security
-
-| Feature | Description |
-|:--|:--|
-| **Local History** | SQLite storage with search, starring (permanently preserved), deletion, and export |
-| **Encrypted Storage** | API keys encrypted with AES-256-GCM before disk write; key bound to current machine |
-| **FIFO Auto-cleanup** | When limit exceeded, oldest un-starred records deleted first; starred records are never auto-deleted |
-
-### Miscellaneous
-
-| Feature | Description |
-|:--|:--|
-| **Themes** | Dark / Light / Follow system |
-| **Silent Updates** | Auto-checks on startup; downloads and installs in background; one-click upgrade on notification |
-| **Lightweight** | < 50MB idle RAM, ~0% CPU, ~5MB installer |
-| **Auto-start** | Launch on system boot |
-| **Onboarding Wizard** | First-run guide to select provider and target language; skippable to use Google fallback |
-
-Other details: PDF line-join fix, one-click copy translation/source, same-language passthrough (no redundant translation), 5000-char single-translation limit, one-click credential verification, tray menu toggle for clipboard monitoring.
+**Engineering assurance**: core fault paths are covered by 220+ unit tests; CI runs frontend builds, Rust tests and static checks (`clippy -D warnings`) on Linux / Windows / macOS; release artifacts are built and signed automatically by GitHub Actions, with the update manifest generated as part of the pipeline.
 
 ---
 
@@ -115,40 +159,26 @@ Other details: PDF line-join fix, one-click copy translation/source, same-langua
 
 ### Windows
 
-**System requirements**: Windows 10 / 11 (x64), WebView2 runtime (included with Win11; installer prompts if missing).
+**Requirements**: Windows 10 / 11 (x64) with the WebView2 runtime (usually present on Win11; the installer offers to install it if missing).
 
-Download from the [Releases page](https://github.com/Aswellle/quick-translate/releases/latest):
+Download from [Releases](https://github.com/Aswellle/quick-translate/releases/latest):
 
-- **`.msi`** — Recommended, standard installer wizard
-- **`.exe`** — NSIS portable installer
+| File | Notes |
+|:--|:--|
+| `.msi` | Recommended, standard installer wizard |
+| `-setup.exe` | NSIS installer |
 
-~5MB installer; launch from Start menu or desktop shortcut after installation.
+The installer lets you **choose the install directory** and pick "install for the current user" (no admin rights) or "for all users".
 
 ### macOS
 
-**System requirements**: macOS 13+ (Apple Silicon).
+**Requirements**: macOS 13+ (Apple Silicon).
 
-Download from the [Releases page](https://github.com/Aswellle/quick-translate/releases/latest):
+Download the `.dmg` from [Releases](https://github.com/Aswellle/quick-translate/releases/latest) and drag it into Applications.
 
-- **`.dmg`** — Disk image, drag into Applications folder.
+### In-app upgrade
 
----
-
-## Quick Start
-
-**1. First launch (30 seconds)**
-
-The onboarding wizard appears on first run: choose target language. You can skip provider setup — the built-in Google provider works out of the box.
-
-**2. Copy some text**
-
-Select and copy foreign text in any application (`Ctrl+C`).
-
-**3. Read the translation, then dismiss**
-
-The popup appears near your cursor. Press `Space` or `Esc` to close it when done.
-
-After that, QuickTranslate sits quietly in your system tray. Right-click the tray icon to open settings, browse history, or temporarily disable clipboard monitoring.
+Already on an older version? Open **Settings → About → Check for Updates**. It reports either "You're on the latest version" or "New version x.y.z found", then downloads with live progress and restarts to finish the upgrade.
 
 ---
 
@@ -156,44 +186,52 @@ After that, QuickTranslate sits quietly in your system tray. Right-click the tra
 
 | Action | Effect |
 |:--|:--|
-| `Space` / `Esc` | Close popup |
-| Click outside popup | Close popup |
-| `Enter` | Collapse / expand popup |
-| Red dot | Close |
-| Yellow dot | Collapse to title bar (keep for later) |
-| Green dot | Toggle standard / reading viewport width |
+| `Ctrl+C` / `⌘C` | Copy-to-translate (the only action you need) |
+| `Space` / `Esc` | Close the popup |
+| Click outside the popup | Close the popup |
+| `Enter` | Collapse / expand the popup |
+| Drag the popup | Move it, and remember that position |
+| 🔴 Red dot | Close |
+| 🟡 Yellow dot | Collapse to title bar (keep for later) |
+| 🟢 Green dot | Toggle standard / reading viewport width |
 
-> Popup records clipboard state on close to avoid re-triggering; only a genuine re-copy of the same text triggers a new translation.
-
----
-
-## Translation Provider Configuration
-
-Five providers supported; configure multiple for automatic failover. **Failover order**: DeepL → Tencent → Baidu → Youdao → Google (last resort).
-
-- Enter credentials in Settings → Providers; use the "Verify" button to validate instantly (no quota consumed).
-- Credentials are stored locally only, encrypted in the database.
-- Switch providers anytime; when the primary fails, traffic falls over to the next one automatically — and back once it recovers, no manual intervention needed.
-- Each provider card shows its live health status — rate-limited, auth failure, quota exhausted and other causes are visible at a glance, so you never have to guess what went wrong.
-
-Step-by-step credential setup for each provider is available in the in-app settings panel.
+> The popup records clipboard state when it closes to avoid false triggers; only a genuine re-copy of the same text translates again. Text inside the popup is freely selectable for copying, without accidentally dragging the whole window.
 
 ---
 
-## Reliability & Stability
+## Provider Configuration
 
-QuickTranslate is built to the standard of **long-running resident software**: failures of external services, the network and local data are isolated to their own scope, and recoverable faults are handled automatically in the background — users barely notice.
+Enter credentials in **Settings → Providers** and press **Verify** to validate them instantly (no quota consumed). Credentials are stored locally and encrypted in the database.
 
-| Scenario | What you experience |
-|:--|:--|
-| Provider outage / rate limiting | Automatic switch to the next available provider — translations keep coming; the failed one rejoins when it recovers |
-| Network offline | Popup, settings and history all keep working; previously translated content is served from local cache; the next copy after reconnection just works |
-| Clipboard held by another app | Monitoring backs off and retries automatically; recovered without re-popping old content as a fresh translation |
-| Local database trouble | Translation continues unaffected; history degrades temporarily with honest status; saved API keys are salvaged automatically — no re-configuration needed |
-| Rapid consecutive copies | Only the last copy is ever shown; stale translations never overwrite fresh ones |
-| Long-running sessions | Stable memory and resource footprint; bounded write queues — nothing grows unbounded with usage |
+Step-by-step instructions for registering each provider are available inside the in-app settings panel. You can switch providers at any time; when the primary is unavailable traffic fails over automatically and returns when it recovers — no manual intervention.
 
-**Engineering assurance**: all core fault paths are covered by automated tests (200+ unit tests). CI runs frontend builds, Rust tests and static checks on Linux / Windows / macOS; release artifacts are built and signed automatically by GitHub Actions.
+---
+
+## FAQ
+
+**I copied something but no popup appeared.**
+Right-click the tray icon and check whether clipboard monitoring was paused. Note that in many terminals `Ctrl+C` sends an interrupt rather than a copy — in Windows Terminal, select the text first.
+
+**Can I use a hotkey instead of auto-popup?**
+Currently copy-triggered. When you don't want interruptions, pause monitoring from the tray menu.
+
+**Does it upload my data silently?**
+Only the text you copy is sent to the translation providers you configured (that's a precondition for translating). History and API keys stay local, and keys are encrypted.
+
+**The translation is off, or a provider is down.**
+Configure several providers with failover enabled. Each card in Settings shows live status (recovering / rate-limited / auth failed / quota exhausted), so the cause is visible. When offline, previously translated content is served from local cache.
+
+**What if local data gets corrupted?**
+Translation keeps working. When the database misbehaves, history degrades temporarily with an honest status, and saved credentials are salvaged automatically — no reconfiguration after repair.
+
+**How much does it use?**
+Under 50 MB idle RAM, effectively 0% CPU, ~5 MB installer.
+
+**Is Linux supported?**
+Only Windows and macOS are currently released. The stack is Tauri-based and theoretically portable, but Linux has not been adapted or tested.
+
+**Found a bug or have an idea?**
+Please open an [issue](https://github.com/Aswellle/quick-translate/issues).
 
 ---
 
@@ -205,11 +243,11 @@ QuickTranslate is built to the standard of **long-running resident software**: f
 - Rust stable ≥ 1.75
 - Tauri CLI 2.x
 
-### Development Mode
+### Development
 
 ```bash
 npm install          # Install dependencies
-npm run tauri dev    # Start Tauri dev mode (with Vite HMR)
+npm run tauri dev    # Tauri dev mode with Vite HMR
 ```
 
 Frontend-only debugging (no Tauri APIs):
@@ -218,18 +256,14 @@ Frontend-only debugging (no Tauri APIs):
 npm run dev
 ```
 
-### Production Build
+### Build and Checks
 
 ```bash
-npm run tauri build  # Output to src-tauri/target/release/
-```
-
-### Code Checks
-
-```bash
-npx tsc --noEmit                              # TypeScript type check
-cd src-tauri && cargo fmt --check             # Rust format check
-cd src-tauri && cargo clippy -- -D warnings   # Rust lint
+npm run tauri build                            # Production build → src-tauri/target/release/
+npx tsc --noEmit                               # TypeScript type check
+cd src-tauri && cargo fmt --check              # Rust formatting
+cd src-tauri && cargo clippy -- -D warnings    # Rust lints
+cd src-tauri && cargo test                     # Rust unit tests
 ```
 
 ### Release
@@ -237,66 +271,57 @@ cd src-tauri && cargo clippy -- -D warnings   # Rust lint
 Push a `v*` tag to trigger the [release workflow](.github/workflows/release.yml), which builds and publishes signed installers (Windows MSI / NSIS, macOS DMG) to GitHub Releases and generates the auto-update manifest.
 
 ```bash
-git tag v0.3.0
-git push origin v0.3.0
+git tag v0.7.0
+git push origin v0.7.0
 ```
 
 ---
 
-## Technical Architecture
+## Architecture
 
 | Layer | Technology |
 |:--|:--|
 | Frontend | React 19 + TypeScript + Vite + Tailwind CSS + Zustand |
 | Backend | Rust (Tauri 2) + Tokio async runtime |
-| Database | SQLite (rusqlite, WAL mode) |
-| Desktop | System tray, clipboard monitor, global updater, auto-start |
+| Data | SQLite (rusqlite, WAL mode) |
+| Desktop | System tray, clipboard monitoring, window materials, auto-update, launch at login |
 
-**Core flow**: Clipboard monitor detects copy → the monitor supervisor keeps it alive → the request coordinator cancels stale requests and orchestrates the popup → the translation engine walks the failover chain (with circuit breaking and request budgets) → local cache on total failure → result pushed to the frontend.
+**Core flow**
 
-**Data flow**: Frontend invokes Tauri commands via `invoke()`; backend pushes results via Tauri events; history and cache are persisted asynchronously by a dedicated bounded-queue worker — a slow database never delays the translation you see.
+```text
+Clipboard monitor detects a copy
+      ↓
+Monitor supervisor keeps it alive (self-healing)
+      ↓
+Request coordinator cancels stale work and orchestrates the popup
+      ↓
+Translation engine walks the failover chain (circuit breaking + request budget)
+      ↓
+All providers failed → local cache
+      ↓
+Result pushed to the frontend
+```
 
----
-
-## FAQ
-
-**Copied but no popup appeared?**
-Right-click the tray icon to check if clipboard monitoring was disabled. Note: in many terminals, `Ctrl+C` sends an interrupt signal, not copy — in Windows Terminal, select text first.
-
-**Can I use a hotkey trigger instead of auto-popup?**
-Currently copy-triggered. Disable monitoring anytime from the tray menu when you don't want interruptions.
-
-**Does it upload my data secretly?**
-Only the text you copy is sent to your own configured translation provider (required for translation). History and API keys are stored locally; keys are encrypted.
-
-**Resource usage?**
-Under 50MB idle RAM, ~0% CPU, ~5MB installer.
-
-**Translation inaccurate / provider down?**
-Configure multiple providers with failover enabled — when the primary fails, traffic switches to the next automatically. Each provider card in Settings shows its live health status (recovering / rate-limited / auth failed / quota exhausted), so the cause is visible at a glance. On network interruption, previously translated content is served from local cache.
-
-**Something wrong with local data — does translation still work?**
-Yes. When the database misbehaves, translation keeps running and history degrades temporarily with honest status. Saved provider credentials are salvaged automatically — no re-configuration after the data is repaired.
-
-**Bug reports or feature suggestions?**
-Welcome in [Issues](https://github.com/Aswellle/quick-translate/issues).
+**Data flow**: the frontend calls Tauri commands via `invoke()`; the backend pushes results through Tauri events; history and cache are persisted asynchronously by a dedicated bounded-queue worker — a slow database never delays the translation you see.
 
 ---
 
 ## License
 
-This project is open source under the **[MIT License](LICENSE)** — free to use, modify and distribute, including for commercial purposes.
+Released under the **[MIT License](LICENSE)** — free to use, modify and distribute, including commercially.
 
-> The copyright holder reserves the right to modify or supplement the license terms for future releases, as needed: each release is governed by the license terms published with that release, and copies already obtained remain governed by the terms they came with.
+> The copyright holder reserves the right to modify or supplement the license terms for future releases: each release is governed by the license terms published with that release, and copies already obtained remain governed by the terms they came with.
 
 ---
 
 <div align="center">
 
-**If it saved you those ten seconds, ⭐ it so more people can find it.**
+### ⭐ If it saved you the back-and-forth
 
-[⬇ Download Latest](https://github.com/Aswellle/quick-translate/releases/latest) · [🐛 Report Issue](https://github.com/Aswellle/quick-translate/issues) · [📋 Changelog](https://github.com/Aswellle/quick-translate/releases)
+Star the repo so others with the same problem can find it.
 
-<sub>QuickTranslate · Copyright © 2026 welle</sub>
+**[⬇ Download Latest](https://github.com/Aswellle/quick-translate/releases/latest)** · [🐛 Report a Bug](https://github.com/Aswellle/quick-translate/issues) · [💡 Request a Feature](https://github.com/Aswellle/quick-translate/issues) · [📋 Changelog](https://github.com/Aswellle/quick-translate/releases)
+
+<sub>QuickTranslate · Copyright © 2026 welle · MIT License</sub>
 
 </div>
