@@ -10,7 +10,6 @@
 
 不用切窗口，不用开网页，不用粘贴框 —— 手始终停在键盘上。
 
-[中文](README.md) · [English](README.en.md)
 
 [![CI](https://github.com/Aswellle/quick-translate/actions/workflows/ci.yml/badge.svg)](https://github.com/Aswellle/quick-translate/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/github/v/release/Aswellle/quick-translate)](https://github.com/Aswellle/quick-translate/releases)
@@ -25,7 +24,8 @@
 
 **[⬇ 下载最新版](https://github.com/Aswellle/quick-translate/releases/latest)** · [🐛 报告问题](https://github.com/Aswellle/quick-translate/issues) · [💡 功能建议](https://github.com/Aswellle/quick-translate/issues) · [📋 更新日志](https://github.com/Aswellle/quick-translate/releases)
 
-<sub>Windows 10/11 · macOS 13+ (Apple Silicon) · 安装包约 5 MB · 空闲内存 < 50 MB</sub>
+[中文](README.md) · [English](README.en.md)
+
 
 </div>
 
