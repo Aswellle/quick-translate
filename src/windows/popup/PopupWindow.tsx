@@ -2,7 +2,6 @@
 // 翻译浮窗主组件（macOS 风格 — 灵动有活力）
 
 import { useEffect, useCallback, useRef, useState } from "react";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { EVENTS } from "@/lib/constants";
 import {
@@ -11,6 +10,7 @@ import {
   getPopupGeometry,
   activatePopup,
   rememberPopupPosition,
+  setPopupTheme,
   type PopupGeometry,
 } from "@/lib/commands";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
@@ -53,8 +53,9 @@ export function PopupWindow() {
   // 事件投递顺序被打乱时，旧结果/旧错误照样会被这道校验拦下。
   const requestIdRef = useRef<string | null>(null);
 
-  // 拖拽进行中标志：阻止 onFocusChanged 在 startDragging 期间误关弹窗
-  const isDragging = useRef(false);
+  // 拖拽/点击共用的按下起点（≤ CLICK_SLOP_PX 视为点击，超出为拖拽）
+  const pressOrigin = useRef<{ x: number; y: number } | null>(null);
+  const CLICK_SLOP_PX = 4;
 
   // ── 红绿灯窗体状态 ──
   // collapsed：折叠成仅标题栏的紧凑条（替代无任务栏可去的 minimize）
@@ -247,140 +248,86 @@ export function PopupWindow() {
   }, [handleClose]);
 
   // ── 拖拽移动窗体 ────────────────────────────────────────────────────
-  // 整个窗口区域可拖拽：mousedown 触发 Tauri startDragging
-  // 点击交互元素（按钮等）时跳过拖拽
+  // 按下只记起点；mousemove 超过 SLOP_PX 才启动 OS 拖拽（此刻左键仍按住，
+  // startDragging 需要活动按压才能进入模态移动循环）；抬起时位移 ≤ SLOP
+  // 视为点击，转入交互态。
   //
-  // 修复：调用 startDragging() 前置 isDragging=true，
-  //   阻止 onFocusChanged 在 OS 层拖拽期间误触 hidePopup。
-  //   重置时机：document.mouseup（鼠标释放）或 finally 块（+100ms 延迟），
-  //   两路兜底，防止 startDragging 立即 resolve 或 mouseup 未到达 webview 的边缘情况。
+  // 此前 mousedown 就无条件 startDragging，每次点击都在 OS 模态移动循环
+  // 里空转一圈，与激活链路（set_focusable + set_focus）交错时正是
+  // 「点击后 ~96ms 自关」的帮凶；统一到一个判定后点击/拖拽互不干扰。
+  // .selectable 与交互元素照旧跳过（划选译文不是拖窗，C5）。
   useEffect(() => {
     const container = popupRef.current;
     if (!container) return;
 
-    const handleMouseDown = async (e: MouseEvent) => {
-      // 仅响应左键
+    // 本次按压是否已转入 OS 拖拽：进入后 OS 接管鼠标，webview 的
+    // mousemove 不再可信，用标志防止重复调用 startDragging
+    let dragStarted = false;
+
+    const handleMouseDown = (e: MouseEvent) => {
       if (e.button !== 0) return;
-      // 点击交互元素、[data-no-drag] 容器或 .selectable 文本区时跳过拖拽
-      // （C5：判定收敛至 domUtils）。.selectable 必须避开：preventDefault
-      // 会取消 mousedown 默认开启的文本选区，用户划选译文就变成拖窗。
       if (isDragBlockingTarget(e.target)) return;
       e.preventDefault();
-      isDragging.current = true;
-      try {
-        const win = getCurrentWindow();
-        await win.startDragging();
-      } catch (err) {
-        console.error("[PopupWindow] 拖拽移动失败:", err);
-      } finally {
-        // 延迟重置：给拖拽结束后可能滞留的 onFocusChanged 事件留 100ms 缓冲
-        setTimeout(() => {
-          isDragging.current = false;
-        }, 100);
-      }
+      pressOrigin.current = { x: e.clientX, y: e.clientY };
+      dragStarted = false;
     };
 
-    // mouseup 兜底重置 + 位置固化：OS 接管 startDragging 后前端收不到
-    // 拖拽结束事件，松手这一刻是唯一可靠的「位置已定」时机 —— 上报给
-    // 后端记住，下次翻译沿用该位置而不是回到光标锚点
-    const handleMouseUp = () => {
-      if (isDragging.current) {
-        setTimeout(() => {
-          isDragging.current = false;
-        }, 100);
-        rememberPopupPosition().catch((err) =>
-          console.error("[PopupWindow] 上报位置失败:", err)
-        );
-      }
+    const handleMouseMove = (e: MouseEvent) => {
+      const origin = pressOrigin.current;
+      if (!origin || dragStarted) return;
+      if (Math.hypot(e.clientX - origin.x, e.clientY - origin.y) <= CLICK_SLOP_PX) return;
+      dragStarted = true;
+      getCurrentWindow()
+        .startDragging()
+        .catch((err) => console.error("[PopupWindow] 拖拽移动失败:", err));
     };
 
-    container.addEventListener("mousedown", handleMouseDown);
-    document.addEventListener("mouseup", handleMouseUp, { capture: true });
-    return () => {
-      container.removeEventListener("mousedown", handleMouseDown);
-      document.removeEventListener("mouseup", handleMouseUp, { capture: true });
-    };
-  }, []);
-
-  // ── 点击 → 转为可交互（Phase 8b / 计划第 19 节）─────────────────────
-  //
-  // 浮窗默认是**非激活**窗口：显示时不抢焦点，代价是它也收不到键盘事件 ——
-  // Esc / 空格 / Enter 全部失效。只有用户真的点了它才转回可交互。
-  //
-  // 用「按下与抬起之间几乎没移动」来区分点击与拖拽。整块浮窗都可拖拽，
-  // 若 mousedown 就激活，用户只是把浮窗挪个位置也会被夺走焦点 ——
-  // 那正是这一片要消除的东西。
-  const pressOrigin = useRef<{ x: number; y: number } | null>(null);
-  const CLICK_SLOP_PX = 4;
-
-  useEffect(() => {
-    const handlePressEnd = (e: MouseEvent) => {
+    // mouseup：判定点击或拖拽，并固化位置
+    const handleMouseUp = (e: MouseEvent) => {
       const origin = pressOrigin.current;
       pressOrigin.current = null;
       if (!origin) return;
 
       const moved = Math.hypot(e.clientX - origin.x, e.clientY - origin.y);
-      if (moved > CLICK_SLOP_PX) return; // 是拖拽，不是点击
+      if (moved > CLICK_SLOP_PX || dragStarted) {
+        // 是拖拽：位置已定，上报后端记住（下次翻译沿用）
+        rememberPopupPosition().catch((err) =>
+          console.error("[PopupWindow] 上报位置失败:", err)
+        );
+        return;
+      }
 
+      // 是点击：转入交互态，恢复键盘快捷键（Esc / 空格 / Enter）
       activatePopup()
         .then(() => setActivated(true))
-        .catch((err) =>
-          console.error("[PopupWindow] 转入交互态失败:", err)
-        );
+        .catch((err) => console.error("[PopupWindow] 转入交互态失败:", err));
     };
 
-    document.addEventListener("mouseup", handlePressEnd);
-    return () => document.removeEventListener("mouseup", handlePressEnd);
-  }, []);
-
-  // ── 点击窗体内部时阻止默认行为（防止失去焦点导致自动关闭）──────────
-  const handlePopupMouseDown = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    // 记下按下的起点，供上面区分点击与拖拽
-    pressOrigin.current = { x: e.clientX, y: e.clientY };
-  }, []);
-
-  // ── 窗口失焦到其他应用时关闭（点击其他 app 窗口时）───────────────
-  //
-  // 守卫一：拖拽进行中（isDragging=true）时跳过关闭，
-  //   因为 startDragging() 会导致 OS 层短暂 blur，不应触发 hidePopup。
-  //
-  // 守卫二（Phase 8b）：**从未聚焦过就不关**。
-  //   非激活浮窗永远不获得焦点，因此也永远不会「失去」焦点 —— 这条路径
-  //   在被动态下本就不该生效（被动态的关闭由后台看守按前台窗口变化负责）。
-  //   不加重这个标志的话，一旦 Tauri 在注册时补发一次 focused=false，
-  //   浮窗会在刚显示出来的瞬间就被关掉。
-  useEffect(() => {
-    const appWindow = getCurrentWebviewWindow();
-    // cancelled 标志修复注册竞态：onFocusChanged() 异步注册，若 cleanup 在
-    // Promise resolve 前执行（StrictMode 双调用），unlisten 仍为 undefined →
-    // 首个监听器永久泄漏，失焦时 hidePopup 被重复调用两次。
-    let unlisten: (() => void) | undefined;
-    let cancelled = false;
-    let hasBeenFocused = false;
-
-    appWindow
-      .onFocusChanged(({ payload: focused }) => {
-        if (focused) {
-          hasBeenFocused = true;
-          return;
-        }
-        if (hasBeenFocused && !isDragging.current) {
-          hidePopup().catch(console.error);
-        }
-      })
-      .then((fn) => {
-        if (cancelled) {
-          fn();
-        } else {
-          unlisten = fn;
-        }
-      });
-
+    container.addEventListener("mousedown", handleMouseDown);
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp, { capture: true });
     return () => {
-      cancelled = true;
-      unlisten?.();
+      container.removeEventListener("mousedown", handleMouseDown);
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp, { capture: true });
     };
+  }, []);
+
+  // ── 材质明暗跟随应用主题 ────────────────────────────────────────────
+  // Windows 的 DWM 系统 backdrop（DWMWA_SYSTEMBACKDROP_TYPE）跟随**系统**
+  // 主题而非应用主题：应用切到深色而系统是浅色时，浮窗背后是一块浅色
+  // 亚克力，深色玻璃观感全毁。把 DWMWA_USE_IMMERSIVE_DARK_MODE 同步到
+  // 与 CSS `.dark` 相同的来源（documentElement.classList），材质与着色层
+  // 才能始终是同一明暗。
+  useEffect(() => {
+    const root = document.documentElement;
+    const sync = () => {
+      setPopupTheme(root.classList.contains("dark")).catch(console.error);
+    };
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(root, { attributes: true, attributeFilter: ["class"] });
+    return () => observer.disconnect();
   }, []);
 
   // ── 渲染 ──
@@ -392,7 +339,6 @@ export function PopupWindow() {
           "popup-container w-full overflow-hidden cursor-grab active:cursor-grabbing select-none",
           closing ? "animate-popup-out" : "",
         ].join(" ")}
-        onMouseDown={handlePopupMouseDown}
       >
         {/* ── 标题栏：红绿灯 + 折叠态摘要 ── */}
         <div className="popup-titlebar">

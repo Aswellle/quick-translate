@@ -216,6 +216,17 @@ export async function resetPopupPosition(): Promise<void> {
   return invoke("reset_popup_position");
 }
 
+/**
+ * 让浮窗的系统级材质跟随应用主题明暗。
+ *
+ * DWM 的 Acrylic backdrop 跟随系统主题而非应用主题；应用深色 + 系统浅色
+ * 时浮窗背后是一块浅色亚克力。前端在 `.dark` class 变化时调用
+ * （与 CSS 主题单一来源对齐）。
+ */
+export async function setPopupTheme(dark: boolean): Promise<void> {
+  return invoke("set_popup_theme", { dark });
+}
+
 export async function resizePopup(width: number, height: number): Promise<void> {
   return invoke("resize_popup", { width, height });
 }

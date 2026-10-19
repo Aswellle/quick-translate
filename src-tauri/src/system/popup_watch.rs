@@ -13,10 +13,14 @@
 // 方案（计划第 20 节的方案 A）：记住浮窗出现时前台窗口是谁，
 // 之后只要前台**变了**，就说明用户已经切去别处，关闭浮窗。
 //
-// 用户主动点击浮窗时走另一条路：那一刻窗口被重新设为可激活并聚焦，
-// 焦点事件恢复，关闭交回给前端的 `onFocusChanged`。两条路互斥，
-// 由 `watching` 标志切换 —— 否则刚被用户点亮的浮窗会被看守立刻关掉
-// （它自己成了前台窗口，看起来就像「用户切走了」）。
+// 用户主动点击浮窗后走另一条路：窗口被重新设为可激活并聚焦，键盘事件
+// 恢复。但关闭**不再**交给前端的 `onFocusChanged` —— 激活链路
+// （set_focusable 异步落flag + startDragging 模态循环 + set_focus）交错时
+// 产生的瞬时 blur 会立刻触发 hidePopup，日志表现为
+// popup_activated_by_user +96ms → popup_hidden（还带一份 WM_KILLFOCUS
+// 回声的双重隐藏）。交互态改为看守继续工作，判定条件升级为
+// 「前台 ≠ 基线 且 前台 ≠ 浮窗自己」：浮窗在前台 → 不关；用户点进
+// 其他应用 → 关。150ms 轮询对瞬时焦点抖动天然免疫。
 
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Arc;
@@ -97,6 +101,31 @@ fn should_close(foreground: isize, baseline: isize) -> bool {
     foreground != 0 && baseline != 0 && foreground != baseline
 }
 
+/// 交互态判定：浮窗自己持有前台时**绝不**关 —— 用户刚点完浮窗正准备
+/// 按空格，此刻任何「浮窗 ≠ 基线」都是激活本身的产物，不是切走。
+///
+/// `popup_identity` 语义（`Option`，两平台含义不同）：
+///   - `Some(p)`：p 是浮窗的可比标识。`foreground == p` → 浮窗在前台，不关。
+///   - `None`：平台无需/无法自证，穿透到基线判定。macOS 上这是**常态**
+///     （foreground_window 把本应用折叠成 0：浮窗激活后前台查询即 0 →
+///     不关本就是预期；前台变成非 0 的别的应用 → 正常关）。Windows 上
+///     hwnd() 取不到只可能是窗口已销毁（窗口存在则句柄必在），此时
+///     hide 本就是空操作，穿透无碍。
+///
+/// `foreground == 0 || baseline == 0` 仍一律不关：查询失败是本地问题，
+/// 不该让浮窗凭空消失。
+fn should_close_interactive(foreground: isize, baseline: isize, popup: Option<isize>) -> bool {
+    if foreground == 0 || baseline == 0 {
+        return false;
+    }
+    if let Some(p) = popup {
+        if foreground == p {
+            return false;
+        }
+    }
+    foreground != baseline
+}
+
 /// 关闭浮窗并停止看守。
 ///
 /// `hide_popup` 命令与看守线程共用这一条路径。两条关闭路径各写一遍的话，
@@ -131,10 +160,27 @@ pub fn hide_popup_now(app: &AppHandle) {
 /// 每条线程都要考虑何时退出，而浮窗一天可能显示上千次（计划第 41 节：
 /// 不要每个事件起一个长期任务）。
 pub struct PopupWatch {
-    /// 是否处于被动态监视中
+    /// 是否处于监视中（被动态与交互态共用同一线程）
     watching: AtomicBool,
     /// 浮窗出现时的前台窗口句柄
     baseline: AtomicIsize,
+    /// 当前是否为交互态（用户点击过浮窗）
+    interactive: AtomicBool,
+}
+
+/// 交互态下用「前台是否是浮窗自己」自证。Windows 用 HWND（取不到 =
+/// `None`，交互态保守不关）；macOS 没有 per-window 句柄可比，且
+/// `foreground_window()` 已把本应用折叠成 0 —— 前台非 0 就必然是别的
+/// 应用，无需自证，恒 `None`。
+#[cfg(target_os = "windows")]
+fn popup_identity(app: &AppHandle) -> Option<isize> {
+    app.get_webview_window(POPUP_LABEL)
+        .and_then(|win| win.hwnd().ok().map(|h| h.0 as isize))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn popup_identity(_app: &AppHandle) -> Option<isize> {
+    None
 }
 
 impl PopupWatch {
@@ -142,6 +188,7 @@ impl PopupWatch {
         let watch = Arc::new(Self {
             watching: AtomicBool::new(false),
             baseline: AtomicIsize::new(0),
+            interactive: AtomicBool::new(false),
         });
 
         let w = watch.clone();
@@ -153,7 +200,20 @@ impl PopupWatch {
             }
 
             let current = foreground_window();
-            if should_close(current, w.baseline.load(Ordering::SeqCst)) {
+            if w.interactive.load(Ordering::SeqCst) {
+                // 交互态：浮窗自己可以是前台（用户正读译文/按空格），
+                // 只有前台落到别的应用才关。Windows 句柄缺失时保守不关
+                // —— 自证手段缺失时延迟关闭好过误关（F 系教训）。
+                let popup = popup_identity(&app);
+                if should_close_interactive(current, w.baseline.load(Ordering::SeqCst), popup) {
+                    tracing::info!(
+                        event = "popup_closed_by_foreground_change",
+                        "[popup_watch] 交互态用户已切走，关闭浮窗"
+                    );
+                    w.stop();
+                    hide_popup_now(&app);
+                }
+            } else if should_close(current, w.baseline.load(Ordering::SeqCst)) {
                 tracing::info!(
                     event = "popup_closed_by_foreground_change",
                     "[popup_watch] 用户已切走，关闭被动态浮窗"
@@ -171,10 +231,21 @@ impl PopupWatch {
     /// **必须在窗口显示之后调用** —— 基线要反映「浮窗出现时用户正在用谁」。
     pub fn begin(&self) {
         self.baseline.store(foreground_window(), Ordering::SeqCst);
+        self.interactive.store(false, Ordering::SeqCst);
         self.watching.store(true, Ordering::SeqCst);
     }
 
-    /// 停止监视。用户点击浮窗（转为交互态）或浮窗被关闭时调用。
+    /// 用户点击浮窗、转为交互态：看守**继续**运行，只是判定升级。
+    ///
+    /// 此前交互态直接停掉看守、把关闭交给前端的 `onFocusChanged` ——
+    /// 但激活链路（set_focusable 异步 + startDragging 模态循环 +
+    /// set_focus）交错产生的瞬时 blur 会让浮窗在激活后 ~96ms 自关。
+    /// 前台轮询是唯一对焦点抖动免疫的关闭权威，两个状态都由它管。
+    pub fn enter_interactive(&self) {
+        self.interactive.store(true, Ordering::SeqCst);
+    }
+
+    /// 停止监视。浮窗被关闭时调用。
     pub fn stop(&self) {
         self.watching.store(false, Ordering::SeqCst);
     }
@@ -220,10 +291,62 @@ mod tests {
         let w = PopupWatch {
             watching: AtomicBool::new(false),
             baseline: AtomicIsize::new(0),
+            interactive: AtomicBool::new(false),
         };
         assert!(!w.is_watching(), "未显示浮窗时看守不该动作");
 
         w.stop();
         assert!(!w.is_watching());
+    }
+
+    // ── 交互态判定 ─────────────────────────────────────────────────────
+
+    /// 核心回归：激活后浮窗自己成了前台 —— 这不是「用户切走」，
+    /// 绝不能触发关闭（此前交给前端 onFocusChanged 的路径会在这里自关）
+    #[test]
+    fn interactive_popup_itself_in_foreground_never_closes() {
+        assert!(
+            !should_close_interactive(777, 1234, Some(777)),
+            "浮窗是前台 → 不关"
+        );
+    }
+
+    #[test]
+    fn interactive_user_switched_away_closes() {
+        assert!(
+            should_close_interactive(999, 1234, Some(777)),
+            "前台换了别的应用 → 关"
+        );
+    }
+
+    #[test]
+    fn interactive_still_on_baseline_does_not_close() {
+        assert!(!should_close_interactive(1234, 1234, Some(777)));
+    }
+
+    /// 前台查询失败（=0）时不关；None 身份（macOS 常态 / Windows 窗口
+    /// 已销毁）穿透到基线判定 —— 见 should_close_interactive 的文档注释
+    #[test]
+    fn interactive_failed_query_never_closes() {
+        assert!(!should_close_interactive(0, 1234, Some(777)));
+        assert!(
+            should_close_interactive(999, 1234, None),
+            "None 穿透：前台非 0 且 ≠ 基线 → 关（macOS 切走的主路径）"
+        );
+    }
+
+    /// macOS 形态：本应用持有前台时 foreground_window() 返回 0（本应用被
+    /// 折叠），浮窗激活后查询即 0 → 不关；切到别的应用后前台非 0 → 正常关。
+    /// None 身份在 macOS 上不能触发保守分支，否则交互态永远不自动关闭。
+    #[test]
+    fn interactive_macos_foreground_folded_to_zero_stays_open_then_closes() {
+        assert!(
+            !should_close_interactive(0, 1234, None),
+            "前台 0 = 本应用（浮窗在其中）→ 不关"
+        );
+        assert!(
+            should_close_interactive(999, 1234, None),
+            "前台是非 0 的别的应用 → 关"
+        );
     }
 }
