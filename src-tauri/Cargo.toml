@@ -50,6 +50,9 @@ windows-sys = { version = "0.52", features = [
     "Win32_Storage_FileSystem",
     # GetClipboardSequenceNumber：区分"同一段文本被重新复制"与"文本原地未动"
     "Win32_System_DataExchange",
+    # DwmSetWindowAttribute + DWMWA_USE_IMMERSIVE_DARK_MODE：
+    # set_popup_theme 让 DWM 系统材质明暗跟随应用主题（非系统主题）
+    "Win32_Graphics_Dwm",
 ] }
 
 # macOS：浮窗被动态的自动关闭需要查询前台应用（popup_watch 的

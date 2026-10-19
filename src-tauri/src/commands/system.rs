@@ -42,12 +42,15 @@ pub async fn hide_popup(app: AppHandle) -> Result<(), AppError> {
 /// Esc / 空格 / Enter 全部失效。只有用户真的点了它，才把窗口设为可激活
 /// 并聚焦，这批快捷键才重新可用。
 ///
-/// 同时停掉被动态看守 —— 此刻浮窗自己成了前台窗口，看守会把它
-/// 误判成「用户切走了」而立刻关掉。
+/// 关闭不再交给前端的 `onFocusChanged`：激活链路（set_focusable 异步落
+/// 标志 + startDragging 模态循环 + set_focus）交错产生的瞬时 blur 会让
+/// 浮窗在激活后 ~96ms 自关（popup_activated_by_user → popup_hidden 实录）。
+/// 看守切换到交互态判定继续工作 —— 浮窗自己是前台时绝不关，用户点进
+/// 其他应用才关。150ms 轮询对瞬时焦点抖动天然免疫。
 #[tauri::command]
 pub async fn activate_popup(app: AppHandle) -> Result<(), AppError> {
     let popup_watch = app.state::<crate::state::AppState>().popup_watch.clone();
-    popup_watch.stop();
+    popup_watch.enter_interactive();
 
     let Some(window) = app.get_webview_window("popup") else {
         return Ok(());
@@ -63,12 +66,11 @@ pub async fn activate_popup(app: AppHandle) -> Result<(), AppError> {
 
     if let Err(e) = window.set_focus() {
         // fail-safe（计划第 20 节）：聚焦失败时窗口已可激活却拿不到焦点，
-        // blur 关闭路径失效，看守又刚被停掉 —— 浮窗就只剩红叉可关了。
-        // 把看守重新拉起（基线 = 当前前台窗口），用户切走时照样自动关闭，
-        // 不给「Popup 永远不消失」留门。
+        // 键盘事件不可用，交互态看守虽然兜着关闭，但空格这条路断了 ——
+        // 退回被动态（用户可点红叉/点外部关闭），并如实报错。
         tracing::warn!(
             event = "popup_activate_focus_failed",
-            "set_focus 失败，恢复被动态看守兜底: {}",
+            "set_focus 失败，退回被动态: {}",
             e
         );
         popup_watch.begin();
@@ -100,14 +102,65 @@ fn remember_popup_position(window: &tauri::WebviewWindow) {
 }
 
 /// 前端在拖拽结束后主动上报窗口位置。
-///
-/// `startDragging()` 由 OS 接管移动，前端拿不到移动结束事件；用户拖动后
-/// 松开鼠标的那一刻是最可靠的「位置已定」时机（前端 mouseup 里调用）。
 #[tauri::command]
 pub async fn remember_popup_position_now(app: AppHandle) -> Result<(), AppError> {
     if let Some(window) = app.get_webview_window("popup") {
         remember_popup_position(&window);
     }
+    Ok(())
+}
+
+/// 让浮窗的系统级材质跟随应用主题明暗。
+///
+/// `DWMWA_SYSTEMBACKDROP_TYPE` 施加的 Acrylic 跟随**系统**主题，而应用的
+/// 明暗由前端 `.dark` class 决定 —— 两者可以不一致（应用深色 + 系统浅色），
+/// 此刻浮窗背后是一块浅色亚克力，深色玻璃观感全毁。
+/// `DWMWA_USE_IMMERSIVE_DARK_MODE` 把 DWM 对该窗口的绘制（含 backdrop
+/// 明暗）切到深色变体，与 CSS 着色层对齐。
+///
+/// 前端在 `.dark` class 变化时调用（MutationObserver 监听
+/// documentElement），单一来源与 CSS 完全一致。失败只记 debug：
+/// 旧系统不认识该属性属正常情况，不应刷 warn。
+#[cfg(windows)]
+#[tauri::command]
+pub async fn set_popup_theme(app: AppHandle, dark: bool) -> Result<(), AppError> {
+    use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
+
+    let Some(window) = app.get_webview_window("popup") else {
+        return Ok(());
+    };
+    let Ok(hwnd) = window.hwnd() else {
+        return Ok(());
+    };
+
+    // tauri 的 hwnd() 返回 windows crate 的 HWND（裸指针包装），
+    // windows-sys 的签名要 isize —— 按位转换，句柄值本身不变
+    let hwnd_val = hwnd.0 as isize;
+    let dark_val: i32 = if dark { 1 } else { 0 };
+    // SAFETY: 标准的 DWM 属性写入；句柄来自 Tauri 自身窗口。
+    // 旧系统返回错误码属预期（属性不存在），只记 debug 不上抛。
+    let hr = unsafe {
+        DwmSetWindowAttribute(
+            hwnd_val,
+            DWMWA_USE_IMMERSIVE_DARK_MODE as u32,
+            &dark_val as *const i32 as *const core::ffi::c_void,
+            core::mem::size_of::<i32>() as u32,
+        )
+    };
+    if hr != 0 {
+        tracing::debug!(
+            "[set_popup_theme] DWMWA_USE_IMMERSIVE_DARK_MODE 不可用: hr={}",
+            hr
+        );
+    }
+    Ok(())
+}
+
+/// macOS 无 DWM：NSVisualEffectView 的明暗本就由窗口 appearance 驱动，
+/// 无需此命令，空实现保持 IPC 契约两侧一致。
+#[cfg(not(windows))]
+#[tauri::command]
+pub async fn set_popup_theme(_dark: bool) -> Result<(), AppError> {
     Ok(())
 }
 
