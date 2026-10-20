@@ -68,6 +68,13 @@ pub async fn activate_popup(app: AppHandle) -> Result<(), AppError> {
         // fail-safe（计划第 20 节）：聚焦失败时窗口已可激活却拿不到焦点，
         // 键盘事件不可用，交互态看守虽然兜着关闭，但空格这条路断了 ——
         // 退回被动态（用户可点红叉/点外部关闭），并如实报错。
+        //
+        // 退回必须**完整**：focusable 也要复位。只 begin() 不复位的话，
+        // 窗口仍是可激活的 —— 用户的下一次点击会在 OS 层直接激活窗口，
+        // 而 enter_interactive 要等 mouseup + IPC，150ms 轮询落在这个
+        // 间隙里走被动分支就会把浮窗在点击中途关掉；且窗口在此后的
+        // 生命周期里变成「点击抢焦点」窗口，违反 Phase 8b 的承诺。
+        let _ = window.set_focusable(false);
         tracing::warn!(
             event = "popup_activate_focus_failed",
             "set_focus 失败，退回被动态: {}",
@@ -158,6 +165,12 @@ pub async fn set_popup_theme(app: AppHandle, dark: bool) -> Result<(), AppError>
 
 /// macOS 无 DWM：NSVisualEffectView 的明暗本就由窗口 appearance 驱动，
 /// 无需此命令，空实现保持 IPC 契约两侧一致。
+///
+/// 参数写作 `_dark` 而非 `dark` 是**有意的**：tauri 宏生成参数键时会把
+/// 标识符 unraw 后转 camelCase，前导下划线被丢弃 —— 键仍是 `dark`，与
+/// 前端 `commands.ts` 的 `{ dark }` 对得上。改成 `dark`（无下划线）也能
+/// 工作但会触发 unused 告警；改成其他名字则 IPC 键漂移，macOS 上每次
+/// 调用静默报错。别动这个名字。
 #[cfg(not(windows))]
 #[tauri::command]
 pub async fn set_popup_theme(_dark: bool) -> Result<(), AppError> {
