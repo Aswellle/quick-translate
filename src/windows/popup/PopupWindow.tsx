@@ -122,12 +122,15 @@ export function PopupWindow() {
   }, [blurActive]);
 
   // ── 监听翻译 Loading 事件 ──
-  // 新一轮翻译开始：复位折叠态（否则新结果会被压在紧凑条里看不见）
+  // 新一轮翻译开始：复位折叠态（否则新结果会被压在紧凑条里看不见），
+  // 并复位 activated —— 新浮窗以被动态弹出，键盘事件根本到不了 webview，
+  // 残留的 true 会让它渲染「空格关闭」提示而空格实际收不到（提示误导）
   const handleLoading = useCallback(
     (event: { payload: TranslationLoadingPayload }) => {
       requestIdRef.current = event.payload.request_id;
       setLoading();
       setCollapsed(false);
+      setActivated(false);
       resizePopup(width, geometry.height_loading).catch(console.error);
     },
     [setLoading, width, geometry.height_loading]
@@ -255,7 +258,11 @@ export function PopupWindow() {
   // 此前 mousedown 就无条件 startDragging，每次点击都在 OS 模态移动循环
   // 里空转一圈，与激活链路（set_focusable + set_focus）交错时正是
   // 「点击后 ~96ms 自关」的帮凶；统一到一个判定后点击/拖拽互不干扰。
-  // .selectable 与交互元素照旧跳过（划选译文不是拖窗，C5）。
+  //
+  // 拖拽禁区（.selectable / 交互元素，C5）不拖窗、也不 preventDefault
+  // （后者会取消文本选区的建立），但**按下起点照记**：单击「复制」按钮
+  // 同样要转交互态，否则最高频路径之后 Esc/空格全死、快捷键提示永不出现
+  // —— 激活判定看的是「按下到抬起几乎没动」，与按压落在谁身上无关。
   useEffect(() => {
     const container = popupRef.current;
     if (!container) return;
@@ -263,18 +270,27 @@ export function PopupWindow() {
     // 本次按压是否已转入 OS 拖拽：进入后 OS 接管鼠标，webview 的
     // mousemove 不再可信，用标志防止重复调用 startDragging
     let dragStarted = false;
+    // 本次按压是否落在拖拽禁区上（控件/可选文本）：不拖窗，但点击
+    // 激活照常生效
+    let suppressDrag = false;
+
+    const activate = () => {
+      activatePopup()
+        .then(() => setActivated(true))
+        .catch((err) => console.error("[PopupWindow] 转入交互态失败:", err));
+    };
 
     const handleMouseDown = (e: MouseEvent) => {
       if (e.button !== 0) return;
-      if (isDragBlockingTarget(e.target)) return;
-      e.preventDefault();
+      suppressDrag = isDragBlockingTarget(e.target);
+      if (!suppressDrag) e.preventDefault();
       pressOrigin.current = { x: e.clientX, y: e.clientY };
       dragStarted = false;
     };
 
     const handleMouseMove = (e: MouseEvent) => {
       const origin = pressOrigin.current;
-      if (!origin || dragStarted) return;
+      if (!origin || dragStarted || suppressDrag) return;
       if (Math.hypot(e.clientX - origin.x, e.clientY - origin.y) <= CLICK_SLOP_PX) return;
       dragStarted = true;
       getCurrentWindow()
@@ -289,6 +305,15 @@ export function PopupWindow() {
       if (!origin) return;
 
       const moved = Math.hypot(e.clientX - origin.x, e.clientY - origin.y);
+
+      // 禁区上的按压永远不涉及窗口拖拽：划选译文（位移 >4px）不上报
+      // 位置 —— 浮窗根本没动，上报会把「没动过」错误固化成拖拽位置、
+      // 冲掉光标锚点；单击（≤4px）转交互态
+      if (suppressDrag) {
+        if (moved <= CLICK_SLOP_PX) activate();
+        return;
+      }
+
       if (moved > CLICK_SLOP_PX || dragStarted) {
         // 是拖拽：位置已定，上报后端记住（下次翻译沿用）
         rememberPopupPosition().catch((err) =>
@@ -298,9 +323,7 @@ export function PopupWindow() {
       }
 
       // 是点击：转入交互态，恢复键盘快捷键（Esc / 空格 / Enter）
-      activatePopup()
-        .then(() => setActivated(true))
-        .catch((err) => console.error("[PopupWindow] 转入交互态失败:", err));
+      activate();
     };
 
     container.addEventListener("mousedown", handleMouseDown);
@@ -321,8 +344,15 @@ export function PopupWindow() {
   // 才能始终是同一明暗。
   useEffect(() => {
     const root = document.documentElement;
+    // observer 的过滤粒度是整个 class 属性而非 .dark 一位 —— 未来任何
+    // 往 <html> 挂别的 class 的代码都会触发 sync。缓存上次明暗值，
+    // 未变化时跳过 IPC，避免无谓的 DWM 调用。
+    let lastDark: boolean | null = null;
     const sync = () => {
-      setPopupTheme(root.classList.contains("dark")).catch(console.error);
+      const dark = root.classList.contains("dark");
+      if (dark === lastDark) return;
+      lastDark = dark;
+      setPopupTheme(dark).catch(console.error);
     };
     sync();
     const observer = new MutationObserver(sync);
