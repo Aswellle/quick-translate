@@ -57,11 +57,17 @@ export function ResultView({ result, showKeyboardHint = false }: ResultViewProps
           操作栏保持通透，让 OS 原生材质仍然可见。整块面板加厚会把玻璃
           闷成色板，那是这条链路历史上反复踩过的坑。
 
-          上方不再放分隔线 —— 衬底自带内描边，再叠一条会形成双重 border。 */}
+          上方不再放分隔线 —— 衬底自带内描边，再叠一条会形成双重 border。
+
+          maxHeight 从 360 降到 300：阅读衬底自身带来 padding(24) + 内描边(2)，
+          叠加标题栏、语言标签、分隔线与操作栏后，360 会让容器总高达到约
+          497px，超过后端 MAX_HEIGHT=480 的硬上限。被 clamp 的后果是译文
+          滚动区被压扁，而用户看不到「还有内容」的提示。300 留出约 43px
+          余量，滚动区仍能显示约 11 行中文。 */}
       <div className="px-2 pb-2">
         <div
-          className="popup-reading-surface selectable px-3 py-3 text-[14.5px] font-medium leading-[1.8] tracking-[0.005em] text-[var(--text-primary)] overflow-y-auto whitespace-pre-wrap break-words"
-          style={{ maxHeight: "360px", fontFamily: "var(--font-ui)" }}
+          className="popup-reading-surface selectable px-3 py-3 text-[14.5px] font-medium leading-[1.8] tracking-[0.005em] text-[var(--popup-text-primary)] overflow-y-auto whitespace-pre-wrap break-words"
+          style={{ maxHeight: "300px", fontFamily: "var(--font-ui)" }}
         >
           {result.translated_text}
         </div>
