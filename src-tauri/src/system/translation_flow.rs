@@ -8,7 +8,15 @@
 //
 // 依赖方向单向：coordinator → translation_flow，反向没有任何引用。
 
+use tauri::utils::config::WindowEffectsConfig;
+use tauri::window::{Effect, EffectsBuilder};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+
+// 平台专有的材质参数，按 cfg 引入以免在另一平台产生未使用告警
+#[cfg(target_os = "windows")]
+use tauri::window::Color;
+#[cfg(target_os = "macos")]
+use tauri::window::EffectState;
 
 use crate::system::popup_geometry;
 use crate::types::{
@@ -22,7 +30,7 @@ pub(crate) const POPUP_LABEL: &str = "popup";
 const POPUP_LOGICAL_W: f64 = popup_geometry::WIDTH_NORMAL;
 const POPUP_LOGICAL_H: f64 = popup_geometry::HEIGHT_INITIAL;
 
-/// 给浮窗套上系统级材质（PRD 5.4：Windows Acrylic / macOS NSVisualEffectView）。
+/// 浮窗的系统级材质声明。
 ///
 /// 为什么必须有这一步：CSS 的 `backdrop-filter` 只能模糊「同一 webview 内
 /// 已经绘制的内容」。窗口本身不透明时，窗口背后是桌面/其他应用，webview
@@ -32,45 +40,77 @@ const POPUP_LOGICAL_H: f64 = popup_geometry::HEIGHT_INITIAL;
 /// 只有先让窗口透明（`transparent(true)`）再让 OS 画材质，背后的桌面才会
 /// 真正透过来。两者缺一不可：
 ///   - Windows：Acrylic 由 DWM 合成，需要 `transparent` + 非装饰窗口
-///   - macOS：NSVisualEffectView 需要 `macOSPrivateApi` 才允许透明背景
+///   - macOS：NSVisualEffectView / NSGlassEffectView 需要 `macOSPrivateApi`
 ///
-/// 失败不致命：材质不可用时退回 CSS 的半透明背景（观感退化为磨砂纯色，
-/// 功能不受影响），因此只记 warn。
-fn apply_popup_material(window: &WebviewWindow) {
-    use tauri::window::{Effect, EffectsBuilder};
-
+/// 声明 ≠ 生效：这里只构造配置。真正的施加由 builder 投递到主线程队列，
+/// 而 tauri 内层用 `let _ =` 丢弃了施加结果（`vibrancy::set_window_effects`
+/// 恒返回 `Ok`），所以**任何返回值都不能证明材质画出来了**。能确认的只有
+/// `log_material_decision` 记下的「本机打算用哪一档」。
+fn popup_effects() -> WindowEffectsConfig {
     #[cfg(target_os = "windows")]
-    let effects = EffectsBuilder::new()
-        // Acrylic：Windows 10 1803+ 的实时模糊 + 噪点，最接近「液态玻璃」
-        .effect(Effect::Acrylic)
-        // 极淡的白色着色：让深色桌面背景下文字仍可读
-        .color(tauri::utils::config::Color(255, 255, 255, 18))
-        .build();
+    {
+        EffectsBuilder::new()
+            // Acrylic：Windows 10 1803+ 的实时模糊 + 噪点，最接近「液态玻璃」
+            .effect(Effect::Acrylic)
+            // 极淡的白色着色。注意 Win11 22H2+ 走 DWMWA_SYSTEMBACKDROP_TYPE，
+            // 这个颜色会被系统静默忽略 —— 明暗改由 set_popup_theme 的
+            // DWMWA_USE_IMMERSIVE_DARK_MODE 控制
+            .color(Color(255, 255, 255, 18))
+            .build()
+    }
 
     #[cfg(target_os = "macos")]
-    let effects = {
-        use tauri::window::EffectState;
+    {
         EffectsBuilder::new()
-            // Popover：macOS 原生弹出层材质，带正确的明暗自适应
+            // macOS 26+ 的原生 Liquid Glass
+            .effect(Effect::LiquidGlassRegular)
+            // 回退档：tauri 在 Liquid Glass 返回 UnsupportedPlatformVersion
+            // （macOS 15 及以下）时会自动改用这一项。两项必须同时声明，
+            // 否则旧系统上窗口完全没有材质
             .effect(Effect::Popover)
+            // 浮窗是 focusable(false)，永远不会成为 key window。保持
+            // FollowsWindowActiveState 会稳定渲染 inactive（更淡）外观，
+            // 与当前「玻璃偏淡」的取向一致。要改浓才换成 Active
             .state(EffectState::FollowsWindowActiveState)
             .radius(popup_geometry::RADIUS_LG)
             .build()
-    };
+    }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    let effects = {
-        let _ = Effect::Acrylic;
+    {
         EffectsBuilder::new().build()
-    };
-
-    if let Err(e) = window.set_effects(effects) {
-        tracing::warn!(
-            event = "popup_material_unavailable",
-            "系统级浮窗材质应用失败，退回 CSS 半透明背景: {}",
-            e
-        );
     }
+}
+
+/// 记录本机打算用哪一档材质。
+///
+/// 存在的理由：`set_effects` 的失败日志在 tauri 里是死代码（内层 `let _ =`），
+/// 材质没画出来时日志一片空白。这条决策日志至少能区分「声明了 Liquid Glass」
+/// 与「声明了 Popover 回退」，排查时不必靠猜。
+fn log_material_decision() {
+    #[cfg(target_os = "windows")]
+    tracing::info!(
+        event = "popup_material_decision",
+        platform = "windows",
+        effect = "acrylic",
+        "浮窗材质：Windows Acrylic（Win11 22H2+ 由 DWM 系统背板承担，着色参数被忽略）"
+    );
+
+    #[cfg(target_os = "macos")]
+    tracing::info!(
+        event = "popup_material_decision",
+        platform = "macos",
+        effect = "liquid_glass_regular|popover",
+        "浮窗材质：macOS 26+ 用 Liquid Glass Regular，15 及以下回退 Popover"
+    );
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    tracing::info!(
+        event = "popup_material_decision",
+        platform = "other",
+        effect = "none",
+        "浮窗材质：当前平台无原生材质，退回 CSS 半透明背景"
+    );
 }
 
 /// 浮窗窗口的唯一构建入口。
@@ -79,11 +119,22 @@ fn apply_popup_material(window: &WebviewWindow) {
 /// 共用同一份属性集：透明、无装饰、置顶、免激活。属性分散复制是这份
 /// 代码里已经发生过两次漂移的地方（材质只在一条路径上缺失就会表现为
 /// 「有时是玻璃有时不是」）。
+///
+/// `visible` 参数保留原语义，但**建窗一律先隐藏**，材质声明走 builder 的
+/// `effects()`，最后才按需 `show()`。
+///
+/// 为什么要这样绕一圈：`WindowEffectsConfig` 在 builder 内部是投递到主线程
+/// 队列执行的（`build_internal` 里的 `run_on_main_thread`），而 `.visible(true)`
+/// 会让窗口在 `build()` 返回前就可见。两者叠加的结果是「窗口先亮出来、材质
+/// 后画上去」，首帧是一块没有玻璃的透明板。先隐藏再按序 show，队列顺序保证
+/// 材质先于可见。
 fn build_popup_window(
     app: &AppHandle,
     position: (f64, f64),
     visible: bool,
 ) -> tauri::Result<WebviewWindow> {
+    log_material_decision();
+
     let window =
         WebviewWindowBuilder::new(app, POPUP_LABEL, WebviewUrl::App("index.html#popup".into()))
             .title("QuickTranslate")
@@ -94,16 +145,23 @@ fn build_popup_window(
             // 非激活窗口（Windows 上即 WS_EX_NOACTIVATE）：显示时不抢焦点，
             // 不把用户从正在编辑的地方带走（Phase 8b / 计划第 19 节）
             .focusable(false)
-            .visible(visible)
+            // 始终隐藏建窗：见上方注释，可见性由末尾的 show() 决定
+            .visible(false)
             .resizable(false)
             // 透明背景：CSS 的圆角与阴影需要它才能真正透出桌面，
-            // 也是系统级材质生效的前提（见 apply_popup_material）
+            // 也是系统级材质生效的前提（见 popup_effects）
             .transparent(true)
+            // 材质声明进 builder，由 build_internal 投递到主线程队列，
+            // 排在下面那次 show() 之前
+            .effects(popup_effects())
             .inner_size(POPUP_LOGICAL_W, POPUP_LOGICAL_H)
             .position(position.0, position.1)
             .build()?;
 
-    apply_popup_material(&window);
+    if visible {
+        let _ = window.show();
+    }
+
     Ok(window)
 }
 
@@ -349,4 +407,46 @@ pub(crate) fn reposition_popup(app: &AppHandle, width: f64, height: f64) -> bool
         y
     );
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Windows 只声明 Acrylic 一项，并带着极淡的白色着色。
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn windows_declares_acrylic_with_faint_white_tint() {
+        let config = popup_effects();
+        assert_eq!(config.effects, vec![Effect::Acrylic]);
+        assert_eq!(config.color, Some(Color(255, 255, 255, 18)));
+    }
+
+    /// macOS 必须同时声明 Liquid Glass 与回退材质。
+    ///
+    /// 这是本模块最容易静默回归的契约：只留 LiquidGlassRegular 时，
+    /// macOS 26 上一切正常，macOS 15 及以下则完全没有材质 —— 而回退
+    /// 逻辑在 tauri 内部，Windows 上的任何测试都看不见这个缺陷。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_declares_liquid_glass_with_popover_fallback() {
+        let config = popup_effects();
+        assert_eq!(
+            config.effects,
+            vec![Effect::LiquidGlassRegular, Effect::Popover]
+        );
+        assert_eq!(
+            config.state,
+            Some(EffectState::FollowsWindowActiveState),
+            "浮窗不可聚焦，保持跟随活跃态才会渲染偏淡的 inactive 外观"
+        );
+        assert_eq!(config.radius, Some(popup_geometry::RADIUS_LG));
+    }
+
+    /// 材质声明为空时不应该被当成「有材质」传给系统。
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    #[test]
+    fn other_platforms_declare_no_effects() {
+        assert!(popup_effects().effects.is_empty());
+    }
 }

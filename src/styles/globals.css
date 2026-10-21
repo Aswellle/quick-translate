@@ -59,16 +59,32 @@
   --focus-ring:           rgba(0, 122, 255, 0.35);
 
   /* ── Popup / Card ── */
-  /* 着色层刻意极薄（0.10）：实机对照（黑底白字探头，2026-10-20）证明
-     Windows DWM Acrylic（DWMSBT_TRANSIENTWINDOW）本身在工作 —— 背后的
-     文字被模糊成晕影 —— 但 0.22 的白 tint + 高光渐变把材质洗成了雾白
-     平板，玻璃感全靠 0.22 那点可怜的透度硬撑。0.10 让系统材质成为绝对
-     主角；文字衬底改由 ::before 的受光渐变承担（深色背景半区更暗、
-     浅色背景半区更亮的真实玻璃行为）。0.55 的教训（闷成色块）与 0.22
-     的教训（雾白板）都写在这里供后人参考。 */
-  --popup-bg:            rgba(255, 255, 255, 0.10);
-  --popup-border:        rgba(255, 255, 255, 0.50);
-  --popup-shadow:        0 12px 40px rgba(0, 0, 0, 0.22), 0 2px 10px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  /* 玻璃层与阅读层是两套独立的配方，不要合并：
+       · 玻璃层（--popup-glass-*）负责「这是一块玻璃」——极薄的着色、
+         边缘高光、外阴影。它要尽量透，让 OS 原生材质当主角。
+       · 阅读层（--popup-reading-*）负责「字看得清」——只铺在正文区域，
+         不铺满整个面板。
+     把可读性压进玻璃层（提高 --popup-glass-tint）是这条链路历史上反复
+     踩的坑：0.55 闷成色块，0.22 洗成雾白板。文字对比度应当由阅读层
+     和文字色解决，而不是让整块玻璃变厚。 */
+  /* 实机对照（黑底白字探头，2026-10-20）证明 Windows DWM Acrylic
+     （DWMSBT_TRANSIENTWINDOW）本身在工作 —— 背后的文字被模糊成晕影 ——
+     0.10 让系统材质成为绝对主角。 */
+  --popup-glass-tint:    rgba(255, 255, 255, 0.10);
+  --popup-glass-edge:    rgba(255, 255, 255, 0.50);
+  --popup-glass-shadow:  0 12px 40px rgba(0, 0, 0, 0.22), 0 2px 10px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+
+  /* 阅读衬底：浅色主题用低纹理的白，正文用深色高对比文字。
+     0.52 是起始值，最终以真实合成截图为准（见 DECISIONS D7：
+     上限 0.65，再不够就回头调文字色，不继续加厚）。 */
+  --popup-reading-bg:     rgba(255, 255, 255, 0.52);
+  --popup-reading-border: rgba(0, 0, 0, 0.06);
+  --popup-divider:        rgba(0, 0, 0, 0.06);
+
+  /* 浅色主题下正文用与 --text-primary 相同的深色即可：深色文字压
+     浅色衬底的对比度余量充足（实测最坏 6.66:1），不需要单独提纯。 */
+  --popup-text-primary:   #1D1D1F;
+
   --card-bg:             rgba(255, 255, 255, 0.60);
   --card-border:         rgba(0, 0, 0, 0.06);
   --card-shadow:         0 2px 8px rgba(0, 0, 0, 0.06);
@@ -121,9 +137,25 @@
   --active-bg:            rgba(255, 255, 255, 0.10);
   --focus-ring:           rgba(0, 122, 255, 0.45);
 
-  --popup-bg:            rgba(28, 28, 30, 0.16);
-  --popup-border:        rgba(255, 255, 255, 0.14);
-  --popup-shadow:        0 14px 44px rgba(0, 0, 0, 0.55), 0 2px 12px rgba(0, 0, 0, 0.38), 0 0 0 0.5px rgba(255, 255, 255, 0.10);
+  --popup-glass-tint:    rgba(28, 28, 30, 0.16);
+  --popup-glass-edge:    rgba(255, 255, 255, 0.14);
+  --popup-glass-shadow:  0 14px 44px rgba(0, 0, 0, 0.55), 0 2px 12px rgba(0, 0, 0, 0.38), 0 0 0 0.5px rgba(255, 255, 255, 0.10);
+
+  /* 深色阅读衬底：比浅色更需要实体感 —— 浅色文字压在深色桌面上的
+     可读性比反向更差，因此起始不透明度略高于浅色主题。
+     0.58 来自实测：最坏背景（纯白桌面 + 系统材质提亮）下，
+     #FFFFFF 正文的合成对比度为 5.25:1，高于 4.5 门槛。
+     配 0.56 时只有 4.95:1，余量太薄，不足以覆盖不同 DPI 与系统缩放
+     带来的合成偏差。 */
+  --popup-reading-bg:     rgba(28, 28, 30, 0.58);
+  --popup-reading-border: rgba(255, 255, 255, 0.07);
+  --popup-divider:        rgba(255, 255, 255, 0.08);
+
+  /* 浮窗正文专用文字色：纯白而非 --text-primary 的 #F5F5F7。
+     深色玻璃上浅灰与纯白的观感差异几乎不可见，但对比度差 0.4 个点。
+     只影响阅读衬底内的正文，设置页等其他深色界面仍用 #F5F5F7。 */
+  --popup-text-primary:   #FFFFFF;
+
   --card-bg:             rgba(44, 44, 46, 0.60);
   --card-border:         rgba(255, 255, 255, 0.08);
   --card-shadow:         0 2px 8px rgba(0, 0, 0, 0.25);
@@ -174,15 +206,15 @@ html, body, #root {
    窗口本身已 transparent(true)，三层才能叠出玻璃观感。 */
 .popup-container {
   position: relative;
-  background: var(--popup-bg);
+  background: var(--popup-glass-tint);
   /* backdrop-filter 保留为「材质不可用平台」的兜底：Windows/macOS 上
      系统材质已提供真实桌面模糊，30px 的 CSS 模糊在透明窗口上没有可采
      样的内容（背后是 DWM 合成的材质，webview 采不到），等于纯空转。 */
   backdrop-filter: blur(30px) saturate(185%) brightness(1.03);
   -webkit-backdrop-filter: blur(30px) saturate(185%) brightness(1.03);
-  border: 1px solid var(--popup-border);
+  border: 1px solid var(--popup-glass-edge);
   border-radius: var(--radius-lg);
-  box-shadow: var(--popup-shadow);
+  box-shadow: var(--popup-glass-shadow);
   overflow: hidden;
   /* 注：不要给 width 加 transition —— 容器是 w-full（百分比），窗口级
      resize 只改 used value 不触发 transition（死代码）；若真触发反而
@@ -248,6 +280,29 @@ html, body, #root {
 .popup-container > * {
   position: relative;
   z-index: 2;
+}
+
+/* ============================================================
+   Popup Reading Surface — 正文阅读衬底
+   ============================================================ */
+
+/* 玻璃层与阅读层分离：外层（.popup-container）只管「这是一块玻璃」，
+   阅读层只管「字看得清」。可读性不再由提高全窗不透明度换取。
+
+   为什么只铺正文区域而不是整个面板：整块加厚会把 OS 原生材质闷掉，
+   退化成色板 —— 这正是 --popup-glass-tint 反复调参想避开的结局。
+   局部衬底让标题栏、底部操作栏保持通透，只有真正要读的那几行有底。
+
+   实现约束：
+     · 不给伪元素 —— 伪元素会挡文本选择与点击；直接用背景色
+     · 不设 z-index —— 它与兄弟节点同层，自然压在光学层之上
+     · 不设 pointer-events —— 衬底必须让子元素的事件正常冒泡，
+       拖拽禁区判定（isDragBlockingTarget）依赖 .selectable 祖先链 */
+.popup-reading-surface {
+  background: var(--popup-reading-bg);
+  border-radius: var(--radius-md);
+  /* 极细内描边：让衬底与玻璃层之间有分界，而不是糊在一起 */
+  box-shadow: inset 0 0 0 1px var(--popup-reading-border);
 }
 
 /* ============================================================
