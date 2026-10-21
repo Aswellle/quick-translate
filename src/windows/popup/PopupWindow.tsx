@@ -15,6 +15,7 @@ import {
 } from "@/lib/commands";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { useTranslationStore } from "@/stores/translationStore";
+import { useConfigStore } from "@/stores/configStore";
 import { LoadingView } from "./LoadingView";
 import { ResultView } from "./ResultView";
 import { ErrorView } from "./ErrorView";
@@ -342,30 +343,47 @@ export function PopupWindow() {
   // 亚克力，深色玻璃观感全毁。把 DWMWA_USE_IMMERSIVE_DARK_MODE 同步到
   // 与 CSS `.dark` 相同的来源（documentElement.classList），材质与着色层
   // 才能始终是同一明暗。
+  //
+  // macOS 侧还要多一个信息：主题偏好是不是 `system`。system 档位下必须
+  // 清空窗口 appearance 让原生材质跟随系统，否则会把浮窗 webview 的
+  // prefers-color-scheme 钉死，此后系统主题变化再也检测不到（D3）。
   useEffect(() => {
     const root = document.documentElement;
     // observer 的过滤粒度是整个 class 属性而非 .dark 一位 —— 未来任何
     // 往 <html> 挂别的 class 的代码都会触发 sync。缓存上次明暗值，
     // 未变化时跳过 IPC，避免无谓的 DWM 调用。
-    let lastDark: boolean | null = null;
+    //
+    // 缓存的是 `dark|followSystem` 组合而非单个布尔：用户在设置页把
+    // 主题从"深色"改成"跟随系统"而此刻系统正好是深色时，`.dark` 不变
+    // 但语义变了 —— 只比对 dark 会漏掉这次切换，浮窗 appearance 卡在
+    // 上一次的钉死状态。
+    let lastKey: string | null = null;
     const sync = () => {
       const dark = root.classList.contains("dark");
-      if (dark === lastDark) return;
-      lastDark = dark;
-      setPopupTheme(dark).catch(console.error);
+      const followSystem = useConfigStore.getState().config?.theme === "system";
+      const key = `${dark}|${followSystem}`;
+      if (key === lastKey) return;
+      lastKey = key;
+      setPopupTheme(dark, followSystem).catch(console.error);
     };
     sync();
     const observer = new MutationObserver(sync);
     observer.observe(root, { attributes: true, attributeFilter: ["class"] });
 
+    // 主题偏好本身变化（settings 窗口保存 → theme-changed 广播 →
+    // useTheme 更新 configStore）不会改 <html> 的 class 时，上面的
+    // observer 收不到。订阅 store 补上这条路径。
+    const unsubscribe = useConfigStore.subscribe(sync);
+
     // 双保险：系统主题变化（跟随系统模式）在某些 WebView2 运行时上
     // matchMedia 的 change 事件不可靠，主动轮询兜底 —— popup 窗口长期
     // 驻留，用户切了系统深色后浮窗材质应尽快跟上。轮询很便宜：只是读
-    // 一次 classList，真正的 IPC 有 lastDark 守着。
+    // 一次 classList，真正的 IPC 有 lastKey 守着。
     const interval = window.setInterval(sync, 2000);
 
     return () => {
       observer.disconnect();
+      unsubscribe();
       window.clearInterval(interval);
     };
   }, []);

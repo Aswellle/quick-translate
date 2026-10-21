@@ -225,9 +225,18 @@ export async function resetPopupPosition(): Promise<void> {
  * DWM 的 Acrylic backdrop 跟随系统主题而非应用主题；应用深色 + 系统浅色
  * 时浮窗背后是一块浅色亚克力。前端在 `.dark` class 变化时调用
  * （与 CSS 主题单一来源对齐）。
+ *
+ * `followSystem` 告诉后端"当前主题偏好是不是 system"。macOS 侧据此决定
+ * 是清空窗口 appearance（让原生材质跟随系统、并保持 webview 的
+ * prefers-color-scheme 可被系统变化刷新），还是钉死成 Aqua / DarkAqua。
+ * 若在 system 档位也钉死 appearance，浮窗自己的 matchMedia 会永远读到
+ * 旧值，等于自断"跟随系统"的检测链路。
  */
-export async function setPopupTheme(dark: boolean): Promise<void> {
-  return invoke("set_popup_theme", { dark });
+export async function setPopupTheme(
+  dark: boolean,
+  followSystem: boolean
+): Promise<void> {
+  return invoke("set_popup_theme", { dark, followSystem });
 }
 
 export async function resizePopup(width: number, height: number): Promise<void> {

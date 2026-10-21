@@ -119,19 +119,30 @@ pub async fn remember_popup_position_now(app: AppHandle) -> Result<(), AppError>
 
 /// 让浮窗的系统级材质跟随应用主题明暗。
 ///
-/// `DWMWA_SYSTEMBACKDROP_TYPE` 施加的 Acrylic 跟随**系统**主题，而应用的
-/// 明暗由前端 `.dark` class 决定 —— 两者可以不一致（应用深色 + 系统浅色），
-/// 此刻浮窗背后是一块浅色亚克力，深色玻璃观感全毁。
+/// Windows：`DWMWA_SYSTEMBACKDROP_TYPE` 施加的 Acrylic 跟随**系统**主题，
+/// 而应用的明暗由前端 `.dark` class 决定 —— 两者可以不一致（应用深色 +
+/// 系统浅色），此刻浮窗背后是一块浅色亚克力，深色玻璃观感全毁。
 /// `DWMWA_USE_IMMERSIVE_DARK_MODE` 把 DWM 对该窗口的绘制（含 backdrop
 /// 明暗）切到深色变体，与 CSS 着色层对齐。
 ///
 /// 前端在 `.dark` class 变化时调用（MutationObserver 监听
 /// documentElement），单一来源与 CSS 完全一致。失败只记 debug：
 /// 旧系统不认识该属性属正常情况，不应刷 warn。
+///
+/// macOS 侧的 appearance 同步见下方 `#[cfg(not(windows))]` 版本。
 #[cfg(windows)]
 #[tauri::command]
-pub async fn set_popup_theme(app: AppHandle, dark: bool) -> Result<(), AppError> {
+pub async fn set_popup_theme(
+    app: AppHandle,
+    dark: bool,
+    follow_system: bool,
+) -> Result<(), AppError> {
     use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
+
+    // Windows 的 DWM 明暗由 dark 单独决定，follow_system 只对 macOS 有意义。
+    // 显式消费掉避免 unused 告警，同时保留完整参数集 —— 前端两个平台调用
+    // 同一份 commands.ts，IPC 参数键必须一致。
+    let _ = follow_system;
 
     let Some(window) = app.get_webview_window("popup") else {
         return Ok(());
@@ -163,18 +174,136 @@ pub async fn set_popup_theme(app: AppHandle, dark: bool) -> Result<(), AppError>
     Ok(())
 }
 
-/// macOS 无 DWM：NSVisualEffectView 的明暗本就由窗口 appearance 驱动，
-/// 无需此命令，空实现保持 IPC 契约两侧一致。
+/// macOS：把浮窗的 `NSWindow` appearance 同步到与 CSS 一致的明暗。
 ///
-/// 参数写作 `_dark` 而非 `dark` 是**有意的**：tauri 宏生成参数键时会把
-/// 标识符 unraw 后转 camelCase，前导下划线被丢弃 —— 键仍是 `dark`，与
-/// 前端 `commands.ts` 的 `{ dark }` 对得上。改成 `dark`（无下划线）也能
-/// 工作但会触发 unused 告警；改成其他名字则 IPC 键漂移，macOS 上每次
-/// 调用静默报错。别动这个名字。
+/// 为什么不能用 `tauri::Window::set_theme`：它在 macOS 上落到
+/// `[NSApplication setAppearance:]`（见 tao `set_ns_theme`），是**应用级**
+/// 的 —— 用它修浮窗会连带改掉设置页与历史窗口的原生外观。这里只动浮窗
+/// 自己的 NSWindow（DECISIONS D3）。
+///
+/// `follow_system = true` 时必须 `setAppearance(nil)` 而不是设成当前明暗：
+/// 给窗口钉死 appearance 会同时钉死其 webview 的 `prefers-color-scheme`，
+/// 此后系统主题变化时浮窗自己的 matchMedia 永远读到旧值 —— 等于自断
+/// 「跟随系统」的检测链路（DECISIONS D3 里记的那个环）。
+///
+/// 参数名用 `follow_system`（不带下划线）：tauri 宏把它转成 IPC 键
+/// `followSystem`，与前端 `commands.ts` 的 `{ followSystem }` 对上。
+/// （tauri 的 `unraw()` 只处理 `r#type` 这类 raw identifier，前缀下划线
+/// 由 heck 的 `to_lower_camel_case()` 一并丢弃 —— 实测 `_follow_system`
+/// 与 `follow_system` 都得到 `followSystem`，所以不必靠下划线维持键名。）
 #[cfg(not(windows))]
 #[tauri::command]
-pub async fn set_popup_theme(_dark: bool) -> Result<(), AppError> {
+pub async fn set_popup_theme(
+    app: AppHandle,
+    dark: bool,
+    follow_system: bool,
+) -> Result<(), AppError> {
+    #[cfg(target_os = "macos")]
+    {
+        let Some(window) = app.get_webview_window("popup") else {
+            return Ok(());
+        };
+        // AppKit 的窗口操作只能在主线程做。run_on_main_thread 只是投递，
+        // 不等待 —— 同步失败也无从回报，因此内部自行记录。
+        window
+            .run_on_main_thread(move || {
+                apply_popup_appearance(&window, dark, follow_system);
+            })
+            .map_err(|e| AppError::WindowError(e.to_string()))?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, dark, follow_system);
+    }
     Ok(())
+}
+
+/// 在 macOS 主线程上把浮窗 NSWindow 的 appearance 设为指定明暗。
+///
+/// 拆成独立函数是为了让「传什么参数」的决策可被单测覆盖
+/// （`appearance_choice`），AppKit 调用本身留在条件编译边界内。
+#[cfg(target_os = "macos")]
+fn apply_popup_appearance(window: &tauri::WebviewWindow, dark: bool, follow_system: bool) {
+    use objc2::rc::Retained;
+    use objc2::runtime::AnyObject;
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{
+        NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua,
+        NSWindow,
+    };
+
+    if MainThreadMarker::new().is_none() {
+        tracing::warn!("[set_popup_theme] 不在主线程，跳过 appearance 同步");
+        return;
+    }
+    let Ok(ns_ptr) = window.ns_window() else {
+        return;
+    };
+    if ns_ptr.is_null() {
+        return;
+    }
+
+    // 用 Retained::retain + downcast 而不是 `&*(ptr as *const NSWindow)`：
+    // NSWindow 是 MainThreadOnly 类型，裸解引用绕过了它的线程约束，而且
+    // 生命周期完全靠调用方口头保证。retain 出来的 Retained 在作用域结束
+    // 时自动 release，与 tao 处理同一个 ns_window() 指针的方式一致
+    // （tao platform_impl/macos/window.rs 的 downcast::<NSWindow>()）。
+    //
+    // SAFETY: ns_window() 返回的是本窗口的有效 NSWindow 指针；retain 在
+    // 主线程上做一次 +1，函数返回时配对释放。窗口本身由 tauri 持有，
+    // 不会在这次调用期间销毁。
+    let Some(any) = (unsafe { Retained::retain(ns_ptr as *mut AnyObject) }) else {
+        return;
+    };
+    let Some(ns_window) = any.downcast::<NSWindow>().ok() else {
+        return;
+    };
+    let ns_window: &NSWindow = &ns_window;
+
+    match appearance_choice(dark, follow_system) {
+        AppearanceChoice::FollowSystem => {
+            // nil：窗口跟随系统外观，webview 的 prefers-color-scheme 也随之
+            // 保持可被系统变化刷新
+            ns_window.setAppearance(None);
+            tracing::debug!("[set_popup_theme] macOS appearance 清空（跟随系统）");
+        }
+        AppearanceChoice::ForceDark => {
+            let name = unsafe { NSAppearanceNameDarkAqua };
+            if let Some(appearance) = NSAppearance::appearanceNamed(name) {
+                ns_window.setAppearance(Some(&appearance));
+                tracing::debug!("[set_popup_theme] macOS appearance → DarkAqua");
+            }
+        }
+        AppearanceChoice::ForceLight => {
+            let name = unsafe { NSAppearanceNameAqua };
+            if let Some(appearance) = NSAppearance::appearanceNamed(name) {
+                ns_window.setAppearance(Some(&appearance));
+                tracing::debug!("[set_popup_theme] macOS appearance → Aqua");
+            }
+        }
+    }
+}
+
+/// 原生 appearance 的取值决策 —— 纯函数，可在任意平台单测。
+///
+/// `follow_system` 优先于 `dark`：system 档位下即便此刻是深色也不能钉死，
+/// 否则系统主题后续变化检测不到。
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppearanceChoice {
+    /// 清空 appearance，让窗口跟随系统（theme = system）
+    FollowSystem,
+    ForceDark,
+    ForceLight,
+}
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn appearance_choice(dark: bool, follow_system: bool) -> AppearanceChoice {
+    match (follow_system, dark) {
+        (true, _) => AppearanceChoice::FollowSystem,
+        (false, true) => AppearanceChoice::ForceDark,
+        (false, false) => AppearanceChoice::ForceLight,
+    }
 }
 
 /// 清除拖拽位置记忆，回到「跟随光标」的默认行为。
@@ -423,6 +552,54 @@ pub async fn open_onboarding_window(app: AppHandle) -> Result<(), AppError> {
         Err(e) => {
             tracing::error!("创建引导向导窗口失败: {}", e);
             Err(AppError::WindowError(format!("创建向导窗口失败: {}", e)))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{appearance_choice, AppearanceChoice};
+
+    // 主题偏好 × 当前明暗的六种组合 —— 对应开发规格的验收矩阵。
+    // 前两行是「应用显式主题与系统相反」，最容易出错的两种。
+    #[test]
+    fn explicit_light_forces_aqua_regardless_of_system() {
+        assert_eq!(
+            appearance_choice(false, false),
+            AppearanceChoice::ForceLight
+        );
+    }
+
+    #[test]
+    fn explicit_dark_forces_dark_aqua_regardless_of_system() {
+        assert_eq!(appearance_choice(true, false), AppearanceChoice::ForceDark);
+    }
+
+    // system 档位：无论此刻系统是深是浅，都必须清空 appearance。
+    // 钉死会让 webview 的 prefers-color-scheme 不再响应系统变化，
+    // 浮窗自己的 matchMedia 轮询从此读到死值。
+    #[test]
+    fn follow_system_never_pins_appearance() {
+        assert_eq!(
+            appearance_choice(false, true),
+            AppearanceChoice::FollowSystem
+        );
+        assert_eq!(
+            appearance_choice(true, true),
+            AppearanceChoice::FollowSystem
+        );
+    }
+
+    // follow_system 必须压过 dark：否则「深色偏好 → 改成跟随系统」
+    // 且系统正好深色时，窗口会继续被钉死。
+    #[test]
+    fn follow_system_takes_precedence_over_dark() {
+        for dark in [false, true] {
+            assert_eq!(
+                appearance_choice(dark, true),
+                AppearanceChoice::FollowSystem,
+                "dark={dark} 时 follow_system 仍应胜出"
+            );
         }
     }
 }
