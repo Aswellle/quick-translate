@@ -40,13 +40,13 @@ export function CopyButton({ text, className = "", label = "复制" }: CopyButto
       onClick={handleCopy}
       title={copied ? "已复制" : `复制${label}`}
       className={[
-        "inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs",
+        "inline-flex items-center gap-1 px-2 py-1 rounded-md text-[12.5px] font-medium",
         "transition-all duration-150",
         "hover:bg-[var(--hover-bg)] active:bg-[var(--active-bg)]",
         "active:scale-95",
         copied
-          ? "text-green-500 dark:text-green-400"
-          : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]",
+          ? "text-green-600 dark:text-green-400"
+          : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
         className,
       ].join(" ")}
     >

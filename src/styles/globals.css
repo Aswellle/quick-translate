@@ -38,10 +38,11 @@
   /* ── Text Colors ── */
   /* 对比度校准（WCAG AA ≥ 4.5:1 for body, ≥ 3:1 for large/hint text）：
      secondary 深一档保证正文级辅助文本可读；tertiary 用于元信息，
-     从 #AEAEB2（≈2.3:1，几乎不可读）提到 #86868B（≈3.9:1）。 */
+     #86868B ≈3.4:1 在玻璃材质上几乎不可读（实机验证 2026-10-20），
+     提到 #6E6E73（≈5.0:1）。 */
   --text-primary:         #1D1D1F;
   --text-secondary:       #515154;
-  --text-tertiary:        #86868B;
+  --text-tertiary:        #6E6E73;
   --text-placeholder:     #A1A1A6;
 
   /* ── Border / Divider ── */
@@ -58,13 +59,16 @@
   --focus-ring:           rgba(0, 122, 255, 0.35);
 
   /* ── Popup / Card ── */
-  /* 着色层刻意极薄（0.22）：系统材质（Acrylic/Popover）才是模糊的本体，
-     这层只是轻微提亮与文字衬底。0.55 的版本会把材质完全闷成色块 ——
-     「PRD 要玻璃但看到的是半透明板」的第二个根因（第一个是窗口不透明，
-     已由 transparent(true) + set_effects 解决）。 */
-  --popup-bg:            rgba(255, 255, 255, 0.22);
-  --popup-border:        rgba(255, 255, 255, 0.55);
-  --popup-shadow:        0 12px 40px rgba(0, 0, 0, 0.18), 0 2px 10px rgba(0, 0, 0, 0.10), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  /* 着色层刻意极薄（0.10）：实机对照（黑底白字探头，2026-10-20）证明
+     Windows DWM Acrylic（DWMSBT_TRANSIENTWINDOW）本身在工作 —— 背后的
+     文字被模糊成晕影 —— 但 0.22 的白 tint + 高光渐变把材质洗成了雾白
+     平板，玻璃感全靠 0.22 那点可怜的透度硬撑。0.10 让系统材质成为绝对
+     主角；文字衬底改由 ::before 的受光渐变承担（深色背景半区更暗、
+     浅色背景半区更亮的真实玻璃行为）。0.55 的教训（闷成色块）与 0.22
+     的教训（雾白板）都写在这里供后人参考。 */
+  --popup-bg:            rgba(255, 255, 255, 0.10);
+  --popup-border:        rgba(255, 255, 255, 0.50);
+  --popup-shadow:        0 12px 40px rgba(0, 0, 0, 0.22), 0 2px 10px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
   --card-bg:             rgba(255, 255, 255, 0.60);
   --card-border:         rgba(0, 0, 0, 0.06);
   --card-shadow:         0 2px 8px rgba(0, 0, 0, 0.06);
@@ -102,8 +106,8 @@
   --surface-elevated:     rgba(44, 44, 46, 0.78);
 
   --text-primary:         #F5F5F7;
-  --text-secondary:       #A8A8AD;
-  --text-tertiary:        #7C7C81;
+  --text-secondary:       #C0C0C5;
+  --text-tertiary:        #98989D;
   --text-placeholder:     #6E6E73;
 
   --border-primary:       rgba(255, 255, 255, 0.12);
@@ -117,8 +121,8 @@
   --active-bg:            rgba(255, 255, 255, 0.10);
   --focus-ring:           rgba(0, 122, 255, 0.45);
 
-  --popup-bg:            rgba(28, 28, 30, 0.28);
-  --popup-border:        rgba(255, 255, 255, 0.16);
+  --popup-bg:            rgba(28, 28, 30, 0.16);
+  --popup-border:        rgba(255, 255, 255, 0.14);
   --popup-shadow:        0 14px 44px rgba(0, 0, 0, 0.55), 0 2px 12px rgba(0, 0, 0, 0.38), 0 0 0 0.5px rgba(255, 255, 255, 0.10);
   --card-bg:             rgba(44, 44, 46, 0.60);
   --card-border:         rgba(255, 255, 255, 0.08);
@@ -185,7 +189,10 @@ html, body, #root {
      会与 PopupWindow 的两段式量高（F6）互相打架 */
 }
 
-/* 光学层 1：顶部内高光 + 上半区渐变 —— 模拟玻璃受光面 */
+/* 光学层 1：顶部内高光 + 上半区渐变 —— 模拟玻璃受光面。
+   tint 减薄到 0.10 后，文字可读性主要靠这层兜底：高光从顶部压暗版
+   换成「亮顶 + 快速衰减」，让浅色背景下标题区仍亮、深色背景下顶部
+   有一道真实玻璃的反光带。 */
 .popup-container::before {
   content: "";
   position: absolute;
@@ -194,15 +201,15 @@ html, body, #root {
   border-radius: inherit;
   background:
     /* 左上角一点镜面高光 */
-    radial-gradient(120% 60% at 8% 0%, rgba(255, 255, 255, 0.30) 0%, transparent 60%),
-    /* 纵向受光渐变 */
+    radial-gradient(120% 60% at 8% 0%, rgba(255, 255, 255, 0.38) 0%, transparent 55%),
+    /* 纵向受光渐变：顶部亮带快速衰减 */
     linear-gradient(
       to bottom,
-      rgba(255, 255, 255, 0.16) 0%,
-      rgba(255, 255, 255, 0.05) 24%,
-      transparent 58%
+      rgba(255, 255, 255, 0.20) 0%,
+      rgba(255, 255, 255, 0.06) 22%,
+      transparent 52%
     );
-  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.42);
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.45);
   z-index: 1;
 }
 
@@ -214,27 +221,27 @@ html, body, #root {
   pointer-events: none;
   border-radius: inherit;
   box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.22),
-    inset 0 -1px 0 0 rgba(255, 255, 255, 0.06);
+    inset 0 0 0 1px rgba(255, 255, 255, 0.28),
+    inset 0 -1px 0 0 rgba(255, 255, 255, 0.08);
   z-index: 1;
 }
 
 :root.dark .popup-container::before {
   background:
-    radial-gradient(120% 60% at 8% 0%, rgba(255, 255, 255, 0.14) 0%, transparent 62%),
+    radial-gradient(120% 60% at 8% 0%, rgba(255, 255, 255, 0.16) 0%, transparent 58%),
     linear-gradient(
       to bottom,
-      rgba(255, 255, 255, 0.09) 0%,
-      rgba(255, 255, 255, 0.025) 24%,
-      transparent 58%
+      rgba(255, 255, 255, 0.10) 0%,
+      rgba(255, 255, 255, 0.03) 22%,
+      transparent 52%
     );
-  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.16);
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.18);
 }
 
 :root.dark .popup-container::after {
   box-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, 0.10),
-    inset 0 -1px 0 0 rgba(255, 255, 255, 0.03);
+    inset 0 0 0 1px rgba(255, 255, 255, 0.12),
+    inset 0 -1px 0 0 rgba(255, 255, 255, 0.04);
 }
 
 /* 内容必须压在光学层之上（两层伪元素都是 z-index:1） */
@@ -255,6 +262,38 @@ html, body, #root {
   /* 32px 容纳 26px 命中区（14px 色点 + 上下各 6px padding） */
   height: 32px;
   padding: 2px 0.75rem 0;
+  /* 折叠/展开时标题栏高度固定，让窗口 resize 的视觉落点稳定 */
+  transition: height 180ms var(--ease-out-expo);
+}
+
+/* 折叠态：标题栏吃掉整个 44px 窗口高度，信息垂直居中。
+   此前 32px 标题栏挂在 44px 窗口顶部，底部 12px 是一截无意义的空玻璃
+   —— 折叠态应当是一条完整、自洽的信息条，而不是「被裁掉的展开态」。 */
+.popup-titlebar--collapsed {
+  height: 44px;
+  padding: 0 0.75rem;
+}
+
+/* 折叠态状态点：颜色即状态（与展开态内容视图一致的信息密度） */
+.popup-status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+  transition: background-color 200ms ease;
+}
+.popup-status-dot--success { background-color: var(--system-green); }
+.popup-status-dot--loading {
+  background-color: var(--system-orange);
+  /* 呼吸：唯一在动的元素，语义是「还在进行」 */
+  animation: statusBreathe 1.4s ease-in-out infinite;
+}
+.popup-status-dot--error { background-color: var(--system-red); }
+.popup-status-dot--idle { background-color: var(--text-tertiary); opacity: 0.55; }
+
+@keyframes statusBreathe {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.45; transform: scale(0.82); }
 }
 
 /* 折叠态摘要：单行截断显示译文 */
@@ -264,10 +303,38 @@ html, body, #root {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11.5px;
-  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.005em;
+  color: var(--text-primary);
   animation: fadeIn 180ms var(--ease-out-expo) forwards;
 }
+
+/* 折叠态语言方向：右端弱化的元信息，与摘要构成「内容 + 上下文」一行 */
+.popup-titlebar__lang {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--text-tertiary);
+  animation: fadeIn 220ms var(--ease-out-expo) forwards;
+}
+
+.popup-titlebar__lang-arrow {
+  opacity: 0.55;
+  font-size: 9px;
+}
+
+/* 展开/宽度切换的内容入场：纯 opacity + 极轻上浮，掩住 OS 窗口
+   瞬时改宽引发的文本重排跳变。180ms 与窗口 resize 同步收尾。 */
+@keyframes contentEnter {
+  from { opacity: 0; transform: translateY(3px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.popup-content-enter { animation: contentEnter 180ms var(--ease-out-expo) both; }
 
 /* 键盘按键提示胶囊 */
 .kbd-hint {
@@ -317,6 +384,15 @@ html, body, #root {
   /* 字形默认隐藏，hover 任意按钮时整组显出 */
   opacity: 0;
   transition: opacity 150ms ease;
+  /* 图标语义切换（折叠↔展开 / 标准↔阅读宽）时重挂载并轻缩放入场，
+     与 hover 的 opacity 淡入叠加不冲突（transform 独立于 opacity） */
+  animation: glyphSwap 160ms var(--ease-out-expo) both;
+}
+
+/* 字形互换：从 0.82 轻弹到位，避免硬切 */
+@keyframes glyphSwap {
+  from { transform: scale(0.82); }
+  to   { transform: scale(1); }
 }
 
 .traffic-lights.group:hover .traffic-light:not(:disabled) svg { opacity: 1; }
@@ -511,6 +587,14 @@ select.input-field {
 }
 .animate-popup { animation: popupIn 140ms var(--ease-out-expo) both; }
 .animate-popup-out { animation: popupOut 90ms ease-in both; }
+
+/* 设置面板：Tab 内容切换 / 徽章出现的轻淡入（纯 opacity，不位移 ——
+   内容区切换带位移会让人「页面跳了一下」） */
+@keyframes fadeInSoft {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.animate-fade-in { animation: fadeInSoft 150ms ease-out both; }
 
 /* 引导向导：步骤切换（fade + 上浮，略带弹性） */
 @keyframes stepIn {

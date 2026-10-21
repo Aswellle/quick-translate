@@ -161,6 +161,7 @@ impl HistoryRepository {
         let now_ms = crate::types::now_unix_ms();
         let ms_7_days: i64 = 7 * 24 * 60 * 60 * 1000;
         let ms_30_days: i64 = 30 * 24 * 60 * 60 * 1000;
+        let ms_24h: i64 = 24 * 60 * 60 * 1000;
 
         let last_7_days: u64 = conn
             .query_row(
@@ -179,6 +180,41 @@ impl HistoryRepository {
             )
             .map(|n| n as u64)
             .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+        let last_24h: u64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM translation_records WHERE created_at >= ?1",
+                rusqlite::params![now_ms - ms_24h],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|n| n as u64)
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+
+        // 近 7 天逐日计数（本地时区日界）：SQL 只按毫秒区间过滤，
+        // 日归属在 Rust 侧做 —— SQLite 的日期函数走 UTC，本地时区的
+        // 「今天」与其不一致，混用会让趋势图整体错位数小时。
+        let mut daily_7d: Vec<crate::types::DailyCount> = Vec::with_capacity(7);
+        {
+            let today_midnight = local_midnight_ms(now_ms);
+            for i in (0..7).rev() {
+                let day_start = today_midnight - i as i64 * ms_24h;
+                let day_end = day_start + ms_24h;
+                // 次数与字符量一次查询同时取回（悬浮提示需要字符明细）
+                let (count, chars): (i64, i64) = conn
+                    .query_row(
+                        "SELECT COUNT(*), COALESCE(SUM(LENGTH(source_text)), 0)
+                         FROM translation_records WHERE created_at >= ?1 AND created_at < ?2",
+                        rusqlite::params![day_start, day_end],
+                        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                    )
+                    .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+                daily_7d.push(crate::types::DailyCount {
+                    date_ms: day_start,
+                    count: count as u64,
+                    chars: chars as u64,
+                });
+            }
+        }
 
         let mut by_provider: HashMap<String, u64> = HashMap::new();
         {
@@ -206,6 +242,8 @@ impl HistoryRepository {
             by_provider,
             last_7_days,
             last_30_days,
+            last_24h,
+            daily_7d,
         })
     }
 
@@ -259,6 +297,23 @@ impl HistoryRepository {
 }
 
 // ---- 内部查询辅助函数 ----
+
+/// 计算给定 Unix 毫秒时刻所在「本地时区当天 0 点」的 Unix 毫秒。
+///
+/// 用 `time` crate 的本地偏移（已在依赖树中，Windows 走 WinAPI /
+/// macOS 走 localtime_r，比手搓 libc 声明可靠）。DST 切换日一天可能
+/// 是 23/25 小时，7 天窗口的日边界因此整体平移 ≤1h，对趋势图无感知。
+fn local_midnight_ms(now_ms: i64) -> i64 {
+    use time::OffsetDateTime;
+    let now = OffsetDateTime::from_unix_timestamp(now_ms.div_euclid(1000))
+        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+    // to_offset(UtcOffset) 失败（拿不到本地时区）时按 UTC 兜底：
+    // 误差只是时区偏移，趋势图仍然成立
+    let local =
+        now.to_offset(time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC));
+    let day_start = local.replace_time(time::Time::MIDNIGHT);
+    day_start.unix_timestamp() * 1000
+}
 
 fn query_all(
     conn: &Connection,

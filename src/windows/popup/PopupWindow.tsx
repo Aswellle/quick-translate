@@ -3,7 +3,7 @@
 
 import { useEffect, useCallback, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { EVENTS } from "@/lib/constants";
+import { EVENTS, getLangName } from "@/lib/constants";
 import {
   hidePopup,
   resizePopup,
@@ -357,7 +357,17 @@ export function PopupWindow() {
     sync();
     const observer = new MutationObserver(sync);
     observer.observe(root, { attributes: true, attributeFilter: ["class"] });
-    return () => observer.disconnect();
+
+    // 双保险：系统主题变化（跟随系统模式）在某些 WebView2 运行时上
+    // matchMedia 的 change 事件不可靠，主动轮询兜底 —— popup 窗口长期
+    // 驻留，用户切了系统深色后浮窗材质应尽快跟上。轮询很便宜：只是读
+    // 一次 classList，真正的 IPC 有 lastDark 守着。
+    const interval = window.setInterval(sync, 2000);
+
+    return () => {
+      observer.disconnect();
+      window.clearInterval(interval);
+    };
   }, []);
 
   // ── 渲染 ──
@@ -370,8 +380,15 @@ export function PopupWindow() {
           closing ? "animate-popup-out" : "",
         ].join(" ")}
       >
-        {/* ── 标题栏：红绿灯 + 折叠态摘要 ── */}
-        <div className="popup-titlebar">
+        {/* ── 标题栏：红绿灯 + 折叠态一体化信息条 ──
+            折叠态承载的必要信息按优先级：状态（点）→ 译文摘要 → 语言方向。
+            翻译源标识刻意不放 —— 折叠时它属于噪音，展开即见。 */}
+        <div
+          className={[
+            "popup-titlebar",
+            collapsed ? "popup-titlebar--collapsed" : "",
+          ].join(" ")}
+        >
           <TrafficLights
             onClose={handleClose}
             onToggleCollapse={handleToggleCollapse}
@@ -381,21 +398,37 @@ export function PopupWindow() {
             activated={activated}
           />
           {collapsed && (
-            <span className="popup-titlebar__summary">
-              {status === "success" && result
-                ? result.translated_text
-                : status === "loading"
-                  ? "翻译中…"
-                  : status === "error"
-                    ? "翻译失败"
-                    : "等待翻译…"}
-            </span>
+            <>
+              <span
+                className={`popup-status-dot popup-status-dot--${status}`}
+                aria-hidden="true"
+              />
+              <span className="popup-titlebar__summary">
+                {status === "success" && result
+                  ? result.translated_text
+                  : status === "loading"
+                    ? "翻译中…"
+                    : status === "error"
+                      ? (errorMessage ?? "翻译失败")
+                      : "等待翻译…"}
+              </span>
+              {status === "success" && result && (
+                <span className="popup-titlebar__lang">
+                  {getLangName(result.detected_source_lang)}
+                  <span className="popup-titlebar__lang-arrow">→</span>
+                  {getLangName(result.target_lang)}
+                </span>
+              )}
+            </>
           )}
         </div>
 
-        {/* ── 内容区（折叠时隐藏）── */}
+        {/* ── 内容区（折叠时隐藏）──
+            key 绑定宽度档位：绿黄灯切换时重挂载以重放 180ms 淡入，
+            掩住 OS 窗口瞬时改宽带来的文本重排跳变（纯视觉过渡，无状态损失
+            —— 内容视图本身是无状态的） */}
         {!collapsed && (
-          <>
+          <div key={wide ? "wide" : "normal"} className="popup-content-enter">
             {status === "idle" && (
               <div className="px-4 pb-4 text-xs text-[var(--text-tertiary)] text-center">
                 等待翻译…
@@ -411,7 +444,7 @@ export function PopupWindow() {
                 message={errorMessage ?? undefined}
               />
             )}
-          </>
+          </div>
         )}
       </div>
     </ErrorBoundary>

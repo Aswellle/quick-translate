@@ -28,6 +28,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender = "0.2"
 
+# 本地时区日界计算（history::get_stats 的 daily_7d）。
+# 已在依赖树中（传递依赖），显式声明并开启 local-offset。
+time = { version = "0.3", features = ["local-offset"] }
+
 thiserror = "2"
 async-trait = "0.1"
 

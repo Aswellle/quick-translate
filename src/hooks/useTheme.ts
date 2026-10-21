@@ -32,12 +32,17 @@ export function useTheme() {
 
   // 监听系统主题变化（仅 "system" 模式时生效）
   const systemMqRef = useRef<MediaQueryList | null>(null);
+  const systemPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     // 清理旧的系统主题监听器
     if (systemMqRef.current) {
       systemMqRef.current.onchange = null;
       systemMqRef.current = null;
+    }
+    if (systemPollRef.current) {
+      clearInterval(systemPollRef.current);
+      systemPollRef.current = null;
     }
 
     applyTheme(theme);
@@ -48,11 +53,22 @@ export function useTheme() {
       mq.onchange = (e) => {
         document.documentElement.classList.toggle("dark", e.matches);
       };
+      // WebView2 的 matchMedia change 事件在部分运行时上不可靠
+      // （prefers-color-scheme 动态刷新是已知薄弱点，实机 2026-10-20
+      // 验证「跟随系统」下切系统主题浮窗纹丝不动）。轮询重读兜底：
+      // applyTheme("system") 幂等 —— 明暗没变时 toggle 不产生 DOM
+      // mutation，每 2s 的开销只是一次 matchMedia 查询。
+      systemPollRef.current = setInterval(() => applyTheme("system"), 2000);
     }
 
     return () => {
       if (systemMqRef.current) {
         systemMqRef.current.onchange = null;
+        systemMqRef.current = null;
+      }
+      if (systemPollRef.current) {
+        clearInterval(systemPollRef.current);
+        systemPollRef.current = null;
       }
     };
   }, [theme]);

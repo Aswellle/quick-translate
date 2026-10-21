@@ -40,6 +40,9 @@ export interface StatsResult {
   by_provider: Record<string, number>;
   last_7_days: number;
   last_30_days: number;
+  last_24h: number;
+  /** 近 7 天逐日计数，升序，末位是今天（部分）。date_ms 为本地时区当日 0 点 */
+  daily_7d: Array<{ date_ms: number; count: number; chars: number }>;
 }
 
 export interface AppConfig {

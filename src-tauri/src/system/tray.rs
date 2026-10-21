@@ -425,8 +425,10 @@ fn open_settings_at(app: &AppHandle, tab: Option<&str>) {
     match WebviewWindowBuilder::new(app, "settings", WebviewUrl::App(url.into()))
         .title("QuickTranslate 设置")
         .additional_browser_args(crate::system::BROWSER_ARGS)
-        .inner_size(600.0, 480.0)
-        .min_inner_size(500.0, 400.0)
+        // 仪表盘（趋势图 + 指标卡）需要纵向空间：480 高的首屏只露得出
+        // 健康横幅。640×560 让首屏能完整呈现仪表盘 + 第一组设置项。
+        .inner_size(640.0, 560.0)
+        .min_inner_size(520.0, 440.0)
         .resizable(true)
         .center()
         .build()
