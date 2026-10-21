@@ -689,12 +689,17 @@ select.input-field {
 /* 减少透明效果：系统设置里开了「降低透明度」时，用户明确要求更实的底色。
    阅读衬底提到接近不透明，玻璃层同步加厚 —— 此时玻璃感是次要的，
    可读性与视觉舒适度优先。
-   注意：本规则只影响 CSS 层；OS 原生材质（Acrylic / Liquid Glass）
-   由系统自行决定是否降级，webview 无法控制。
+   注意：本规则只影响 CSS 层；OS 原生材质由 set_popup_transparency
+   命令在 reduce 时整个撤掉（只加厚 CSS 压不住系统合成的边缘反光）。
 
    深色配方必须写在同一个 @media 块内并用 :root.dark 提权：若把它写成
    块外的独立规则，正常模式下也会覆盖 --popup-reading-bg，把深色衬底
-   变成近乎纯黑。 */
+   变成近乎纯黑。
+
+   深色不透明度取 0.88 而非 0.96：0.96 在深色桌面上几乎就是纯黑，
+   与「偏淡」的整体取向相反，也让 reduce 模式看起来像另一个应用。
+   0.88 仍足以压住任意桌面背景（白字对比度 > 12:1），同时保留一层
+   可察觉的底色而非死黑。 */
 @media (prefers-reduced-transparency: reduce) {
   .popup-reading-surface {
     background: rgba(255, 255, 255, 0.94);
@@ -706,10 +711,10 @@ select.input-field {
     -webkit-backdrop-filter: none;
   }
   :root.dark .popup-reading-surface {
-    background: rgba(28, 28, 30, 0.96);
+    background: rgba(28, 28, 30, 0.88);
   }
   :root.dark .popup-container {
-    background: rgba(28, 28, 30, 0.82);
+    background: rgba(28, 28, 30, 0.74);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }

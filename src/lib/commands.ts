@@ -239,6 +239,17 @@ export async function setPopupTheme(
   return invoke("set_popup_theme", { dark, followSystem });
 }
 
+/**
+ * 用户开启「降低透明度」时清空浮窗的 OS 原生材质，关闭时重新施加。
+ *
+ * 只改 CSS 压不住窗口背后的 Acrylic / Liquid Glass —— 那层由系统合成，
+ * 边缘反光与亮度调制照旧。`enhanced = true` 表示需要更实的外观
+ * （即 prefers-reduced-transparency: reduce 生效）。
+ */
+export async function setPopupTransparency(enhanced: boolean): Promise<void> {
+  return invoke("set_popup_transparency", { enhanced });
+}
+
 export async function resizePopup(width: number, height: number): Promise<void> {
   return invoke("resize_popup", { width, height });
 }

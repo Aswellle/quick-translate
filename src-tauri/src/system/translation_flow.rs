@@ -46,7 +46,11 @@ const POPUP_LOGICAL_H: f64 = popup_geometry::HEIGHT_INITIAL;
 /// 而 tauri 内层用 `let _ =` 丢弃了施加结果（`vibrancy::set_window_effects`
 /// 恒返回 `Ok`），所以**任何返回值都不能证明材质画出来了**。能确认的只有
 /// `log_material_decision` 记下的「本机打算用哪一档」。
-fn popup_effects() -> WindowEffectsConfig {
+///
+/// `pub(crate)` 供 `commands::system::set_popup_transparency` 在用户关掉
+/// 「降低透明度」后重新施加同一份材质 —— 材质参数只有这一个来源，恢复
+/// 路径不能另抄一份（抄了就会在两处漂移）。
+pub(crate) fn popup_effects() -> WindowEffectsConfig {
     #[cfg(target_os = "windows")]
     {
         EffectsBuilder::new()

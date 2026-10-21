@@ -174,6 +174,40 @@ pub async fn set_popup_theme(
     Ok(())
 }
 
+/// 用户开启「降低透明度」时清空浮窗的 OS 原生材质，关闭时重新施加。
+///
+/// 为什么光靠 CSS 不够：CSS 层把底色加厚只能压住 webview 自己画的东西，
+/// 而窗口背后的 Acrylic / Liquid Glass 仍由系统合成 —— 边缘反光、亮度
+/// 调制照旧。用户明确要求「减少透明效果」时，材质本身也必须撤掉，否则
+/// 观感依然是半透明的。
+///
+/// 恢复路径复用 `translation_flow::popup_effects()` 而不是另抄一份参数：
+/// 材质参数只有那一个来源，抄一份就会在两处漂移（改了建窗忘了改恢复，
+/// 用户切换一次「降低透明度」就永久丢失玻璃材质）。
+///
+/// `enhanced = true` 表示「需要更实的外观」，即 reduce 生效。
+#[tauri::command]
+pub async fn set_popup_transparency(app: AppHandle, enhanced: bool) -> Result<(), AppError> {
+    let Some(window) = app.get_webview_window("popup") else {
+        return Ok(());
+    };
+    let effects = if enhanced {
+        // None → tauri 走 clear_effects()，把窗口的原生材质整个撤掉
+        None
+    } else {
+        Some(crate::system::translation_flow::popup_effects())
+    };
+    window
+        .set_effects(effects)
+        .map_err(|e| AppError::WindowError(e.to_string()))?;
+    tracing::debug!(
+        "[set_popup_transparency] enhanced={} → 原生材质{}",
+        enhanced,
+        if enhanced { "已清空" } else { "已恢复" }
+    );
+    Ok(())
+}
+
 /// macOS：把浮窗的 `NSWindow` appearance 同步到与 CSS 一致的明暗。
 ///
 /// 为什么不能用 `tauri::Window::set_theme`：它在 macOS 上落到

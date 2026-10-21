@@ -11,6 +11,7 @@ import {
   activatePopup,
   rememberPopupPosition,
   setPopupTheme,
+  setPopupTransparency,
   type PopupGeometry,
 } from "@/lib/commands";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
@@ -386,6 +387,30 @@ export function PopupWindow() {
       unsubscribe();
       window.clearInterval(interval);
     };
+  }, []);
+
+  // ── 降低透明度：CSS 之外还要撤掉 OS 原生材质 ──────────────────────
+  // CSS 的 @media (prefers-reduced-transparency) 只能压住 webview 自己
+  // 绘制的内容。窗口背后的 Acrylic / Liquid Glass 由系统合成，边缘反光
+  // 与亮度调制照旧 —— 只改 CSS 的话，用户开了「降低透明度」仍会觉得
+  // 浮窗是半透明的。所以这里同步把原生材质也撤掉，关掉时再恢复。
+  //
+  // 恢复复用后端同一份 popup_effects()，前端不持有材质参数。
+  // 首次挂载时也要同步一次：系统偏好可能是应用启动前就设好的，
+  // 不会触发 change 事件。
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-reduced-transparency: reduce)");
+    let last: boolean | null = null;
+    const sync = () => {
+      if (mq.matches === last) return;
+      last = mq.matches;
+      setPopupTransparency(mq.matches).catch((err) =>
+        console.error("[PopupWindow] 同步降低透明度失败:", err)
+      );
+    };
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
   }, []);
 
   // ── 渲染 ──
