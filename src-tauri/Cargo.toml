@@ -11,7 +11,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
+# 2.12 起 tauri-utils 才有 LiquidGlass 材质变体（macOS 26+）。
+# 下限锁到 2.12：2.10/2.11 的 Effect 枚举里没有这两个变体，编译不过。
+tauri = { version = "2.12", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
