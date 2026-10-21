@@ -698,14 +698,25 @@ select.input-field {
 
    深色不透明度取 0.88 而非 0.96：0.96 在深色桌面上几乎就是纯黑，
    与「偏淡」的整体取向相反，也让 reduce 模式看起来像另一个应用。
-   0.88 仍足以压住任意桌面背景（白字对比度 > 12:1），同时保留一层
-   可察觉的底色而非死黑。 */
+   0.88 仍足以压住任意桌面背景（白字对比度 > 11:1），同时保留一层
+   可察觉的底色而非死黑。
+
+   ── container 为什么要提到与阅读衬底同级 ──
+   标题栏（语言方向标签）与操作栏（复制按钮、快捷键提示）不在阅读
+   衬底覆盖范围内，它们的可读性只由 container 的 alpha 保证。原先把
+   container 留在 0.72 / 0.74，在纯白或高饱和黄桌面上 secondary 文字
+   只有 2.8–4.0:1，低于 4.5:1 —— reduce 模式恰恰是用户要求「看得更清
+   楚」的时候，这里反而更糊。提到 0.94 / 0.88 后全部达标。
+
+   顺带把深色 tertiary 从 #98989D 提到 #C7C7CC、浅色从 #6E6E73 收到
+   #69696E：这两个是**只在 reduce 模式下生效**的局部覆盖，normal 模式
+   的层次关系不变。按 DECISIONS D7，先调文字色，不动玻璃厚度。 */
 @media (prefers-reduced-transparency: reduce) {
   .popup-reading-surface {
     background: rgba(255, 255, 255, 0.94);
   }
   .popup-container {
-    background: rgba(255, 255, 255, 0.72);
+    background: rgba(255, 255, 255, 0.94);
     /* 衬底已接近纯色，30px 模糊只剩开销没有收益 */
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
@@ -714,9 +725,16 @@ select.input-field {
     background: rgba(28, 28, 30, 0.88);
   }
   :root.dark .popup-container {
-    background: rgba(28, 28, 30, 0.74);
+    background: rgba(28, 28, 30, 0.88);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
+  }
+  /* 文字色局部提级：只在本媒体查询内覆盖，normal 模式不受影响 */
+  :root {
+    --text-tertiary: #69696E;
+  }
+  :root.dark {
+    --text-tertiary: #C7C7CC;
   }
 }
 
