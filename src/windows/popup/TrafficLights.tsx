@@ -109,7 +109,19 @@ function TrafficLight({
   disabled?: boolean;
   /** 折叠按钮：展开/折叠是开合关系，用 aria-expanded */
   ariaExpanded?: boolean;
-  /** 宽度按钮：标准/阅读宽是互斥档位，用 aria-pressed */
+  /**
+   * 宽度按钮：标准/阅读宽是二档切换，用 aria-pressed。
+   *
+   * 这里**不是** radiogroup + aria-checked：radiogroup 要求组内多个
+   * radio 平铺，每个档位一个可聚焦控件；本控件是单个按钮在两组状态间
+   * 来回切（WAI-ARIA 的 toggle button 模式），aria-pressed 表达的正是
+   * 「这个按钮当前是否处于按下态」。
+   *
+   * 何时该改：档位增加到 3 个以上时，单按钮无法承载 N 选 1，必须拆成
+   * radiogroup + 多个 radio + aria-checked，否则用户只能靠反复点击
+   * 试出所有档位。`TrafficLights.test.tsx` 里有一条测试锁定了当前契约，
+   * 改动语义时会先失败，提醒同步更新读屏预期。
+   */
   ariaPressed?: boolean;
 }) {
   // 字形按语义键重挂载：折叠 ↔ 展开、标准 ↔ 阅读宽 的图标互换

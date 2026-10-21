@@ -68,6 +68,23 @@ describe("TrafficLights 无障碍契约", () => {
     expect(wideBtn.getAttribute("aria-pressed")).toBe("true");
   });
 
+  it("宽度按钮是 toggle button，不是 radiogroup 成员", () => {
+    // 锁定语义选择：当前只有两档（标准 400 / 阅读 520），单按钮在两组
+    // 状态间来回切，对应 WAI-ARIA 的 toggle button 模式。若将来档位
+    // 增加到 3 个以上，这条测试会失败 —— 那时必须改成 radiogroup +
+    // 多个 radio + aria-checked，而不是继续往 aria-pressed 上堆语义。
+    const { container } = render();
+    const [, , wideBtn] = buttons(container);
+
+    expect(wideBtn.getAttribute("role")).toBeNull();
+    expect(wideBtn.getAttribute("aria-checked")).toBeNull();
+    expect(container.querySelector('[role="radiogroup"]')).toBeNull();
+    // 容器上也不该出现 radio 语义
+    for (const b of buttons(container)) {
+      expect(b.getAttribute("role")).not.toBe("radio");
+    }
+  });
+
   it("折叠态下宽度按钮被禁用，且不参与 aria-pressed 播报为可切换", () => {
     const { container } = render({ collapsed: true });
     const [, , wideBtn] = buttons(container);
