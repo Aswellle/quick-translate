@@ -43,8 +43,10 @@ export function ErrorView({ code, message }: ErrorViewProps) {
         </svg>
       </div>
 
-      {/* 错误信息 */}
-      <p className="text-[14px] font-medium text-[var(--text-primary)] leading-relaxed max-w-[280px]">
+      {/* 错误信息 — 套阅读衬底：错误文本是用户此刻唯一要读的内容，
+          压在裸露的玻璃上最容易在杂乱背景里读丢。只包文字，不包
+          图标和操作行，避免衬底变成一块覆盖全屏的暗板。 */}
+      <p className="popup-reading-surface px-3.5 py-2 text-[14px] font-medium text-[var(--text-primary)] leading-relaxed max-w-[280px]">
         {displayMessage}
       </p>
 
