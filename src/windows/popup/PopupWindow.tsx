@@ -399,10 +399,24 @@ export function PopupWindow() {
           />
           {collapsed && (
             <>
+              {/* 状态点：颜色即状态，但颜色对屏幕阅读器不可见。
+                  role="status" 让辅助技术播报状态变化；视觉用户看到的
+                  仍是那个会呼吸的小圆点，文字用 sr-only 藏起来。
+                  aria-live="polite" 而非 assertive：翻译是用户主动触发的，
+                  不该打断正在朗读的其他内容。 */}
               <span
                 className={`popup-status-dot popup-status-dot--${status}`}
                 aria-hidden="true"
               />
+              <span className="sr-only" role="status" aria-live="polite">
+                {status === "success"
+                  ? "翻译完成"
+                  : status === "loading"
+                    ? "正在翻译"
+                    : status === "error"
+                      ? "翻译失败"
+                      : "等待翻译"}
+              </span>
               <span className="popup-titlebar__summary">
                 {status === "success" && result
                   ? result.translated_text

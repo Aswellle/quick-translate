@@ -452,6 +452,12 @@ html, body, #root {
 
 .traffic-lights.group:hover .traffic-light:not(:disabled) svg { opacity: 1; }
 
+/* 键盘焦点同样要显出字形。
+   原先只有 group:hover 一条规则，Tab 聚焦时能看到 focus ring 却看不到
+   图标 —— 对键盘用户来说三个按钮就是三个纯色圆点，无法分辨哪个是关闭、
+   哪个是折叠。:focus-visible 而非 :focus：鼠标点击后不该让字形常驻。 */
+.traffic-lights:focus-within .traffic-light:focus-visible svg { opacity: 1; }
+
 .traffic-light:hover:not(:disabled) { filter: brightness(1.08); }
 .traffic-light:active:not(:disabled) { transform: scale(0.9); filter: brightness(0.9); }
 

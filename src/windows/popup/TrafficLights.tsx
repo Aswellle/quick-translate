@@ -44,6 +44,7 @@ export function TrafficLights({
         variant="collapse"
         title={collapsed ? "展开" : "折叠"}
         onClick={onToggleCollapse}
+        ariaExpanded={!collapsed}
         glyph={
           collapsed ? (
             <path
@@ -67,6 +68,7 @@ export function TrafficLights({
         title={wide ? "标准宽度" : "阅读宽度"}
         onClick={onToggleWide}
         disabled={collapsed}
+        ariaPressed={wide}
         glyph={
           wide ? (
             <path
@@ -97,21 +99,33 @@ function TrafficLight({
   onClick,
   glyph,
   disabled = false,
+  ariaExpanded,
+  ariaPressed,
 }: {
   variant: "close" | "collapse" | "wide";
   title: string;
   onClick: () => void;
   glyph: React.ReactNode;
   disabled?: boolean;
+  /** 折叠按钮：展开/折叠是开合关系，用 aria-expanded */
+  ariaExpanded?: boolean;
+  /** 宽度按钮：标准/阅读宽是互斥档位，用 aria-pressed */
+  ariaPressed?: boolean;
 }) {
   // 字形按语义键重挂载：折叠 ↔ 展开、标准 ↔ 阅读宽 的图标互换
   // 由 CSS 动画交叉淡入，而不是硬切（硬切在 150ms 的 hover 淡入
   // 旁边显得突兀，像闪了一下）
+  //
+  // aria-label 已经写明动作（"折叠"/"展开"），aria-expanded / aria-pressed
+  // 补的是**当前状态**：屏幕阅读器只读 label 时，用户无法知道现在是展开
+  // 还是折叠、是标准宽还是阅读宽。
   return (
     <button
       type="button"
       aria-label={title}
       title={title}
+      aria-expanded={ariaExpanded}
+      aria-pressed={ariaPressed}
       onClick={onClick}
       disabled={disabled}
       className={`traffic-light traffic-light--${variant}`}
