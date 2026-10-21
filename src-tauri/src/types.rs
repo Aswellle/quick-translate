@@ -99,6 +99,21 @@ pub struct StatsResult {
     pub by_provider: HashMap<String, u64>,
     pub last_7_days: u64,
     pub last_30_days: u64,
+    /// 近 24 小时翻译次数（仪表盘「最近 24h」卡片）
+    pub last_24h: u64,
+    /// 近 7 天逐日翻译次数，按时间升序；末位是今天（部分）。
+    /// 每日边界按本地时区计算 —— 仪表盘趋势图的横轴。
+    pub daily_7d: Vec<DailyCount>,
+}
+
+/// 单日翻译计数（daily_7d 的元素）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DailyCount {
+    /// 当日 0 点的 Unix 毫秒（本地时区）
+    pub date_ms: i64,
+    pub count: u64,
+    /// 当日翻译的源字符总量（悬浮提示的详细数据）
+    pub chars: u64,
 }
 
 /// 浮窗定位信息（Rust → 前端 event）

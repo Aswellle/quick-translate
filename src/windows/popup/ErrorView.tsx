@@ -44,7 +44,7 @@ export function ErrorView({ code, message }: ErrorViewProps) {
       </div>
 
       {/* 错误信息 */}
-      <p className="text-sm text-[var(--text-secondary)] leading-relaxed max-w-[280px]">
+      <p className="text-[14px] font-medium text-[var(--text-primary)] leading-relaxed max-w-[280px]">
         {displayMessage}
       </p>
 
@@ -59,7 +59,7 @@ export function ErrorView({ code, message }: ErrorViewProps) {
             前往设置
           </button>
         )}
-        <span className="text-[11px] text-[var(--text-tertiary)]">
+        <span className="text-[11.5px] text-[var(--text-secondary)]">
           重新复制文字即可重试
         </span>
       </div>

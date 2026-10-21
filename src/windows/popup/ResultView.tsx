@@ -19,9 +19,11 @@ export function ResultView({ result, showKeyboardHint = false }: ResultViewProps
 
   return (
     <div className="animate-popup">
-      {/* ── 顶部：语言方向标签（pt 收窄，上方已有红绿灯标题栏）── */}
+      {/* ── 顶部：语言方向标签（pt 收窄，上方已有红绿灯标题栏）──
+          11px 是 PRD 规格，但颜色用 secondary 而非 tertiary —— 方向标签
+          是理解「译成了什么语言」的关键信息，不是装饰 */}
       <div className="px-4 pt-1 pb-2.5 flex items-center gap-2">
-        <span className="text-[11px] font-medium text-[var(--text-tertiary)] tracking-wide uppercase">
+        <span className="text-[11px] font-semibold text-[var(--text-secondary)] tracking-wide uppercase">
           {sourceLang}
         </span>
         <svg
@@ -37,7 +39,7 @@ export function ResultView({ result, showKeyboardHint = false }: ResultViewProps
             strokeLinejoin="round"
           />
         </svg>
-        <span className="text-[11px] font-medium text-[var(--text-secondary)] tracking-wide uppercase">
+        <span className="text-[11px] font-semibold text-[var(--text-secondary)] tracking-wide uppercase">
           {targetLang}
         </span>
         {result.truncated && (
@@ -50,9 +52,11 @@ export function ResultView({ result, showKeyboardHint = false }: ResultViewProps
       {/* ── macOS 分隔线 ── */}
       <div className="h-px mx-4 bg-[var(--border-secondary)]" />
 
-      {/* ── 翻译结果文本 ── */}
+      {/* ── 翻译结果文本 ──
+          译文是浮窗的主角：14.5px / 500 字重（实机验证反馈 13.5px/400
+          在玻璃材质上存在感不足），行高放宽到 1.8 保证中文可读性 */}
       <div
-        className="selectable px-4 py-3.5 text-[13.5px] leading-[1.75] tracking-[0.005em] text-[var(--text-primary)] overflow-y-auto whitespace-pre-wrap break-words"
+        className="selectable px-4 py-3.5 text-[14.5px] font-medium leading-[1.8] tracking-[0.005em] text-[var(--text-primary)] overflow-y-auto whitespace-pre-wrap break-words"
         style={{ maxHeight: "360px", fontFamily: "var(--font-ui)" }}
       >
         {result.translated_text}
@@ -75,7 +79,7 @@ export function ResultView({ result, showKeyboardHint = false }: ResultViewProps
               "点击浮窗后按空格关闭"告知正确的两步操作。
               不加响应式前缀 —— sm: 断点是 640px，浮窗视口仅 280–520px，
               `hidden sm:flex` 会让本提示永不渲染（F7） */}
-          <span className="flex items-center gap-1 text-[10px] text-[var(--text-tertiary)]">
+          <span className="flex items-center gap-1 text-[10.5px] text-[var(--text-secondary)]">
             {showKeyboardHint ? (
               <>
                 <kbd className="kbd-hint">空格</kbd>
@@ -86,11 +90,11 @@ export function ResultView({ result, showKeyboardHint = false }: ResultViewProps
             )}
           </span>
           {import.meta.env.DEV && (
-            <span className="text-[10px] text-[var(--text-tertiary)] tabular-nums">
+            <span className="text-[10.5px] text-[var(--text-tertiary)] tabular-nums">
               {result.duration_ms}ms
             </span>
           )}
-          <span className="text-[10px] text-[var(--text-tertiary)] font-medium tracking-wide">
+          <span className="text-[10.5px] text-[var(--text-secondary)] font-semibold tracking-wide">
             {providerLabel}
           </span>
         </div>

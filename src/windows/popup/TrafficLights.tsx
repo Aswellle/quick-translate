@@ -104,6 +104,9 @@ function TrafficLight({
   glyph: React.ReactNode;
   disabled?: boolean;
 }) {
+  // 字形按语义键重挂载：折叠 ↔ 展开、标准 ↔ 阅读宽 的图标互换
+  // 由 CSS 动画交叉淡入，而不是硬切（硬切在 150ms 的 hover 淡入
+  // 旁边显得突兀，像闪了一下）
   return (
     <button
       type="button"
@@ -113,7 +116,7 @@ function TrafficLight({
       disabled={disabled}
       className={`traffic-light traffic-light--${variant}`}
     >
-      <svg viewBox="0 0 12 12" fill="none" aria-hidden="true">
+      <svg key={title} viewBox="0 0 12 12" fill="none" aria-hidden="true">
         {glyph}
       </svg>
     </button>

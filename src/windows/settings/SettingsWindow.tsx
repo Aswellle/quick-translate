@@ -1,7 +1,7 @@
 // src/windows/settings/SettingsWindow.tsx
 // 设置面板 — macOS 简约明亮灵动风格
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import {
   getConfig,
   setConfigBatch,
@@ -20,8 +20,9 @@ import {
   type RuntimeDiagnostics,
 } from "@/lib/commands";
 import { toast } from "@/components/ToastManager";
-import { SUPPORTED_LANGUAGES, PROVIDERS, PROVIDER_LABELS, ERROR_MESSAGES } from "@/lib/constants";
+import { SUPPORTED_LANGUAGES, PROVIDERS, ERROR_MESSAGES } from "@/lib/constants";
 import { useConfigStore } from "@/stores/configStore";
+import { TrendChart, ProviderChart } from "./StatsDashboard";
 import { applyTheme } from "@/hooks/useTheme";
 import { AboutTab } from "./AboutTab";
 
@@ -29,6 +30,28 @@ import { AboutTab } from "./AboutTab";
 const CREDENTIAL_KEYS = PROVIDERS
   .filter((p) => p.requiresApiKey)
   .flatMap((p) => p.credentialFields.map((f) => f.key));
+
+// dirty 判定涉及的键：非凭证配置键（凭证输入框从空白开始，语义是
+// 「输入新值覆盖」，不构成「未保存的更改」）；theme 即时持久化，同样排除
+const DIRTY_KEYS: Array<keyof AppConfig> = [
+  "target_lang",
+  "provider",
+  "auto_start",
+  "history_limit",
+  "fallback_enabled",
+  "clipboard_monitor_enabled",
+];
+
+/** 把 draft 压成 dirty 键的快照串（供 useMemo 浅比较） */
+function dirtyBaseline(cfg: AppConfig): string {
+  return DIRTY_KEYS.map((k) => `${String(k)}=${String((cfg as unknown as Record<string, unknown>)[k])}`).join("|");
+}
+
+/** draft 是否与基准有差异 */
+function snapshotDirtyKeys(cfg: AppConfig, baseline: string): boolean {
+  if (!baseline) return false;
+  return dirtyBaseline(cfg) !== baseline;
+}
 
 type TabId = "general" | "provider" | "about";
 
@@ -56,6 +79,15 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
   // 诊断计数不主动广播，随状态变化时一并刷新。
   const [runtimeSnapshot, setRuntimeSnapshot] = useState<RuntimeStatusSnapshot | null>(null);
   const [runtimeDiag, setRuntimeDiag] = useState<RuntimeDiagnostics | null>(null);
+
+  // 未保存更改追踪：draft 与「已保存基准」的浅比较（仅非凭证键）。
+  // 主题已改为即时持久化，不参与 dirty 判定 —— 否则刚切完主题保存栏
+  // 会永远挂着「未保存」徽章。
+  const [savedBaseline, setSavedBaseline] = useState<string>("");
+  const dirty = useMemo(() => {
+    if (!draft) return false;
+    return snapshotDirtyKeys(draft, savedBaseline);
+  }, [draft, savedBaseline]);
 
   useEffect(() => {
     let cancelled = false;
@@ -143,6 +175,7 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
         const mergedCfg = cleaned as unknown as AppConfig;
         setConfig(mergedCfg);
         setDraft(mergedCfg);
+        setSavedBaseline(dirtyBaseline(mergedCfg));
       })
       .catch((e) => {
         toast("加载配置失败：" + String(e), "error");
@@ -211,6 +244,7 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
       await setConfigBatch(updates);
       setConfig(draft);
       applyTheme(draft.theme);
+      setSavedBaseline(dirtyBaseline(draft));
       setSaveStatus("ok");
       toast("设置已保存", "success");
       setTimeout(() => setSaveStatus("idle"), 2500);
@@ -228,6 +262,20 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
       setSaving(false);
     }
   }, [draft, setConfig]);
+
+  // Ctrl+S / Cmd+S 触发保存：桌面应用的保存肌肉记忆。只在非「关于」Tab
+  // 时拦截（关于页没有草稿，让浏览器默认行为或系统层处理）
+  useEffect(() => {
+    if (activeTab === "about") return;
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        if (!saving) void handleSave();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [activeTab, saving, handleSave]);
 
   // 测试翻译源
   const handleTest = useCallback(async (providerId: string) => {
@@ -284,20 +332,21 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
 
   return (
     <div className="flex flex-col h-screen bg-[var(--bg-secondary)] dark:bg-[var(--bg-primary)] text-[var(--text-primary)] select-none">
-      {/* ── 标题栏 ── */}
-      <div className="px-6 pt-4 pb-3 bg-[var(--surface-primary)] dark:bg-[var(--surface-secondary)] border-b border-[var(--border-secondary)]">
-        <div className="flex items-center gap-2">
-          <h1 className="text-[15px] font-semibold tracking-tight" style={{ fontFamily: "var(--font-display)" }}>
-            设置
-          </h1>
-        </div>
-        <p className="text-[12px] text-[var(--text-secondary)] mt-0.5">
+      {/* ── 标题栏（单行紧凑：标题 + 副题同行，Tab 就地跟随）──
+          此前「设置」+「QuickTranslate」分两行各占一段纵向空间，600×480
+          默认窗口下首屏只能看到健康横幅的上半截 —— 信息密度太低。
+          压缩成一行后垂直空间让给仪表盘。 */}
+      <div className="px-6 pt-3 pb-2.5 bg-[var(--surface-primary)] dark:bg-[var(--surface-secondary)] border-b border-[var(--border-secondary)] flex items-baseline gap-2.5">
+        <h1 className="text-[15px] font-semibold tracking-tight" style={{ fontFamily: "var(--font-display)" }}>
+          设置
+        </h1>
+        <p className="text-[12px] text-[var(--text-tertiary)]">
           QuickTranslate
         </p>
       </div>
 
       {/* ── macOS 分段 Tab ── */}
-      <div className="px-6 pt-3 bg-[var(--bg-secondary)]">
+      <div className="px-6 pt-2.5 bg-[var(--bg-secondary)]">
         <div
           className="inline-flex rounded-lg bg-[var(--surface-tertiary)] dark:bg-[var(--surface-secondary)] p-0.5 gap-0.5"
           role="tablist"
@@ -322,8 +371,8 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
         </div>
       </div>
 
-      {/* ── 内容区 ── */}
-      <div className="flex-1 overflow-y-auto px-6 py-5">
+      {/* ── 内容区（Tab 切换 150ms 淡入，消除硬切感）── */}
+      <div key={activeTab} className="flex-1 overflow-y-auto px-6 py-5 animate-fade-in">
         {activeTab === "general" && (
           <GeneralTab draft={draft} onChange={updateDraft} onClipboardToggle={handleClipboardToggle} stats={stats} statsLoading={statsLoading} runtimeSnapshot={runtimeSnapshot} runtimeDiag={runtimeDiag} providerStatus={providerStatus} onNavigate={setActiveTab} />
         )}
@@ -345,6 +394,13 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
       {/* 「关于」页无草稿配置，不显示保存栏 */}
       {activeTab !== "about" && (
         <div className="px-6 py-3.5 bg-[var(--surface-primary)] dark:bg-[var(--surface-secondary)] border-t border-[var(--border-secondary)] flex items-center justify-end gap-3">
+          {/* 未保存提示：改了配置却看不到任何「待保存」迹象，是草稿模型
+              最大的心智成本 —— 徽章 + 按钮=主色双通道提示 */}
+          {saveStatus === "idle" && dirty && (
+            <span className="text-[11.5px] font-medium text-amber-600 dark:text-amber-500 bg-amber-50 dark:bg-amber-950/25 px-2 py-0.5 rounded-full animate-fade-in">
+              有未保存的更改
+            </span>
+          )}
           {saveStatus === "ok" && (
             <span className="text-[12px] text-green-500 flex items-center gap-1">
               <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none">
@@ -359,7 +415,12 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
           <button
             onClick={handleSave}
             disabled={saving}
-            className="btn-primary disabled:opacity-40"
+            className={[
+              "px-4 py-1.5 rounded-lg text-[12.5px] font-medium transition-all active:scale-95 disabled:opacity-40",
+              dirty && saveStatus === "idle"
+                ? "bg-[var(--system-blue)] text-white shadow-sm hover:brightness-110"
+                : "bg-[var(--system-blue)]/80 text-white hover:brightness-105",
+            ].join(" ")}
           >
             {saving ? "保存中…" : "保存"}
           </button>
@@ -431,8 +492,17 @@ function GeneralTab({
             id="setting-theme"
             value={draft.theme}
             onChange={(e) => {
-              onChange("theme", e.target.value as AppConfig["theme"]);
-              applyTheme(e.target.value);
+              const v = e.target.value as AppConfig["theme"];
+              onChange("theme", v);
+              // 主题即时持久化 + 广播：历史/浮窗等其它窗口依赖
+              // theme-changed 广播刷新，等「保存」按钮意味着用户切完主题
+              // 别的窗口纹丝不动（实机 2026-10-20 验证的历史面板 bug）。
+              // 主题是安全键（无凭证、无破坏性），即时生效符合直觉。
+              applyTheme(v);
+              setConfigBatch([["theme", v]]).catch((err) => {
+                console.error("[SettingsWindow] 主题即时保存失败:", err);
+                toast("主题保存失败：" + String(err), "error");
+              });
             }}
             className="input-field w-32"
           >
@@ -554,17 +624,18 @@ function Dashboard({
         )}
       </div>
 
-      {/* ── 关键指标 2×2 ── */}
+      {/* ── 关键指标（累计 2 + 近期 3）：五卡一行自适应，窄窗折两行 ── */}
       {statsLoading ? (
-        <div className="grid grid-cols-2 gap-2.5">
-          {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="skeleton h-[68px] rounded-xl" />
+        <div className="grid grid-cols-5 max-[560px]:grid-cols-2 gap-2.5">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <div key={i} className="skeleton h-[64px] rounded-xl" />
           ))}
         </div>
       ) : stats ? (
-        <div className="grid grid-cols-2 gap-2.5">
+        <div className="grid grid-cols-5 max-[560px]:grid-cols-2 gap-2.5">
           <StatCard label="累计翻译" value={formatBigNum(stats.total_records)} unit="次" />
           <StatCard label="累计字符" value={formatBigNum(stats.total_chars)} unit="字符" />
+          <StatCard label="最近 24h" value={String(stats.last_24h)} unit="次" />
           <StatCard label="近 7 天" value={String(stats.last_7_days)} unit="次" />
           <StatCard label="近 30 天" value={String(stats.last_30_days)} unit="次" />
         </div>
@@ -574,9 +645,19 @@ function Dashboard({
         </div>
       )}
 
-      {/* ── 翻译源使用分布 ── */}
+      {/* ── 近 7 天趋势（recharts 面积图）── */}
+      {stats && (
+        <div className="macos-card p-3.5 space-y-1">
+          <p className="text-[11.5px] font-semibold text-[var(--text-secondary)] tracking-wide">
+            近 7 天趋势
+          </p>
+          <TrendChart daily={stats.daily_7d} />
+        </div>
+      )}
+
+      {/* ── 翻译源使用分布（recharts 横向条形图）── */}
       {stats && Object.keys(stats.by_provider).length > 0 && (
-        <div className="macos-card p-3.5 space-y-2.5">
+        <div className="macos-card p-3.5 space-y-1">
           <div className="flex items-center justify-between">
             <p className="text-[11.5px] font-semibold text-[var(--text-secondary)] tracking-wide">
               翻译源分布
@@ -585,40 +666,7 @@ function Dashboard({
               {Object.keys(stats.by_provider).length} 个来源
             </p>
           </div>
-          {(() => {
-            const entries = Object.entries(stats.by_provider).sort(([, a], [, b]) => b - a);
-            const max = Math.max(...entries.map(([, c]) => c), 1);
-            const total = entries.reduce((sum, [, c]) => sum + c, 0) || 1;
-            return (
-              <div className="space-y-2">
-                {entries.map(([provider, count]) => (
-                  <div key={provider}>
-                    <div className="flex items-center justify-between mb-1">
-                      <span className="text-[12px] text-[var(--text-secondary)]">
-                        {PROVIDER_LABELS[provider] ?? provider}
-                      </span>
-                      <span className="text-[11.5px] font-medium text-[var(--text-primary)] tabular-nums">
-                        {count} 次
-                        <span className="text-[var(--text-tertiary)] font-normal ml-1.5">
-                          {Math.round((count / total) * 100)}%
-                        </span>
-                      </span>
-                    </div>
-                    <div className="h-1.5 rounded-full bg-[var(--surface-tertiary)] overflow-hidden">
-                      <div
-                        className="h-full rounded-full transition-[width] duration-300"
-                        style={{
-                          width: `${Math.max((count / max) * 100, 4)}%`,
-                          backgroundColor: "var(--system-blue)",
-                          opacity: 0.75,
-                        }}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            );
-          })()}
+          <ProviderChart byProvider={stats.by_provider} />
         </div>
       )}
     </div>
