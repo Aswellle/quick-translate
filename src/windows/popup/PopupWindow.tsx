@@ -360,12 +360,31 @@ export function PopupWindow() {
     // 上一次的钉死状态。
     let lastKey: string | null = null;
     const sync = () => {
+      // 配置尚未加载时不能猜。config 初值是 null，而本 effect 属于子组件、
+      // 先于父组件的 getConfig() 落地执行 —— 直接读会得到
+      // `undefined === "system"` → false，把「未知」误判成「非 system」，
+      // 在 macOS 上把 appearance 钉死成 Aqua。若 getConfig 最终失败
+      // （App.tsx 只 console.error），这个错误判断会永久生效：CSS 按
+      // system 渲染成深色，原生 appearance 却是浅色，正是 D3 要避免的
+      // 「CSS 与原生各执一词」。
+      //
+      // 与 useTheme.ts 的 `config?.theme ?? "system"` 保持同一语义：
+      // 未知一律按 system 处理（不钉死）。config 落地后 setConfig 会触发
+      // 下面的 subscribe(sync)，2s 轮询也会重试。
+      const config = useConfigStore.getState().config;
+      if (!config) return;
       const dark = root.classList.contains("dark");
-      const followSystem = useConfigStore.getState().config?.theme === "system";
+      const followSystem = config.theme === "system";
       const key = `${dark}|${followSystem}`;
       if (key === lastKey) return;
-      lastKey = key;
-      setPopupTheme(dark, followSystem).catch(console.error);
+      // lastKey 在 IPC **成功后**才提交：失败时保持旧值，让 2s 轮询与
+      // subscribe 还能重试。此前是调用前就写，一次失败即永久失配 ——
+      // 轮询被注释声明为「兜底」，乐观缓存让它兜不了底。
+      setPopupTheme(dark, followSystem)
+        .then(() => {
+          lastKey = key;
+        })
+        .catch(console.error);
     };
     sync();
     const observer = new MutationObserver(sync);
@@ -400,13 +419,29 @@ export function PopupWindow() {
   // 不会触发 change 事件。
   useEffect(() => {
     const mq = window.matchMedia("(prefers-reduced-transparency: reduce)");
+    // 能力探测：WKWebView（macOS）至今不支持该媒体查询（WebKit bug 175497，
+    // MDN BCD 记为 safari version_added: false，Safari 26.0 特性清单亦无此项）。
+    // 不支持时 matchMedia 恒为 false，整条 reduce 链路静默空操作 —— 无日志、
+    // 无降级，排查时看不出是「用户没开」还是「平台不支持」。记一条结构化
+    // 事件，与 popup_material_decision 同批，把这两种情况区分开。
+    const supported = window.CSS?.supports?.("(prefers-reduced-transparency: reduce)") ?? false;
+    if (!supported) {
+      console.info(
+        "[PopupWindow] 本平台 WebView 不支持 prefers-reduced-transparency，减少透明效果不会生效"
+      );
+    }
     let last: boolean | null = null;
     const sync = () => {
       if (mq.matches === last) return;
-      last = mq.matches;
-      setPopupTransparency(mq.matches).catch((err) =>
-        console.error("[PopupWindow] 同步降低透明度失败:", err)
-      );
+      const next = mq.matches;
+      // 与主题同步同样的约定：调用成功后才提交去重值。此前在 IPC 之前
+      // 就写 last，一次失败（投递失败 / 窗口未就绪）即永久失配 —— 而这条
+      // 路径没有轮询兜底，失败后必须等用户再切一次系统偏好才能恢复。
+      setPopupTransparency(next)
+        .then(() => {
+          last = next;
+        })
+        .catch((err) => console.error("[PopupWindow] 同步降低透明度失败:", err));
     };
     sync();
     mq.addEventListener("change", sync);
@@ -440,26 +475,29 @@ export function PopupWindow() {
             wide={wide}
             activated={activated}
           />
+          {/* 状态播报：必须常驻，不能只在折叠态挂载。
+              live region 的规则是「节点先存在，内容后变化」才会播报 ——
+              若随 {collapsed && ...} 一起挂载，展开态（也就是用户真正
+              盯着结果看的时候）状态变化完全不被读出。此前它写在折叠分支
+              里，恰好把最需要播报的场景漏掉了。 */}
+          <span className="sr-only" role="status" aria-live="polite">
+            {status === "success"
+              ? "翻译完成"
+              : status === "loading"
+                ? "正在翻译"
+                : status === "error"
+                  ? "翻译失败"
+                  : "等待翻译"}
+          </span>
           {collapsed && (
             <>
-              {/* 状态点：颜色即状态，但颜色对屏幕阅读器不可见。
-                  role="status" 让辅助技术播报状态变化；视觉用户看到的
-                  仍是那个会呼吸的小圆点，文字用 sr-only 藏起来。
-                  aria-live="polite" 而非 assertive：翻译是用户主动触发的，
-                  不该打断正在朗读的其他内容。 */}
+              {/* 状态点：颜色即状态，但颜色对屏幕阅读器不可见，
+                  上面的 sr-only live region 负责播报。视觉用户看到的
+                  仍是那个会呼吸的小圆点。 */}
               <span
                 className={`popup-status-dot popup-status-dot--${status}`}
                 aria-hidden="true"
               />
-              <span className="sr-only" role="status" aria-live="polite">
-                {status === "success"
-                  ? "翻译完成"
-                  : status === "loading"
-                    ? "正在翻译"
-                    : status === "error"
-                      ? "翻译失败"
-                      : "等待翻译"}
-              </span>
               <span className="popup-titlebar__summary">
                 {status === "success" && result
                   ? result.translated_text
