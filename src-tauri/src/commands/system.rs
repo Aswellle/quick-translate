@@ -246,9 +246,15 @@ pub async fn set_popup_theme(
         };
         // AppKit 的窗口操作只能在主线程做。run_on_main_thread 只是投递，
         // 不等待 —— 同步失败也无从回报，因此内部自行记录。
+        //
+        // 必须 clone：闭包是 move 的，直接捕获 `window` 会让
+        // `window.run_on_main_thread(...)` 这个借用与闭包内的所有权
+        // 转移冲突（E0505）。WebviewWindow 的 clone 只是句柄计数递增，
+        // 代价可忽略。
+        let window_for_closure = window.clone();
         window
             .run_on_main_thread(move || {
-                apply_popup_appearance(&window, dark, follow_system);
+                apply_popup_appearance(&window_for_closure, dark, follow_system);
             })
             .map_err(|e| AppError::WindowError(e.to_string()))?;
     }
