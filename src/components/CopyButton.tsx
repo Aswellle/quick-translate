@@ -46,7 +46,7 @@ export function CopyButton({ text, className = "", label = "复制" }: CopyButto
         "active:scale-95",
         copied
           ? "text-green-600 dark:text-green-400"
-          : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
+          : "text-[var(--text-secondary)] hover:text-[var(--copy-hover-text)]",
         className,
       ].join(" ")}
     >
