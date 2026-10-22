@@ -26,13 +26,35 @@ export function applyTheme(theme: string) {
   }
 }
 
+/**
+ * 应用内「减少透明效果」开关 → <html class="reduce-transparency">。
+ *
+ * 为什么要用 class 而不是直接依赖媒体查询：WKWebView 不支持
+ * `prefers-reduced-transparency`（WebKit bug 175497），macOS 上媒体查询
+ * 恒为 false，系统偏好读不到。这个 class 是给这类平台的确定性回退。
+ *
+ * 与媒体查询是**叠加**关系：系统偏好命中时 CSS 里的 @media 块照样生效，
+ * 这里只负责多挂一条应用内途径。所以传 false 时只移除 class，不会
+ * 影响系统偏好的响应。
+ */
+export function applyReduceTransparency(enabled: boolean) {
+  document.documentElement.classList.toggle("reduce-transparency", enabled);
+}
+
 export function useTheme() {
   const config = useConfigStore((s) => s.config);
   const theme = config?.theme ?? "system";
+  const reduceTransparency = config?.reduce_transparency ?? false;
 
   // 监听系统主题变化（仅 "system" 模式时生效）
   const systemMqRef = useRef<MediaQueryList | null>(null);
   const systemPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // 应用内「减少透明效果」开关：配置变化时同步到 <html> 的 class。
+  // 与系统媒体查询叠加，互不覆盖（见 applyReduceTransparency 的说明）。
+  useEffect(() => {
+    applyReduceTransparency(reduceTransparency);
+  }, [reduceTransparency]);
 
   useEffect(() => {
     // 清理旧的系统主题监听器
@@ -91,6 +113,36 @@ export function useTheme() {
       const { config: current, setConfig: set } = useConfigStore.getState();
       if (current) {
         set({ ...current, theme: newTheme });
+      }
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  // 监听「减少透明效果」开关的跨窗口广播。
+  //
+  // 浮窗是长期驻留窗口，读的是自己那份 configStore。设置页保存只更新
+  // 设置窗口自己的 store，没有这条监听的话，用户点完开关浮窗毫无反应，
+  // 要等到下次整体重载才生效。
+  //
+  // 直接挂 class 而不只更新 store：这个 hook 在浮窗里由 useTheme 驱动，
+  // 但 PopupWindow 的材质同步走的是另一条 effect —— 两边都要立刻生效。
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+
+    listen<{ enabled: boolean }>("reduce-transparency-changed", (event) => {
+      const enabled = event.payload.enabled;
+      applyReduceTransparency(enabled);
+      const { config: current, setConfig: set } = useConfigStore.getState();
+      if (current) {
+        set({ ...current, reduce_transparency: enabled });
       }
     }).then((fn) => {
       if (cancelled) fn();

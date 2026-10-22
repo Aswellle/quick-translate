@@ -203,9 +203,35 @@ async fn handle_side_effect(
             }
             tray::refresh_menu(app).await;
         }
+        "reduce_transparency" => {
+            emit_reduce_transparency_changed(app, value);
+        }
         _ => {}
     }
     Ok(())
+}
+
+/// 广播「减少透明效果」开关变更。
+///
+/// 为什么必须有这条：浮窗是长期驻留窗口（CloseRequested 只 hide 不销毁），
+/// 它读的是自己那份 configStore。设置页保存只更新设置窗口自己的 store，
+/// 不广播的话浮窗要等到下次整体重载才响应 —— 用户点完开关看不到任何变化。
+///
+/// 用独立事件而不是塞进 theme-changed：两者语义不同（一个是配色、一个是
+/// 材质与衬底），合并会让将来任何一方增加字段时误触另一方。
+fn emit_reduce_transparency_changed(app: &AppHandle, value: &str) {
+    #[derive(serde::Serialize, Clone)]
+    struct ReduceTransparencyPayload {
+        enabled: bool,
+    }
+
+    let _ = app.emit(
+        "reduce-transparency-changed",
+        ReduceTransparencyPayload {
+            enabled: value == "true",
+        },
+    );
+    tracing::info!("减少透明效果已切换: {}", value);
 }
 
 /// 广播主题变更事件给所有已打开的 WebviewWindow

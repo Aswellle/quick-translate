@@ -62,6 +62,8 @@ export interface AppConfig {
   fallback_enabled: boolean;
   onboarding_completed: boolean;
   clipboard_monitor_enabled: boolean;
+  /** 应用内「减少透明效果」开关。与系统偏好媒体查询是叠加关系 */
+  reduce_transparency: boolean;
 }
 
 export interface HistoryQuery {

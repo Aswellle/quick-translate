@@ -723,7 +723,21 @@ select.input-field {
    了，此时衬底不是「更厚的玻璃」，而是唯一的视觉载体。0.65 在无材质、
    无模糊的透明窗口上等于让桌面直接透出来。R-C 的算术证明了 0.72 时
    secondary 只有 2.8–4.0:1。这是对 D7 适用范围的收窄，不是推翻 ——
-   D7 在 normal 模式下继续有效。 */
+   D7 在 normal 模式下继续有效。
+
+   ── 为什么下面同一份配方写了两遍 ──
+   触发 reduce 有两条互不排斥的途径：
+     1. 系统级无障碍偏好 → @media (prefers-reduced-transparency: reduce)
+     2. 应用内「减少透明效果」开关 → :root.reduce-transparency
+
+   二者是「或」的关系，而 CSS 没有把媒体查询与选择器合成一个条件的
+   语法（@container style() 的支持面还不够）。所以只能各写一份。
+
+   要改配方时**两处必须同步**。这是唯一可靠的做法：合并成自定义属性
+   再条件生效需要 @container style()，在 WebView2 / WKWebView 上不可靠；
+   用 JS 在媒体查询命中时补挂 class 也能消掉一份，但那会把纯 CSS 的
+   无障碍响应变成依赖 JS 的路径 —— 系统偏好应当在脚本出错时仍然生效。
+   宁可重复，不引入这种耦合。 */
 @media (prefers-reduced-transparency: reduce) {
   .popup-container {
     background: rgba(255, 255, 255, 0.94);
@@ -764,6 +778,42 @@ select.input-field {
     box-shadow: none;
   }
   /* 文字色收窄的说明见上方 .popup-container 规则内的注释。 */
+}
+
+/* ── 应用内「减少透明效果」开关 ──
+   与上面 @media 块**逐条对应**，改配方时两处必须同步（原因见上）。
+
+   为什么需要这条路径：WKWebView 至今不支持 prefers-reduced-transparency
+   （WebKit bug 175497，Safari 26.0 特性清单亦无此项）。macOS 上媒体查询
+   恒为 false，若只有 @media，系统级偏好根本读不到，整条 reduce 链路
+   静默空操作。这个开关给这类平台一个确定性的回退。
+
+   两者是叠加关系而非互斥：系统偏好命中时永远生效，开关只是额外多一条
+   途径。class 由 useTheme 按 config.reduce_transparency 挂到 <html>。 */
+:root.reduce-transparency .popup-container {
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  --text-tertiary: #69696E;
+}
+:root.reduce-transparency .popup-reading-surface {
+  background: rgba(255, 255, 255, 0.94);
+}
+:root.reduce-transparency.dark .popup-container {
+  background: rgba(28, 28, 30, 0.92);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  --text-tertiary: #C7C7CC;
+}
+:root.reduce-transparency.dark .popup-reading-surface {
+  background: rgba(28, 28, 30, 0.92);
+}
+:root.reduce-transparency .popup-container::before,
+:root.reduce-transparency .popup-container::after,
+:root.reduce-transparency.dark .popup-container::before,
+:root.reduce-transparency.dark .popup-container::after {
+  background: none;
+  box-shadow: none;
 }
   /* 文字色为什么要收窄到 .popup-container 而不是 :root：
 
