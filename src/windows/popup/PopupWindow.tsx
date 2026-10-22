@@ -417,35 +417,49 @@ export function PopupWindow() {
   // 恢复复用后端同一份 popup_effects()，前端不持有材质参数。
   // 首次挂载时也要同步一次：系统偏好可能是应用启动前就设好的，
   // 不会触发 change 事件。
+  //
+  // ── 两个触发源，取「或」──
+  // 1. 系统级无障碍偏好（媒体查询）
+  // 2. 应用内「减少透明效果」开关（config.reduce_transparency）
+  //
+  // 为什么需要第 2 条：WKWebView 至今不支持 prefers-reduced-transparency
+  // （WebKit bug 175497，Safari 26.0 特性清单亦无此项）。macOS 上
+  // matchMedia 恒为 false，若只看媒体查询，系统偏好根本读不到，整条
+  // reduce 链路静默空操作 —— 无日志、无降级。开关是确定性回退。
   useEffect(() => {
     const mq = window.matchMedia("(prefers-reduced-transparency: reduce)");
-    // 能力探测：WKWebView（macOS）至今不支持该媒体查询（WebKit bug 175497，
-    // MDN BCD 记为 safari version_added: false，Safari 26.0 特性清单亦无此项）。
-    // 不支持时 matchMedia 恒为 false，整条 reduce 链路静默空操作 —— 无日志、
-    // 无降级，排查时看不出是「用户没开」还是「平台不支持」。记一条结构化
-    // 事件，与 popup_material_decision 同批，把这两种情况区分开。
-    const supported = window.CSS?.supports?.("(prefers-reduced-transparency: reduce)") ?? false;
-    if (!supported) {
+    // 能力探测：区分「用户没开」与「平台不支持」。两者最终行为可能一样，
+    // 但排查时完全不是一回事。
+    const mediaSupported =
+      window.CSS?.supports?.("(prefers-reduced-transparency: reduce)") ?? false;
+    if (!mediaSupported) {
       console.info(
-        "[PopupWindow] 本平台 WebView 不支持 prefers-reduced-transparency，减少透明效果不会生效"
+        "[PopupWindow] 本平台 WebView 不支持 prefers-reduced-transparency，系统偏好读不到；" +
+          "应用内「减少透明效果」开关仍然可用"
       );
     }
+
     let last: boolean | null = null;
     const sync = () => {
-      if (mq.matches === last) return;
-      const next = mq.matches;
+      const wanted = mq.matches || (useConfigStore.getState().config?.reduce_transparency ?? false);
+      if (wanted === last) return;
       // 与主题同步同样的约定：调用成功后才提交去重值。此前在 IPC 之前
       // 就写 last，一次失败（投递失败 / 窗口未就绪）即永久失配 —— 而这条
-      // 路径没有轮询兜底，失败后必须等用户再切一次系统偏好才能恢复。
-      setPopupTransparency(next)
+      // 路径没有轮询兜底，失败后必须等用户再切一次才能恢复。
+      setPopupTransparency(wanted)
         .then(() => {
-          last = next;
+          last = wanted;
         })
         .catch((err) => console.error("[PopupWindow] 同步降低透明度失败:", err));
     };
     sync();
     mq.addEventListener("change", sync);
-    return () => mq.removeEventListener("change", sync);
+    // 应用内开关变化不会触发媒体查询的 change 事件，订阅 store 补上。
+    const unsubscribe = useConfigStore.subscribe(sync);
+    return () => {
+      mq.removeEventListener("change", sync);
+      unsubscribe();
+    };
   }, []);
 
   // ── 渲染 ──

@@ -40,6 +40,7 @@ const DIRTY_KEYS: Array<keyof AppConfig> = [
   "history_limit",
   "fallback_enabled",
   "clipboard_monitor_enabled",
+  "reduce_transparency",
 ];
 
 /** 把 draft 压成 dirty 键的快照串（供 useMemo 浅比较） */
@@ -235,6 +236,7 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
         ["theme",                     draft.theme],
         ["fallback_enabled",          String(draft.fallback_enabled)],
         ["clipboard_monitor_enabled", String(draft.clipboard_monitor_enabled)],
+        ["reduce_transparency",       String(draft.reduce_transparency)],
       ];
       // 凭证字段：仅在用户本次实际输入了新值时才包含，防止 masked 占位符写回破坏原有凭证
       for (const key of CREDENTIAL_KEYS) {
@@ -523,6 +525,15 @@ function GeneralTab({
         </SettingsRow>
         <SettingsRow label="自动 Fallback" hint="主翻译源失败时自动切换备用">
           <Toggle value={draft.fallback_enabled} onChange={(v) => onChange("fallback_enabled", v)} />
+        </SettingsRow>
+        <SettingsRow
+          label="减少透明效果"
+          hint="浮窗改用接近不透明的底色，并撤掉系统原生玻璃材质。系统级「降低透明度」偏好始终优先，此项用于系统偏好无法被读取的平台（如 macOS）"
+        >
+          <Toggle
+            value={draft.reduce_transparency}
+            onChange={(v) => onChange("reduce_transparency", v)}
+          />
         </SettingsRow>
         <HistoryLimitRow value={draft.history_limit} onChange={onChange} />
       </SettingsSection>
