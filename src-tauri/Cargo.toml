@@ -68,6 +68,10 @@ windows-sys = { version = "0.52", features = [
 # NSWindow 的 NSAppearanceCustomization 实现同时门控在 NSAppearance 与
 # NSResponder 两个 feature 上（NSWindow 自身以 NSResponder 为父类），
 # 少一个都不会生成 trait impl，调用 setAppearance 编译不过。
+#
+# 这五项都在 objc2-app-kit 0.3.2 的 `default` 里，显式列出是冗余的；
+# 保留的原因是把「本 crate 实际用到哪些 AppKit 能力」写进清单 —— 将来
+# 若关闭 default-features 精简编译，这里就是必须补齐的列表。
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = [

@@ -200,10 +200,17 @@ pub async fn set_popup_transparency(app: AppHandle, enhanced: bool) -> Result<()
     window
         .set_effects(effects)
         .map_err(|e| AppError::WindowError(e.to_string()))?;
+    // 日志只陈述「打算做什么」，不断言「已经生效」。
+    // tauri 的 set_effects 内层是 `let _ = vibrancy::set_window_effects(...)`
+    // （tauri-2.12.5/src/window/mod.rs），恒返回 Ok —— 上面那句 map_err 只
+    // 可能捕获主线程投递失败，材质是否真的画出来/撤掉了，这里无从得知。
+    // 写成「已清空/已恢复」就是在断言一个本函数证明不了的结论（D9）。
     tracing::debug!(
-        "[set_popup_transparency] enhanced={} → 原生材质{}",
+        event = "popup_transparency_toggle",
+        enhanced = enhanced,
+        "[set_popup_transparency] enhanced={} → 投递{}原生材质的请求",
         enhanced,
-        if enhanced { "已清空" } else { "已恢复" }
+        if enhanced { "撤除" } else { "恢复" }
     );
     Ok(())
 }
@@ -270,10 +277,19 @@ fn apply_popup_appearance(window: &tauri::WebviewWindow, dark: bool, follow_syst
         tracing::warn!("[set_popup_theme] 不在主线程，跳过 appearance 同步");
         return;
     }
-    let Ok(ns_ptr) = window.ns_window() else {
-        return;
+    // 以下四条早退都必须留痕。D9 的全部动机就是「材质/外观决策要可观测」
+    // —— set_effects 内层 `let _ =` 吞掉结果后，日志是唯一线索。这里若
+    // 静默 return，排查「macOS 外观没跟上主题」时完全看不出是哪个环节
+    // 断的（拿不到指针 / 指针为空 / retain 失败 / 类型不符，四者表现一样）。
+    let ns_ptr = match window.ns_window() {
+        Ok(ptr) => ptr,
+        Err(e) => {
+            tracing::warn!("[set_popup_theme] ns_window() 失败，跳过 appearance 同步: {e}");
+            return;
+        }
     };
     if ns_ptr.is_null() {
+        tracing::warn!("[set_popup_theme] ns_window() 返回空指针，跳过 appearance 同步");
         return;
     }
 
@@ -286,10 +302,19 @@ fn apply_popup_appearance(window: &tauri::WebviewWindow, dark: bool, follow_syst
     // SAFETY: ns_window() 返回的是本窗口的有效 NSWindow 指针；retain 在
     // 主线程上做一次 +1，函数返回时配对释放。窗口本身由 tauri 持有，
     // 不会在这次调用期间销毁。
+    //
+    // 关于 ns_window() 内部的 expect：tauri 的实现是
+    // `view.window().expect("view to be installed in window")`
+    // （tauri-2.12.5/src/window/mod.rs）。本函数只经由已加载 webview 的
+    // 窗口调用，视图必然已装入窗口，该分支不可达；且 release profile 是
+    // panic = "abort"，真要触发就是整个进程退出 —— 所以调用点保持在
+    // 主线程回调内，不引入任何可能提前调用的路径。
     let Some(any) = (unsafe { Retained::retain(ns_ptr as *mut AnyObject) }) else {
+        tracing::warn!("[set_popup_theme] NSWindow retain 失败，跳过 appearance 同步");
         return;
     };
     let Some(ns_window) = any.downcast::<NSWindow>().ok() else {
+        tracing::warn!("[set_popup_theme] ns_window 不是 NSWindow，跳过 appearance 同步");
         return;
     };
     let ns_window: &NSWindow = &ns_window;
@@ -303,16 +328,28 @@ fn apply_popup_appearance(window: &tauri::WebviewWindow, dark: bool, follow_syst
         }
         AppearanceChoice::ForceDark => {
             let name = unsafe { NSAppearanceNameDarkAqua };
-            if let Some(appearance) = NSAppearance::appearanceNamed(name) {
-                ns_window.setAppearance(Some(&appearance));
-                tracing::debug!("[set_popup_theme] macOS appearance → DarkAqua");
+            match NSAppearance::appearanceNamed(name) {
+                Some(appearance) => {
+                    ns_window.setAppearance(Some(&appearance));
+                    tracing::debug!("[set_popup_theme] macOS appearance → DarkAqua");
+                }
+                None => tracing::warn!(
+                    "[set_popup_theme] 取不到 NSAppearanceNameDarkAqua，appearance 保持不变"
+                ),
             }
         }
         AppearanceChoice::ForceLight => {
             let name = unsafe { NSAppearanceNameAqua };
-            if let Some(appearance) = NSAppearance::appearanceNamed(name) {
-                ns_window.setAppearance(Some(&appearance));
-                tracing::debug!("[set_popup_theme] macOS appearance → Aqua");
+            match NSAppearance::appearanceNamed(name) {
+                Some(appearance) => {
+                    ns_window.setAppearance(Some(&appearance));
+                    tracing::debug!("[set_popup_theme] macOS appearance → Aqua");
+                }
+                None => {
+                    tracing::warn!(
+                        "[set_popup_theme] 取不到 NSAppearanceNameAqua，appearance 保持不变"
+                    )
+                }
             }
         }
     }
