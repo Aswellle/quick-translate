@@ -174,6 +174,16 @@ pub struct AppConfig {
     pub onboarding_completed: bool,
     /// 是否启用剪贴板监控自动翻译
     pub clipboard_monitor_enabled: bool,
+    /// 减少透明效果（应用内开关）。
+    ///
+    /// 为什么需要它：`prefers-reduced-transparency` 媒体查询在 WKWebView
+    /// 上不受支持（WebKit bug 175497，Safari 26.0 仍未实现），macOS 上
+    /// 前端读不到系统偏好，整条 reduce 链路会静默空操作。这个开关给
+    /// 无法被媒体查询覆盖的平台一个确定性的回退。
+    ///
+    /// 语义是「叠加」而非「覆盖」：媒体查询命中时始终生效（那是用户的
+    /// 系统级无障碍设置），本开关只是在它之外再提供一条应用内途径。
+    pub reduce_transparency: bool,
 }
 
 impl Default for AppConfig {
@@ -194,6 +204,7 @@ impl Default for AppConfig {
             fallback_enabled: true,
             onboarding_completed: false,
             clipboard_monitor_enabled: true,
+            reduce_transparency: false,
         }
     }
 }
