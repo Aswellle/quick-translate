@@ -57,6 +57,11 @@
   --hover-bg:             rgba(0, 0, 0, 0.04);
   --active-bg:            rgba(0, 0, 0, 0.08);
   --focus-ring:           rgba(0, 122, 255, 0.35);
+  /* CopyButton 的 hover 文字色。抽成独立 token 是因为浮窗要把它提到
+     本表面的主文字色（--popup-text-primary），而 history 窗口必须继续
+     用全局 --text-primary —— 深色下两者不是同一个值（#F5F5F7 / #FFFFFF），
+     直接用 --popup-text-primary 会顺手改掉 history 的 hover。 */
+  --copy-hover-text:      var(--text-primary);
 
   /* ── Popup / Card ── */
   /* 玻璃层与阅读层是两套独立的配方，不要合并：
@@ -75,7 +80,7 @@
   --popup-glass-shadow:  0 12px 40px rgba(0, 0, 0, 0.22), 0 2px 10px rgba(0, 0, 0, 0.12), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
 
   /* 阅读衬底：浅色主题用低纹理的白，正文用深色高对比文字。
-     0.52 是起始值，最终以真实合成截图为准（见 DECISIONS D7：
+     0.52 是起始值，最终以真实合成截图为准（见本地设计记录 D7，未入库：
      上限 0.65，再不够就回头调文字色，不继续加厚）。 */
   --popup-reading-bg:     rgba(255, 255, 255, 0.52);
   --popup-reading-border: rgba(0, 0, 0, 0.06);
@@ -280,6 +285,90 @@ html, body, #root {
 .popup-container > * {
   position: relative;
   z-index: 2;
+}
+
+/* ── normal 模式下浮窗内次级文字的提级（本地设计记录 D11 · 方案 A）──
+
+   为什么需要：`.popup-reading-surface` 只铺正文区，标题栏的语言方向标签、
+   操作栏的复制按钮 / 快捷键提示 / provider 名都直接压在玻璃上，可读性
+   只由 `--popup-glass-tint`（浅 0.10 / 深 0.16）保证。而 `--text-secondary`
+   是按「压在实色面板上」选的中间灰，在 Acrylic 的亮暗调制下失效。
+
+   2026-10-22 实机采样（六类背景 × 浅深 × normal/reduce）：修复前 normal
+   模式下这四处全部低于 4.5:1，最差 2.09:1（纹理桌面 + 深色）。按本块调整
+   后复测 168 样本：浅色侧最低 4.92:1 全部达标，深色侧提升到 2.92:1，
+   仍有 18 条未达标 —— 原因见下方「深色上限」注释。
+
+   为什么只靠 `:not(.reduce-transparency)` 而不加媒体查询：
+   本块要表达的是「非 reduce 时生效」。用 `@media not all and
+   (prefers-reduced-transparency: reduce)` 看似等价，实则依赖一条不可靠的
+   前提 —— 该写法只在引擎「认识这个特性名」时才返回 true。Chromium 认识
+   （实测 `not all and (prefers-reduced-transparency: reduce)` 为 true，
+   而 `not all and (prefers-reduced-data: reduce)` 为 false），但 WebKit
+   是否认识无从得知。MQ L4 规定未知特性求值为 unknown、`not unknown` 仍是
+   unknown、整条查询降级为 `not all`（false）—— 若 WebKit 不认识，整块
+   在 macOS 上静默失效。去掉媒体查询后只依赖 JS 挂的 class（useTheme 的
+   applyReduceTransparency），在四个窗口引擎上行为一致，且规则可被 jsdom
+   解析、能被测试覆盖。
+
+   reduce 的恢复规则写在下方 reduce 块内（两处：媒体查询块 + class 块），
+   与那里的衬底配方相邻。为什么必须恢复：reduce 把衬底提到 0.94 / 0.92，
+   那里原有 secondary 已达 6.94:1 / 7.48:1，且衬底与玻璃同色 —— 层级完全
+   靠文字色表达。把这里的深值带进去会让标签与正文几乎同色，层次塌掉。 */
+/* 浅色：最暗实测底色是黑桌面下的操作栏 (147,147,147)。
+   #515154 在那里只有 2.57:1；#262628 是 4.92:1（含 ±3 量化余量 4.73）。
+
+   为什么用 `:where(:not(...))` 而不是 `:not(...)`：`:not()` 里的类选择器
+   会参与特异性计算，` :root:not(.reduce-transparency) .popup-container`
+   是 (0,2,0)，而本文件既有约定是把 token 覆盖写成 `.popup-container`
+   (0,1,0)。特异性更高会导致将来照约定往 reduce 块补规则时被静默压掉。
+   `:where()` 的特异性恒为 0，包住 `:not()` 后整体仍是 (0,1,0)，
+   与 `.popup-container` / `:root.dark .popup-container` 完全对齐 ——
+   层叠只靠源码顺序，符合本文件原有的写法。 */
+:root:where(:not(.reduce-transparency)) .popup-container {
+  --text-secondary: #262628;
+  /* ③ 玻璃把 hover 背景稀释掉了：同样 4% 黑，压在不透明白底上是 ΔE76 3.46，
+     压在实测玻璃底 (147,147,147) 上只剩 2.30 —— 正好是 JND，等于不存在。
+     提到 0.10 后 ΔE76 5.79，恢复到「不透明窗口」的提示强度。
+     必须收窄到 .popup-container：settings / history 的 hover 是正常的。 */
+  --hover-bg: rgba(0, 0, 0, 0.10);
+  --active-bg: rgba(0, 0, 0, 0.16);
+  /* 浅色下 --popup-text-primary 与全局 --text-primary 同为 #1D1D1F，
+     这行目前是 no-op。写上是为了让两侧语义一致 —— 将来浅色正文色若
+     调整，hover 会跟着走，而不是停在旧的全局值上。 */
+  --copy-hover-text: var(--popup-text-primary);
+}
+/* 深色：最亮的实测底色是白桌面下的标题栏 (139,139,139)、纹理桌面的
+   (132,132,133) 与黄桌面的 (150,128,27)。
+
+   取 #EDEDF0 把最差值从 2.09:1 提到 2.92:1；灰/蓝/黑三类背景下的操作栏与
+   provider 名均已达标。仍有 6 类底色无法达标：其中 (139,139,139) /
+   (132,132,133) / (150,128,27) / (128,128,128) 这 4 类连纯白也只有
+   3.41–3.95:1，属于当前 tint（0.16）下的上限；另 2 类（(139,116,5) 与
+   (109,108,110)）纯白能到 4.57 / 5.22，但取纯白会与 primary 同色（见下）。
+
+   为什么不用更亮的 #F5F5F7 / #FFFFFF：`CopyButton` 的 hover 色是
+   `--copy-hover-text`，在浮窗作用域内已改为 `--popup-text-primary`
+   （深色 #FFFFFF，见下方本块的覆盖）。#EDEDF0 → #FFFFFF 的 ΔE76 是
+   6.37（改前 #C0C0C5 → #F5F5F7 是 18.82）。浅色侧 #262628 → #1D1D1F
+   的 ΔE76 是 4.39，也高于 JND 2.3，但明显弱于改前的 23.71。
+
+   注意不要用对比度比值判断近白区的可辨性：#FFFFFF vs #F5F5F7 只有
+   1.089:1，ΔE76 却有 3.46 —— 比值在近白区严重低估差异。这里的取舍
+   依据是 ΔE76，不是比值。
+
+   底色为何这么亮：Windows 11 的 Acrylic 走 DWMWA_SYSTEMBACKDROP_TYPE，
+   忽略 tint 色、跟随系统明暗（已实测 DARK_MODE=1 / BACKDROP_TYPE=3
+   均已正确施加）。要跨过上述 4 类底色只能加厚 tint 或给标题栏加局部衬底，
+   两者都越出方案 A。 */
+:root:where(:not(.reduce-transparency)).dark .popup-container {
+  --text-secondary: #EDEDF0;
+  /* ③ 深色同理：6% 白压在不透明深底是 ΔE76 6.79，压在玻璃上只剩 2.69。
+     提到 0.12 后 ΔE76 5.36。 */
+  --hover-bg: rgba(255, 255, 255, 0.12);
+  --active-bg: rgba(255, 255, 255, 0.20);
+  /* ① hover 文字色跟着 rest 一起提级，避免 rest 与 hover 撞成同色。 */
+  --copy-hover-text: var(--popup-text-primary);
 }
 
 /* ============================================================
@@ -749,6 +838,21 @@ select.input-field {
        两个不透明窗口。 */
     --text-tertiary: #69696E;
   }
+  /* 恢复 normal 块的基值。normal 块（文件上部）用
+     `:where(:not(.reduce-transparency))` 排除应用内开关，但排除不了这条
+     媒体查询路径 —— 系统偏好开启而应用开关关闭时，两边的 `:not()` 都成立，
+     必须在这里把值改回去，否则 reduce 的标签会与正文同色。
+     两者特异性同为 (0,1,0)，靠源码顺序决胜：本块在后。
+
+     --hover-bg / --active-bg 同理必须还原：reduce 的衬底是 0.94 / 0.92
+     的近实色，玻璃稀释效应不存在，沿用 normal 提级值会让 hover 变成
+     ΔE76 8.46（浅）/ 11.22（深）的重压块，反而像按下去的状态。 */
+  :root:where(:not(.reduce-transparency)) .popup-container {
+    --text-secondary: #515154;
+    --hover-bg: rgba(0, 0, 0, 0.04);
+    --active-bg: rgba(0, 0, 0, 0.08);
+    --copy-hover-text: var(--text-primary);
+  }
   .popup-reading-surface {
     background: rgba(255, 255, 255, 0.94);
   }
@@ -757,6 +861,12 @@ select.input-field {
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
     --text-tertiary: #C7C7CC;
+  }
+  :root:where(:not(.reduce-transparency)).dark .popup-container {
+    --text-secondary: #C0C0C5;
+    --hover-bg: rgba(255, 255, 255, 0.06);
+    --active-bg: rgba(255, 255, 255, 0.10);
+    --copy-hover-text: var(--text-primary);
   }
   :root.dark .popup-reading-surface {
     background: rgba(28, 28, 30, 0.92);
@@ -789,7 +899,12 @@ select.input-field {
    静默空操作。这个开关给这类平台一个确定性的回退。
 
    两者是叠加关系而非互斥：系统偏好命中时永远生效，开关只是额外多一条
-   途径。class 由 useTheme 按 config.reduce_transparency 挂到 <html>。 */
+   途径。class 由 useTheme 按 config.reduce_transparency 挂到 <html>。
+
+   本块（class 路径）不需要恢复 normal 的 --text-secondary：normal 块用的
+   选择器是 `:root:where(:not(.reduce-transparency))`，本路径挂上 class 时
+   那个 `:not()` 已经不成立，覆盖自然失效。只有上面那条 @media 路径需要
+   显式恢复，因为系统偏好不改变 class。 */
 :root.reduce-transparency .popup-container {
   background: rgba(255, 255, 255, 0.94);
   backdrop-filter: none;
