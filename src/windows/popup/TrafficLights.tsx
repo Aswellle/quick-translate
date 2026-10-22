@@ -42,9 +42,13 @@ export function TrafficLights({
       />
       <TrafficLight
         variant="collapse"
+        // 动作标签 + aria-expanded 已完整表达「按下会发生什么 / 现在是什么
+        // 状态」。label 若随状态翻转（"展开"↔"折叠"），读屏用户会听到
+        // 「展开，已展开」这种自相矛盾的组合。
         title={collapsed ? "展开" : "折叠"}
         onClick={onToggleCollapse}
         ariaExpanded={!collapsed}
+        glyphKey={collapsed ? "expand" : "collapse"}
         glyph={
           collapsed ? (
             <path
@@ -65,10 +69,16 @@ export function TrafficLights({
       />
       <TrafficLight
         variant="wide"
+        // 固定为动作标签。此前是 `wide ? "标准宽度" : "阅读宽度"` ——
+        // 按下态（aria-pressed=true，即当前就是阅读宽）配 label「阅读宽度」
+        // 读出来是「阅读宽度，已按下」，用户无法分辨这是「当前状态」还是
+        // 「点下去会变成什么」。固定成动作名 + aria-pressed 表达状态，
+        // 两者不再互相矛盾。
         title={wide ? "标准宽度" : "阅读宽度"}
         onClick={onToggleWide}
         disabled={collapsed}
         ariaPressed={wide}
+        glyphKey={wide ? "wide" : "normal"}
         glyph={
           wide ? (
             <path
@@ -98,6 +108,7 @@ function TrafficLight({
   title,
   onClick,
   glyph,
+  glyphKey,
   disabled = false,
   ariaExpanded,
   ariaPressed,
@@ -106,6 +117,9 @@ function TrafficLight({
   title: string;
   onClick: () => void;
   glyph: React.ReactNode;
+  /** 字形互换动画的挂载键。与 title 解耦：title 要稳定，动画要随语义切换。
+      关闭按钮的字形恒定，不需要传。 */
+  glyphKey?: string;
   disabled?: boolean;
   /** 折叠按钮：展开/折叠是开合关系，用 aria-expanded */
   ariaExpanded?: boolean;
@@ -142,7 +156,12 @@ function TrafficLight({
       disabled={disabled}
       className={`traffic-light traffic-light--${variant}`}
     >
-      <svg key={title} viewBox="0 0 12 12" fill="none" aria-hidden="true">
+      <svg
+        key={glyphKey ?? variant}
+        viewBox="0 0 12 12"
+        fill="none"
+        aria-hidden="true"
+      >
         {glyph}
       </svg>
     </button>

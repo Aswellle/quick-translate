@@ -85,10 +85,33 @@ describe("TrafficLights 无障碍契约", () => {
     }
   });
 
-  it("折叠态下宽度按钮被禁用，且不参与 aria-pressed 播报为可切换", () => {
+  it("折叠态下宽度按钮被禁用", () => {
+    // 本用例只锁定 disabled 这一条。不要把它当成「aria-pressed 的播报行为
+    // 也被验证过」—— 禁用控件的 aria-pressed 是否被读屏播报属于 AT 行为，
+    // jsdom 无法验证，测试名不要许诺超出断言范围的东西。
     const { container } = render({ collapsed: true });
     const [, , wideBtn] = buttons(container);
     expect(wideBtn.disabled).toBe(true);
+  });
+
+  it("aria-label 只表达动作，不随当前状态翻转", () => {
+    // 曾经的缺陷：宽度按钮的 label 是 `wide ? "标准宽度" : "阅读宽度"`，
+    // 而 aria-pressed 同步表达状态。wide=true 时读屏得到「阅读宽度，已按下」
+    // —— 用户无法分辨「阅读宽度」是当前状态还是点下去会变成什么。
+    // 折叠按钮同理（"展开"/"折叠" 配 aria-expanded）。
+    // 约定：label = 动作（点下去会发生什么），aria-* = 当前状态。
+    const normal = render({ wide: false, collapsed: false });
+    const [, collapseN, wideN] = buttons(normal.container);
+    expect(wideN.getAttribute("aria-label")).toBe("阅读宽度");
+    expect(collapseN.getAttribute("aria-label")).toBe("折叠");
+
+    const wide = render({ wide: true, collapsed: false });
+    const [, , wideW] = buttons(wide.container);
+    expect(wideW.getAttribute("aria-label")).toBe("标准宽度");
+
+    const collapsed = render({ collapsed: true });
+    const [, collapseC] = buttons(collapsed.container);
+    expect(collapseC.getAttribute("aria-label")).toBe("展开");
   });
 
   it("图标对辅助技术隐藏，避免与 aria-label 重复播报", () => {
