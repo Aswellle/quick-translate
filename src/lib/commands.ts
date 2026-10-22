@@ -62,6 +62,8 @@ export interface AppConfig {
   fallback_enabled: boolean;
   onboarding_completed: boolean;
   clipboard_monitor_enabled: boolean;
+  /** 应用内「减少透明效果」开关。与系统偏好媒体查询是叠加关系 */
+  reduce_transparency: boolean;
 }
 
 export interface HistoryQuery {
@@ -225,9 +227,29 @@ export async function resetPopupPosition(): Promise<void> {
  * DWM 的 Acrylic backdrop 跟随系统主题而非应用主题；应用深色 + 系统浅色
  * 时浮窗背后是一块浅色亚克力。前端在 `.dark` class 变化时调用
  * （与 CSS 主题单一来源对齐）。
+ *
+ * `followSystem` 告诉后端"当前主题偏好是不是 system"。macOS 侧据此决定
+ * 是清空窗口 appearance（让原生材质跟随系统、并保持 webview 的
+ * prefers-color-scheme 可被系统变化刷新），还是钉死成 Aqua / DarkAqua。
+ * 若在 system 档位也钉死 appearance，浮窗自己的 matchMedia 会永远读到
+ * 旧值，等于自断"跟随系统"的检测链路。
  */
-export async function setPopupTheme(dark: boolean): Promise<void> {
-  return invoke("set_popup_theme", { dark });
+export async function setPopupTheme(
+  dark: boolean,
+  followSystem: boolean
+): Promise<void> {
+  return invoke("set_popup_theme", { dark, followSystem });
+}
+
+/**
+ * 用户开启「降低透明度」时清空浮窗的 OS 原生材质，关闭时重新施加。
+ *
+ * 只改 CSS 压不住窗口背后的 Acrylic / Liquid Glass —— 那层由系统合成，
+ * 边缘反光与亮度调制照旧。`enhanced = true` 表示需要更实的外观
+ * （即 prefers-reduced-transparency: reduce 生效）。
+ */
+export async function setPopupTransparency(enhanced: boolean): Promise<void> {
+  return invoke("set_popup_transparency", { enhanced });
 }
 
 export async function resizePopup(width: number, height: number): Promise<void> {

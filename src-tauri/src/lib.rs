@@ -341,6 +341,7 @@ pub fn run() {
             commands::system::remember_popup_position_now,
             commands::system::reset_popup_position,
             commands::system::set_popup_theme,
+            commands::system::set_popup_transparency,
             commands::system::resize_popup,
             commands::system::get_app_version,
             commands::system::notify_toast,

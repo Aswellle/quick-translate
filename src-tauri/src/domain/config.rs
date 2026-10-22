@@ -27,8 +27,8 @@ struct KeyDescriptor {
 /// 凭证与字符串类键的描述符表。
 ///
 /// 布尔/整数键（auto_start / history_limit / fallback_enabled /
-/// onboarding_completed / clipboard_monitor_enabled）的解析各自带
-/// 类型转换与钳制逻辑，留在 match 里，表只收字符串直存类键。
+/// onboarding_completed / clipboard_monitor_enabled / reduce_transparency）
+/// 的解析各自带类型转换与钳制逻辑，留在 match 里，表只收字符串直存类键。
 const KEY_DESCRIPTORS: &[KeyDescriptor] = &[
     KeyDescriptor {
         key: "target_lang",
@@ -193,6 +193,7 @@ impl ConfigService {
             "fallback_enabled" => Some(self.cache.fallback_enabled.to_string()),
             "onboarding_completed" => Some(self.cache.onboarding_completed.to_string()),
             "clipboard_monitor_enabled" => Some(self.cache.clipboard_monitor_enabled.to_string()),
+            "reduce_transparency" => Some(self.cache.reduce_transparency.to_string()),
             _ => None,
         }
     }
@@ -283,6 +284,7 @@ impl ConfigService {
             "fallback_enabled" => self.cache.fallback_enabled = value == "true",
             "onboarding_completed" => self.cache.onboarding_completed = value == "true",
             "clipboard_monitor_enabled" => self.cache.clipboard_monitor_enabled = value == "true",
+            "reduce_transparency" => self.cache.reduce_transparency = value == "true",
             _ => {}
         }
     }
@@ -375,6 +377,9 @@ fn load_config_from_db(conn: &Connection) -> Result<AppConfig, AppError> {
             }
             "clipboard_monitor_enabled" => {
                 config.clipboard_monitor_enabled = decode(&raw) == "true";
+            }
+            "reduce_transparency" => {
+                config.reduce_transparency = decode(&raw) == "true";
             }
             _ => {}
         }
@@ -471,6 +476,45 @@ mod tests {
         assert_eq!(decode("true"), "true");
         assert_eq!(decode(" true "), "true");
         assert_eq!(decode("200"), "200");
+    }
+
+    /// reduce_transparency 走与其它布尔键相同的三条路径（get / 缓存 / 载入）。
+    ///
+    /// 这三处是手写的 match 分支，不在 KEY_DESCRIPTORS 表里 —— 新增一个
+    /// 布尔键时漏掉任何一处都是静默的：漏 get 则前端读不到，漏缓存则
+    /// 设置页改完不生效，漏载入则重启后回退默认值。本测试锁住三者一致。
+    #[test]
+    fn reduce_transparency_roundtrips_through_all_three_paths() {
+        // 用独立 runtime 跑 set（它是 async 且要锁共享连接），再用
+        // blocking_lock 从库重读 —— blocking_lock 不能在 runtime 内调用，
+        // 所以 block_on 必须作用域受限、在重读之前结束。
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let db = test_db();
+        let mut svc = fresh_service(db);
+
+        assert_eq!(svc.get("reduce_transparency").as_deref(), Some("false"));
+
+        rt.block_on(async {
+            svc.set("reduce_transparency", "true").await.unwrap();
+        });
+        assert_eq!(
+            svc.get("reduce_transparency").as_deref(),
+            Some("true"),
+            "写入后缓存必须立即反映新值"
+        );
+
+        // 从库重新解析，模拟重启：走的是与启动时同一条 load_config_from_db
+        let shared = svc.db.try_conn().unwrap();
+        let conn = shared.blocking_lock();
+        let reloaded = load_config_from_db(&conn).unwrap();
+        drop(conn);
+        assert!(
+            reloaded.reduce_transparency,
+            "重启后必须仍为 true —— 漏掉 load 分支会静默回退成 false"
+        );
     }
 }
 

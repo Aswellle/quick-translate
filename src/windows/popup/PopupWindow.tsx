@@ -11,10 +11,12 @@ import {
   activatePopup,
   rememberPopupPosition,
   setPopupTheme,
+  setPopupTransparency,
   type PopupGeometry,
 } from "@/lib/commands";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { useTranslationStore } from "@/stores/translationStore";
+import { useConfigStore } from "@/stores/configStore";
 import { LoadingView } from "./LoadingView";
 import { ResultView } from "./ResultView";
 import { ErrorView } from "./ErrorView";
@@ -342,31 +344,121 @@ export function PopupWindow() {
   // 亚克力，深色玻璃观感全毁。把 DWMWA_USE_IMMERSIVE_DARK_MODE 同步到
   // 与 CSS `.dark` 相同的来源（documentElement.classList），材质与着色层
   // 才能始终是同一明暗。
+  //
+  // macOS 侧还要多一个信息：主题偏好是不是 `system`。system 档位下必须
+  // 清空窗口 appearance 让原生材质跟随系统，否则会把浮窗 webview 的
+  // prefers-color-scheme 钉死，此后系统主题变化再也检测不到（D3）。
   useEffect(() => {
     const root = document.documentElement;
     // observer 的过滤粒度是整个 class 属性而非 .dark 一位 —— 未来任何
     // 往 <html> 挂别的 class 的代码都会触发 sync。缓存上次明暗值，
     // 未变化时跳过 IPC，避免无谓的 DWM 调用。
-    let lastDark: boolean | null = null;
+    //
+    // 缓存的是 `dark|followSystem` 组合而非单个布尔：用户在设置页把
+    // 主题从"深色"改成"跟随系统"而此刻系统正好是深色时，`.dark` 不变
+    // 但语义变了 —— 只比对 dark 会漏掉这次切换，浮窗 appearance 卡在
+    // 上一次的钉死状态。
+    let lastKey: string | null = null;
     const sync = () => {
+      // 配置尚未加载时不能猜。config 初值是 null，而本 effect 属于子组件、
+      // 先于父组件的 getConfig() 落地执行 —— 直接读会得到
+      // `undefined === "system"` → false，把「未知」误判成「非 system」，
+      // 在 macOS 上把 appearance 钉死成 Aqua。若 getConfig 最终失败
+      // （App.tsx 只 console.error），这个错误判断会永久生效：CSS 按
+      // system 渲染成深色，原生 appearance 却是浅色，正是 D3 要避免的
+      // 「CSS 与原生各执一词」。
+      //
+      // 与 useTheme.ts 的 `config?.theme ?? "system"` 保持同一语义：
+      // 未知一律按 system 处理（不钉死）。config 落地后 setConfig 会触发
+      // 下面的 subscribe(sync)，2s 轮询也会重试。
+      const config = useConfigStore.getState().config;
+      if (!config) return;
       const dark = root.classList.contains("dark");
-      if (dark === lastDark) return;
-      lastDark = dark;
-      setPopupTheme(dark).catch(console.error);
+      const followSystem = config.theme === "system";
+      const key = `${dark}|${followSystem}`;
+      if (key === lastKey) return;
+      // lastKey 在 IPC **成功后**才提交：失败时保持旧值，让 2s 轮询与
+      // subscribe 还能重试。此前是调用前就写，一次失败即永久失配 ——
+      // 轮询被注释声明为「兜底」，乐观缓存让它兜不了底。
+      setPopupTheme(dark, followSystem)
+        .then(() => {
+          lastKey = key;
+        })
+        .catch(console.error);
     };
     sync();
     const observer = new MutationObserver(sync);
     observer.observe(root, { attributes: true, attributeFilter: ["class"] });
 
+    // 主题偏好本身变化（settings 窗口保存 → theme-changed 广播 →
+    // useTheme 更新 configStore）不会改 <html> 的 class 时，上面的
+    // observer 收不到。订阅 store 补上这条路径。
+    const unsubscribe = useConfigStore.subscribe(sync);
+
     // 双保险：系统主题变化（跟随系统模式）在某些 WebView2 运行时上
     // matchMedia 的 change 事件不可靠，主动轮询兜底 —— popup 窗口长期
     // 驻留，用户切了系统深色后浮窗材质应尽快跟上。轮询很便宜：只是读
-    // 一次 classList，真正的 IPC 有 lastDark 守着。
+    // 一次 classList，真正的 IPC 有 lastKey 守着。
     const interval = window.setInterval(sync, 2000);
 
     return () => {
       observer.disconnect();
+      unsubscribe();
       window.clearInterval(interval);
+    };
+  }, []);
+
+  // ── 降低透明度：CSS 之外还要撤掉 OS 原生材质 ──────────────────────
+  // CSS 的 @media (prefers-reduced-transparency) 只能压住 webview 自己
+  // 绘制的内容。窗口背后的 Acrylic / Liquid Glass 由系统合成，边缘反光
+  // 与亮度调制照旧 —— 只改 CSS 的话，用户开了「降低透明度」仍会觉得
+  // 浮窗是半透明的。所以这里同步把原生材质也撤掉，关掉时再恢复。
+  //
+  // 恢复复用后端同一份 popup_effects()，前端不持有材质参数。
+  // 首次挂载时也要同步一次：系统偏好可能是应用启动前就设好的，
+  // 不会触发 change 事件。
+  //
+  // ── 两个触发源，取「或」──
+  // 1. 系统级无障碍偏好（媒体查询）
+  // 2. 应用内「减少透明效果」开关（config.reduce_transparency）
+  //
+  // 为什么需要第 2 条：WKWebView 至今不支持 prefers-reduced-transparency
+  // （WebKit bug 175497，Safari 26.0 特性清单亦无此项）。macOS 上
+  // matchMedia 恒为 false，若只看媒体查询，系统偏好根本读不到，整条
+  // reduce 链路静默空操作 —— 无日志、无降级。开关是确定性回退。
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-reduced-transparency: reduce)");
+    // 能力探测：区分「用户没开」与「平台不支持」。两者最终行为可能一样，
+    // 但排查时完全不是一回事。
+    const mediaSupported =
+      window.CSS?.supports?.("(prefers-reduced-transparency: reduce)") ?? false;
+    if (!mediaSupported) {
+      console.info(
+        "[PopupWindow] 本平台 WebView 不支持 prefers-reduced-transparency，系统偏好读不到；" +
+          "应用内「减少透明效果」开关仍然可用"
+      );
+    }
+
+    let last: boolean | null = null;
+    const sync = () => {
+      const wanted = mq.matches || (useConfigStore.getState().config?.reduce_transparency ?? false);
+      if (wanted === last) return;
+      // 与主题同步同样的约定：调用成功后才提交去重值。此前在 IPC 之前
+      // 就写 last，一次失败（投递失败 / 窗口未就绪）即永久失配 —— 而这条
+      // 路径没有轮询兜底，失败后必须等用户再切一次才能恢复。
+      setPopupTransparency(wanted)
+        .then(() => {
+          last = wanted;
+        })
+        .catch((err) => console.error("[PopupWindow] 同步降低透明度失败:", err));
+    };
+    sync();
+    mq.addEventListener("change", sync);
+    // 应用内开关变化不会触发媒体查询的 change 事件，订阅 store 补上。
+    const unsubscribe = useConfigStore.subscribe(sync);
+    return () => {
+      mq.removeEventListener("change", sync);
+      unsubscribe();
     };
   }, []);
 
@@ -397,8 +489,25 @@ export function PopupWindow() {
             wide={wide}
             activated={activated}
           />
+          {/* 状态播报：必须常驻，不能只在折叠态挂载。
+              live region 的规则是「节点先存在，内容后变化」才会播报 ——
+              若随 {collapsed && ...} 一起挂载，展开态（也就是用户真正
+              盯着结果看的时候）状态变化完全不被读出。此前它写在折叠分支
+              里，恰好把最需要播报的场景漏掉了。 */}
+          <span className="sr-only" role="status" aria-live="polite">
+            {status === "success"
+              ? "翻译完成"
+              : status === "loading"
+                ? "正在翻译"
+                : status === "error"
+                  ? "翻译失败"
+                  : "等待翻译"}
+          </span>
           {collapsed && (
             <>
+              {/* 状态点：颜色即状态，但颜色对屏幕阅读器不可见，
+                  上面的 sr-only live region 负责播报。视觉用户看到的
+                  仍是那个会呼吸的小圆点。 */}
               <span
                 className={`popup-status-dot popup-status-dot--${status}`}
                 aria-hidden="true"

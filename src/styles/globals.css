@@ -452,6 +452,12 @@ html, body, #root {
 
 .traffic-lights.group:hover .traffic-light:not(:disabled) svg { opacity: 1; }
 
+/* 键盘焦点同样要显出字形。
+   原先只有 group:hover 一条规则，Tab 聚焦时能看到 focus ring 却看不到
+   图标 —— 对键盘用户来说三个按钮就是三个纯色圆点，无法分辨哪个是关闭、
+   哪个是折叠。:focus-visible 而非 :focus：鼠标点击后不该让字形常驻。 */
+.traffic-lights:focus-within .traffic-light:focus-visible svg { opacity: 1; }
+
 .traffic-light:hover:not(:disabled) { filter: brightness(1.08); }
 .traffic-light:active:not(:disabled) { transform: scale(0.9); filter: brightness(0.9); }
 
@@ -679,6 +685,153 @@ select.input-field {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* 减少透明效果：系统设置里开了「降低透明度」时，用户明确要求更实的底色。
+   阅读衬底提到接近不透明，玻璃层同步加厚 —— 此时玻璃感是次要的，
+   可读性与视觉舒适度优先。
+   注意：本规则只影响 CSS 层；OS 原生材质由 set_popup_transparency
+   命令在 reduce 时整个撤掉（只加厚 CSS 压不住系统合成的边缘反光）。
+
+   深色配方必须写在同一个 @media 块内并用 :root.dark 提权：若把它写成
+   块外的独立规则，正常模式下也会覆盖 --popup-reading-bg，把深色衬底
+   变成近乎纯黑。
+
+   深色不透明度取 0.92 而非 0.96：0.96 在深色桌面上几乎就是纯黑，
+   与「偏淡」的整体取向相反，也让 reduce 模式看起来像另一个应用。
+   0.92 仍足以压住任意桌面背景（白字对比度 > 11:1），同时保留一层
+   可察觉的底色而非死黑。
+
+   为什么深色比浅色（0.94）还透一点是可以的、但不能再低：reduce 撤掉
+   原生材质后没有 blur，0.88 时深板在亮色壁纸下会透出可察觉的亮度，
+   此时「对比度达标」不等于「观感成立」。0.92 是兼顾两者的位置。
+
+   ── container 为什么要提到与阅读衬底同级 ──
+   标题栏（语言方向标签）与操作栏（复制按钮、快捷键提示）不在阅读
+   衬底覆盖范围内，它们的可读性只由 container 的 alpha 保证。原先把
+   container 留在 0.72 / 0.74，在纯白或高饱和黄桌面上 secondary 文字
+   只有 2.8–4.0:1，低于 4.5:1 —— reduce 模式恰恰是用户要求「看得更清
+   楚」的时候，这里反而更糊。提到 0.94 / 0.92 后全部达标。
+
+   顺带把深色 tertiary 从 #98989D 提到 #C7C7CC、浅色从 #6E6E73 收到
+   #69696E：这两个是**只在 reduce 模式下生效**的局部覆盖，normal 模式
+   的层次关系不变。
+
+   ── 关于 D7 的 0.65 上限 ──
+   D7 规定 --popup-reading-bg 的上限是 0.65，这里的 0.94 明显越过了它。
+   越界是有依据的：D7 讨论的是**正常模式**下「别用加厚换对比度」的取向
+   问题；而 reduce 模式的前提已经变了 —— 原生材质被整个撤掉、blur 也没
+   了，此时衬底不是「更厚的玻璃」，而是唯一的视觉载体。0.65 在无材质、
+   无模糊的透明窗口上等于让桌面直接透出来。R-C 的算术证明了 0.72 时
+   secondary 只有 2.8–4.0:1。这是对 D7 适用范围的收窄，不是推翻 ——
+   D7 在 normal 模式下继续有效。
+
+   ── 为什么下面同一份配方写了两遍 ──
+   触发 reduce 有两条互不排斥的途径：
+     1. 系统级无障碍偏好 → @media (prefers-reduced-transparency: reduce)
+     2. 应用内「减少透明效果」开关 → :root.reduce-transparency
+
+   二者是「或」的关系，而 CSS 没有把媒体查询与选择器合成一个条件的
+   语法（@container style() 的支持面还不够）。所以只能各写一份。
+
+   要改配方时**两处必须同步**。这是唯一可靠的做法：合并成自定义属性
+   再条件生效需要 @container style()，在 WebView2 / WKWebView 上不可靠；
+   用 JS 在媒体查询命中时补挂 class 也能消掉一份，但那会把纯 CSS 的
+   无障碍响应变成依赖 JS 的路径 —— 系统偏好应当在脚本出错时仍然生效。
+   宁可重复，不引入这种耦合。 */
+@media (prefers-reduced-transparency: reduce) {
+  .popup-container {
+    background: rgba(255, 255, 255, 0.94);
+    /* 衬底已接近纯色，30px 模糊只剩开销没有收益 */
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    /* 文字色局部提级（浅色）。详见块末的说明 —— 必须收窄到
+       .popup-container 而不是 :root，否则会污染 settings / history
+       两个不透明窗口。 */
+    --text-tertiary: #69696E;
+  }
+  .popup-reading-surface {
+    background: rgba(255, 255, 255, 0.94);
+  }
+  :root.dark .popup-container {
+    background: rgba(28, 28, 30, 0.92);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    --text-tertiary: #C7C7CC;
+  }
+  :root.dark .popup-reading-surface {
+    background: rgba(28, 28, 30, 0.92);
+  }
+  /* 光学层也要一起撤。
+
+     ::before 是顶部镜面高光（浅色 0.38/0.20，深色 0.16/0.10），::after
+     是内圈亮边 —— 两者都是「玻璃受光」的模拟。原生材质撤掉之后它们仍
+     原样叠在实心衬底上，观感变成「玻璃样式贴到实心板上」：0.94 近白板
+     上尚不明显，0.92 深板上那圈白反光就相当突兀了。
+
+     reduce 的论据本来就是「可读性与视觉舒适度优先」，留着装饰性眩光与
+     这条论据自相矛盾。这里只改伪元素的 paint，不动任何结构。 */
+  .popup-container::before,
+  .popup-container::after,
+  :root.dark .popup-container::before,
+  :root.dark .popup-container::after {
+    background: none;
+    box-shadow: none;
+  }
+  /* 文字色收窄的说明见上方 .popup-container 规则内的注释。 */
+}
+
+/* ── 应用内「减少透明效果」开关 ──
+   与上面 @media 块**逐条对应**，改配方时两处必须同步（原因见上）。
+
+   为什么需要这条路径：WKWebView 至今不支持 prefers-reduced-transparency
+   （WebKit bug 175497，Safari 26.0 特性清单亦无此项）。macOS 上媒体查询
+   恒为 false，若只有 @media，系统级偏好根本读不到，整条 reduce 链路
+   静默空操作。这个开关给这类平台一个确定性的回退。
+
+   两者是叠加关系而非互斥：系统偏好命中时永远生效，开关只是额外多一条
+   途径。class 由 useTheme 按 config.reduce_transparency 挂到 <html>。 */
+:root.reduce-transparency .popup-container {
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  --text-tertiary: #69696E;
+}
+:root.reduce-transparency .popup-reading-surface {
+  background: rgba(255, 255, 255, 0.94);
+}
+:root.reduce-transparency.dark .popup-container {
+  background: rgba(28, 28, 30, 0.92);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  --text-tertiary: #C7C7CC;
+}
+:root.reduce-transparency.dark .popup-reading-surface {
+  background: rgba(28, 28, 30, 0.92);
+}
+:root.reduce-transparency .popup-container::before,
+:root.reduce-transparency .popup-container::after,
+:root.reduce-transparency.dark .popup-container::before,
+:root.reduce-transparency.dark .popup-container::after {
+  background: none;
+  box-shadow: none;
+}
+  /* 文字色为什么要收窄到 .popup-container 而不是 :root：
+
+     globals.css 被四个窗口共用（main.tsx 全局引入），而 settings /
+     history 是不透明窗口（实色 --bg-*），与浮窗的对比度问题毫无因果
+     关系。用 :root 覆盖的后果是可证伪的层级反转 —— 暗色 reduce 下
+     tertiary #C7C7CC(199) 比 secondary #C0C0C5(192) 更亮，HistoryList
+     的「耗时 123ms」与 SettingsWindow 的「12 个来源」会比它们修饰的
+     二级标签更抢眼；StatsDashboard 的 CHART_AXIS 也读同一变量。
+
+     自定义属性会继承，浮窗全部后代（标题栏语言标签、ResultView、
+     kbd-hint、状态点）自动生效。两处覆盖分别写在上面两条
+     .popup-container / :root.dark .popup-container 规则里 ——
+     写成独立规则会因同特异性重复出现而触发 Biome 的
+     noDescendingSpecificity。
+
+     唯一漏网：ErrorBoundary 兜底渲染在容器外，拿不到覆盖 —— 崩溃屏
+     无需满足对比度门禁。 */
 
 /* Checkmark pop */
 @keyframes checkmark {
