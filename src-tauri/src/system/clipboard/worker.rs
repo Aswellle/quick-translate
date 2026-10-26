@@ -264,11 +264,14 @@ pub fn run_worker(
         };
 
         let current_normalized = super::normalize_text(&current);
+        // 变化代数提前到 app 写入吸收之前读取：期望登记要靠「代数是否
+        // 从基线前进」判断写入是否落地（QT-013）
+        let current_seq = backend.seq();
 
-        // app 主动写入剪贴板（复制译文/原文）：内容哈希匹配才吸收（F4）。
-        // 不匹配时登记保留 —— 写入可能尚未落地；用户抢先复制的新内容
-        // 因哈希不匹配会正常走翻译流程，不再被误吞。
-        if controller.consume_if_expected(&current_normalized) {
+        // app 主动写入剪贴板（复制译文/原文）：哈希匹配 + 代数前进才吸收。
+        // 文本相同但代数未前进 = 写入尚未落地，保留登记且不触发翻译；
+        // 用户抢先复制的新内容因哈希不匹配会正常走翻译流程，不再被误吞。
+        if controller.consume_if_expected(&current_normalized, current_seq) {
             tracing::info!(
                 "[clipboard] 检测到 app 写入（哈希匹配），已吸收 len={}",
                 current_normalized.len()
@@ -288,7 +291,6 @@ pub fn run_worker(
         }
 
         // 检测是否是新内容（纯函数，见 is_new_content 的文档）。
-        let current_seq = backend.seq();
         let is_new = is_new_content(
             last_text.as_deref(),
             last_seq,
@@ -603,7 +605,7 @@ mod tests {
     fn app_write_is_absorbed_and_does_not_trigger() {
         let controller = Arc::new(MonitorController::new());
         // 模拟「复制译文」按钮：app 先登记期望，再把内容写进剪贴板
-        controller.mark_app_write("translated");
+        controller.mark_app_write("translated", None);
         let backend = MockClipboardBackend::new(vec![Step::Text("translated")]);
         let (sink, handle) = spawn(backend, &controller, usize::MAX);
 
@@ -752,6 +754,69 @@ mod tests {
             sink.emitted(),
             vec!["stable"],
             "同文本 + 同序列号 = 原地未动，关闭后不得再次触发"
+        );
+    }
+
+    // ── QT-013：复制原文按钮与已有同文本剪贴板的竞态 ─────────────────────
+
+    /// 核心回归（QT-013）：用户点「复制原文」时剪贴板里躺着的就是同一段
+    /// 原文。完整时序（与真实路径一致，共享代数精确控制写入落地时机）：
+    ///
+    ///   1. 复制文本 → 触发翻译（emit#1）
+    ///   2. 关闭浮窗 → 吸收（last = 同文本，seq 5）
+    ///   3. 点复制原文 → mark_app_write(同文本, baseline=5)，写入尚未落地
+    ///      —— worker 多轮读到的都是同文本 + seq 5：不得消费期望、不得触发
+    ///   4. 应用写入落地（seq 6）→ 期望匹配 + 代数前进 → 吸收，不再翻译
+    ///
+    /// 旧实现只看哈希：第 3 步就把期望消费掉，第 4 步的同文本被误判成
+    /// 「用户重新复制」而再次翻译（本测试在旧代码上会观察到 emit#2）。
+    #[test]
+    fn copy_original_with_identical_clipboard_does_not_retranslate() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let controller = Arc::new(MonitorController::new());
+        let shared_seq = Arc::new(AtomicU32::new(5));
+        // 脚本只有一步：内容停在「复制原文之前的原文」，代数由测试动态控制
+        let backend =
+            MockClipboardBackend::new(vec![Step::Text("same")]).with_shared_seq(shared_seq.clone());
+        let (sink, handle) = spawn(backend, &controller, usize::MAX);
+
+        // 1. 首次复制正常触发
+        assert!(
+            wait_until(Duration::from_secs(2), || sink.emitted().len() == 1),
+            "首次复制必须正常触发"
+        );
+
+        // 2. 关闭浮窗 → 吸收当前内容（seq 5）
+        controller.reset_last_text();
+        thread::sleep(Duration::from_millis(20));
+
+        // 3. 点复制原文：基线 = 登记时刻的代数（5）；写入尚未落地
+        controller.mark_app_write("same", Some(5));
+        // 给 worker 足够多轮次去「犯错」：代数未前进期间不得消费、不得触发
+        thread::sleep(Duration::from_millis(40));
+        assert!(
+            controller.expectation_pending_for_test(),
+            "写入未落地（代数未前进）时期望必须保留"
+        );
+        assert_eq!(sink.emitted().len(), 1, "写入落地前不得重复触发翻译");
+
+        // 4. 应用写入落地（代数前进到 6）→ 期望消费 + 吸收，不再翻译
+        shared_seq.store(6, Ordering::SeqCst);
+        assert!(
+            wait_until(Duration::from_secs(2), || !controller
+                .expectation_pending_for_test()),
+            "写入落地后期望应被消费"
+        );
+        thread::sleep(Duration::from_millis(60));
+
+        controller.request_shutdown();
+        let _ = handle.join().unwrap();
+
+        assert_eq!(
+            sink.emitted(),
+            vec!["same"],
+            "复制原文按钮绝不能让同一段内容被再次翻译弹出"
         );
     }
 

@@ -17,7 +17,9 @@ use crate::types::ToastPayload;
 #[tauri::command]
 pub async fn copy_to_clipboard(app: AppHandle, text: String) -> Result<(), AppError> {
     let state = app.state::<crate::state::AppState>();
-    state.clipboard_monitor.mark_app_write(&text);
+    // 基线代数必须在写入之前读取：期望的判据是「代数从登记时刻前进」
+    let baseline_seq = clipboard::clipboard_seq();
+    state.clipboard_monitor.mark_app_write(&text, baseline_seq);
     let result = clipboard::write_clipboard_text(&text);
     if result.is_err() {
         state.clipboard_monitor.unmark_app_write();

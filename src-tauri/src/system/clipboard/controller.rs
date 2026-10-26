@@ -13,15 +13,22 @@ use std::time::{Duration, Instant};
 
 use super::health::{ClipboardHealth, HealthState};
 
-/// app 内写入的期望登记：绑定内容哈希 + 登记时刻（F4）。
+/// app 内写入的期望登记：内容哈希 + 基线变化代数 + 登记时刻。
 ///
-/// 取代此前的裸 AtomicBool —— 布尔标志不绑定内容，存在三个吸收错文本的
-/// 竞态窗口（写入落地前被消费 / 同窗口用户复制被吞 / 暂停期存活吞掉恢复
-/// 后首次复制）。哈希匹配才吸收，天然免疫全部三者；EXPECT_TTL 兜底清理
-/// 「写入被用户复制覆盖导致期望永远匹配不上」的残留。
+/// 演进（QT-013）：F4 时代的「哈希 + 时刻」只能判断「读到的内容是否相同」，
+/// 无法证明这次内容变化是**应用写入**而非用户动作 —— 用户点「复制原文」
+/// 时剪贴板里躺着的就是同一段原文：worker 在写入落地前先读到相同文本
+/// （哈希命中）把期望消费掉，随后真正的写入让变化代数前进，同文本被
+/// 误判成「用户重新复制」，同一段内容被再次翻译弹出。
+///
+/// 绑定基线后语义闭环：登记时刻记下剪贴板变化代数，**只有代数前进且
+/// 文本匹配**才认定写入落地并消费。落地前的同文本轮询（代数 == 基线）
+/// 不消费也不触发；平台无变化代数时退化为纯哈希匹配（显式降级，
+/// 与剪贴板监控其余路径的降级策略一致）。
 #[derive(Clone, Copy)]
 struct ExpectedWrite {
     text_hash: u64,
+    baseline_seq: Option<u32>,
     at: Instant,
 }
 
@@ -32,6 +39,19 @@ fn hash_text(text: &str) -> u64 {
     let mut h = DefaultHasher::new();
     text.hash(&mut h);
     h.finish()
+}
+
+/// 登记的写入是否已经落地：代数从基线前进即落地。
+///
+/// - (基线 None, 任意) → 平台无变化代数，退化为纯哈希匹配（显式降级）；
+/// - (基线 Some, 代数 None) → 读不到代数，保守视为未落地；
+/// - (Some(b), Some(c)) → c != b 即落地（写入必然推进代数）。
+fn write_has_landed(baseline_seq: Option<u32>, current_seq: Option<u32>) -> bool {
+    match (baseline_seq, current_seq) {
+        (None, _) => true,
+        (Some(_), None) => false,
+        (Some(b), Some(c)) => c != b,
+    }
 }
 
 /// 控制器句柄：可在运行时暂停/恢复监控，并请求重置 last_text
@@ -125,19 +145,25 @@ impl MonitorController {
     }
 
     /// 登记一次 app 内剪贴板写入（复制译文/原文按钮）。
-    /// 哈希取自 normalize_text 后的文本 —— Windows 剪贴板往返可能改写
-    /// 换行（LF↔CRLF），原文哈希会永远匹配不上导致吸收失效；两侧统一
-    /// 归一化后比较即可免疫。
-    pub fn mark_app_write(&self, text: &str) {
+    ///
+    /// `baseline_seq` 是登记时刻的剪贴板变化代数（调用方在写入**之前**
+    /// 读取平台序列号传入；平台不提供时传 None）。哈希取自 normalize_text
+    /// 后的文本 —— Windows 剪贴板往返可能改写换行（LF↔CRLF），原文哈希
+    /// 会永远匹配不上导致吸收失效；两侧统一归一化后比较即可免疫。
+    pub fn mark_app_write(&self, text: &str, baseline_seq: Option<u32>) {
         let mut slot = self
             .expected_write
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         *slot = Some(ExpectedWrite {
             text_hash: hash_text(&super::normalize_text(text)),
+            baseline_seq,
             at: Instant::now(),
         });
-        tracing::info!("[MonitorController] mark_app_write() 已登记期望哈希");
+        tracing::info!(
+            "[MonitorController] mark_app_write() 已登记期望（baseline={:?}）",
+            baseline_seq
+        );
     }
 
     /// 撤销登记：写剪贴板失败时调用，避免残留期望（F5）。
@@ -150,16 +176,26 @@ impl MonitorController {
     }
 
     /// worker 调用：当前内容（已归一化）是否匹配已登记的 app 写入。
-    /// 匹配 → 消费登记并返回 true（调用方应吸收该内容）；
-    /// 不匹配 → 保留登记（写入可能尚未落地），但超过 EXPECT_TTL 则丢弃
-    /// （写入已被用户复制覆盖，期望永远无法匹配）。
-    pub(crate) fn consume_if_expected(&self, current_normalized: &str) -> bool {
+    ///
+    /// `current_seq` 是本轮读取的剪贴板变化代数。匹配 = 文本哈希一致
+    /// **且**代数已从基线前进（写入真正落地）→ 消费登记并返回 true；
+    /// 文本相同但代数未前进 → 写入尚未落地，保留登记、返回 false
+    /// （此时同文本同代数也不该触发翻译，由 is_new_content 判定）。
+    /// 超过 EXPECT_TTL 丢弃（写入已被用户复制覆盖，期望永远无法匹配）。
+    pub(crate) fn consume_if_expected(
+        &self,
+        current_normalized: &str,
+        current_seq: Option<u32>,
+    ) -> bool {
         let mut slot = self
             .expected_write
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         match *slot {
-            Some(exp) if exp.text_hash == hash_text(current_normalized) => {
+            Some(exp)
+                if exp.text_hash == hash_text(current_normalized)
+                    && write_has_landed(exp.baseline_seq, current_seq) =>
+            {
                 *slot = None;
                 true
             }
@@ -191,6 +227,15 @@ impl MonitorController {
     #[cfg(test)]
     pub(crate) fn absorb_is_pending(&self) -> bool {
         self.absorb_pending.load(Ordering::SeqCst)
+    }
+
+    /// 期望登记是否仍在（未被消费或超时丢弃）。仅供测试断言（QT-013 时序）。
+    #[cfg(test)]
+    pub(crate) fn expectation_pending_for_test(&self) -> bool {
+        self.expected_write
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some()
     }
 
     // ── 健康状态 ──────────────────────────────────────────────────────────
@@ -309,9 +354,9 @@ mod tests {
     fn expected_write_matches_only_after_normalization() {
         let c = MonitorController::new();
         // 登记时带 CRLF，监控侧读到的是 LF（Windows 剪贴板往返会改写换行）
-        c.mark_app_write("hello\r\nworld");
+        c.mark_app_write("hello\r\nworld", None);
         assert!(
-            c.consume_if_expected("hello world"),
+            c.consume_if_expected("hello world", None),
             "两侧都归一化后应当匹配"
         );
     }
@@ -319,25 +364,73 @@ mod tests {
     #[test]
     fn expected_write_survives_until_consumed_then_is_gone() {
         let c = MonitorController::new();
-        c.mark_app_write("payload");
+        c.mark_app_write("payload", None);
         assert!(
-            !c.consume_if_expected("something else"),
+            !c.consume_if_expected("something else", None),
             "不匹配时不得消费登记"
         );
-        assert!(c.consume_if_expected("payload"), "匹配时消费登记");
+        assert!(c.consume_if_expected("payload", None), "匹配时消费登记");
         assert!(
-            !c.consume_if_expected("payload"),
+            !c.consume_if_expected("payload", None),
             "登记已被消费，不该二次命中"
+        );
+    }
+
+    // ── QT-013：期望登记必须绑定变化代数 ─────────────────────────────────
+
+    /// 核心回归：文本相同但代数未从基线前进 = 写入尚未落地，不得消费。
+    /// 旧实现只看哈希 —— 用户点「复制原文」而剪贴板已是同一段原文时，
+    /// worker 在写入落地前就把期望消费掉，随后的真实写入被误判成
+    /// 「用户重新复制」而再次翻译。
+    #[test]
+    fn expectation_with_unchanged_seq_is_not_consumed() {
+        let c = MonitorController::new();
+        c.mark_app_write("same text", Some(5));
+
+        // 写入落地前：同文本、同代数 —— 不消费
+        assert!(
+            !c.consume_if_expected("same text", Some(5)),
+            "代数未前进不得认定写入落地"
+        );
+        // 落地后：代数前进 → 消费
+        assert!(c.consume_if_expected("same text", Some(6)));
+    }
+
+    /// 有基线但读不到代数：保守不消费（宁可多等一轮，不可吞掉用户复制）。
+    #[test]
+    fn expectation_with_unreadable_seq_is_not_consumed() {
+        let c = MonitorController::new();
+        c.mark_app_write("payload", Some(5));
+        assert!(!c.consume_if_expected("payload", None));
+    }
+
+    /// 平台无变化代数（baseline None）：退化为纯哈希匹配（显式降级语义）。
+    #[test]
+    fn expectation_without_platform_seq_falls_back_to_hash() {
+        let c = MonitorController::new();
+        c.mark_app_write("payload", None);
+        assert!(c.consume_if_expected("payload", None));
+    }
+
+    /// 代数回退/异常（current < baseline）同样视为落地：代数比较用不等而非
+    /// 大于 —— u32 回绕在真实时间尺度上不可达，不等于基线即变化。
+    #[test]
+    fn expectation_consumes_on_any_seq_change() {
+        let c = MonitorController::new();
+        c.mark_app_write("payload", Some(u32::MAX));
+        assert!(
+            c.consume_if_expected("payload", Some(0)),
+            "代数回绕视为变化"
         );
     }
 
     #[test]
     fn unmark_cancels_pending_expectation() {
         let c = MonitorController::new();
-        c.mark_app_write("payload");
+        c.mark_app_write("payload", None);
         c.unmark_app_write();
         assert!(
-            !c.consume_if_expected("payload"),
+            !c.consume_if_expected("payload", None),
             "撤销后不该再吸收用户真实复制的内容"
         );
     }
