@@ -193,14 +193,14 @@ pub fn ensure_popup_window(app: &AppHandle) {
     }
 }
 
-/// 创建或复用浮窗，发送 loading 事件。
+/// 创建或复用浮窗并显示。**只做窗口操作，不发事件。**
+///
+/// 事件提交已上移到 `coordinator::commit_popup_show` 的代际闸门内
+/// （QT-003）：loading 事件携带 request id，会改变前端的当前请求身份，
+/// 因此「发不发」必须由代际闸门原子裁决；本函数只回答「窗口是否显示成功」。
 ///
 /// 返回 false 表示浮窗没能显示出来 —— 调用方据此上报浮窗组件的健康状态。
-pub(crate) async fn show_popup_loading(
-    app: &AppHandle,
-    position: &PopupPosition,
-    request_id: &str,
-) -> bool {
+pub(crate) async fn show_popup_window(app: &AppHandle, position: &PopupPosition) -> bool {
     // 位置策略：用户拖拽过窗口就沿用拖拽位置，否则按光标锚点重算。
     //
     // 这是「拖到任意位置后被下次翻译冲掉」的修复点。此前每次显示都无条件
@@ -209,33 +209,39 @@ pub(crate) async fn show_popup_loading(
     // 拖拽位置是显式用户意图，优先级高于「跟着光标跑」的默认行为。
     let target = match popup_geometry::dragged_position() {
         Some((x, y)) => {
-            tracing::info!("[show_popup_loading] 沿用用户拖拽位置 ({}, {})", x, y);
+            tracing::info!("[show_popup_window] 沿用用户拖拽位置 ({}, {})", x, y);
             (x, y)
         }
         None => (position.x, position.y),
     };
 
     if let Some(window) = app.get_webview_window(POPUP_LABEL) {
-        tracing::info!("[show_popup_loading] 找到 popup，设置位置={:?}", target);
+        tracing::info!("[show_popup_window] 找到 popup，设置位置={:?}", target);
         let _ = window.set_position(tauri::LogicalPosition::new(target.0, target.1));
         // 每次显示都复位为非激活：用户上一次点过浮窗的话，窗口仍是可激活的，
         // 不复位就会在这一轮直接抢走焦点（Phase 8b）
         let _ = window.set_focusable(false);
         let _ = window.show();
     } else {
-        tracing::info!("[show_popup_loading] popup 不存在，创建新窗口并立即 show()");
+        tracing::info!("[show_popup_window] popup 不存在，创建新窗口并立即 show()");
         match build_popup_window(app, target, false) {
             Ok(window) => {
-                tracing::info!("[show_popup_loading] 新窗口创建成功，调用 show()");
+                tracing::info!("[show_popup_window] 新窗口创建成功，调用 show()");
                 let _ = window.show();
             }
             Err(e) => {
-                tracing::error!("[show_popup_loading] 创建浮窗失败: {}", e);
+                tracing::error!("[show_popup_window] 创建浮窗失败: {}", e);
                 return false;
             }
         }
     }
 
+    true
+}
+
+/// 发送 loading 事件。**必须经 coordinator 的代际闸门调用** ——
+/// 本函数不做任何「该不该显示」的判断。
+pub(crate) fn emit_loading(app: &AppHandle, position: &PopupPosition, request_id: &str) {
     let _ = app.emit(
         "translation-loading",
         TranslationLoadingPayload {
@@ -243,14 +249,6 @@ pub(crate) async fn show_popup_loading(
             request_id: request_id.to_string(),
         },
     );
-    // 计划第 32 节：被动显示（未抢焦点）也要可观测 —— 排查「浮窗没弹出来」
-    // 时，这条事件与 popup_watch 的关闭事件是同一条时间线的两端。
-    tracing::info!(
-        event = "popup_show_passive",
-        request_id = %request_id,
-        "[popup] 浮窗以被动态显示"
-    );
-    true
 }
 
 /// 下发翻译结果。**调用方必须已通过 coordinator 的代际闸门** ——
