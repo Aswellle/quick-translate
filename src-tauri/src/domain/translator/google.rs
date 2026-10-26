@@ -14,6 +14,18 @@ use crate::types::{ProviderInfo, TranslationResult};
 
 const GOOGLE_TRANSLATE_URL: &str = "https://translate.googleapis.com/translate_a/single";
 
+/// Google 端点接受的最大 URL 字节数（QT-012）。
+///
+/// 该端点走 GET query，文本经 form 编码进 `q` 参数：CJK 每字编码后占
+/// 9 字节、emoji 占 12 字节 —— 5000 个 CJK 字符（应用的全局上限）编码后
+/// 仅 q 一项就 ≈45KB。业界通用的服务器/代理 URL 预算是 ~8KB，取 7500
+/// 留出余量：超限请求在客户端快速失败（HTTP 414 语义），而不是把一个
+/// 注定过长的请求发给服务器后得到含混的 4xx/413，再走完整个 fallback。
+///
+/// **阈值是保守估计**：真实端点的精确接受范围需要 opt-in 实测标定
+/// （EXTERNAL_VALIDATION_REQUIRED），当前取值只保证不误伤正常长度。
+const GOOGLE_MAX_URL_BYTES: usize = 7_500;
+
 /// 轮换 User-Agent 池（降低单 UA 被限流的概率）
 const USER_AGENTS: &[&str] = &[
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -42,6 +54,22 @@ impl GoogleProvider {
             .ua_index
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         USER_AGENTS[idx % USER_AGENTS.len()]
+    }
+
+    /// 计算本次请求的最终 URL 字节数（QT-012）。
+    ///
+    /// 与 reqwest `.query(&[...])` 的序列化结果逐字节一致 —— 两者都用
+    /// form-urlencoded 编码（serde_urlencoded 与 url crate 的
+    /// Serializer 同源），因此这里算出的长度就是线上请求的真实长度。
+    fn encoded_url_len(text: &str, tl: &str) -> usize {
+        let query = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("client", "gtx")
+            .append_pair("sl", "auto")
+            .append_pair("tl", tl)
+            .append_pair("dt", "t")
+            .append_pair("q", text)
+            .finish();
+        GOOGLE_TRANSLATE_URL.len() + 1 + query.len() // '?' + query
     }
 
     /// ISO 639-1 → Google 语言代码
@@ -141,6 +169,16 @@ impl TranslationProvider for GoogleProvider {
     ) -> Result<TranslationResult, AppError> {
         let tl = Self::to_google_lang(target_lang);
 
+        // QT-012：GET query 承载全文 —— 编码后超长的请求在客户端快速失败。
+        // 分类用 ProviderRejected（Permanent：输入的锅，不熔断健康的
+        // Google，fallback 继续尝试 POST 型翻译源）；414 = URI Too Long。
+        if Self::encoded_url_len(text, tl) > GOOGLE_MAX_URL_BYTES {
+            return Err(AppError::ProviderRejected {
+                provider: "google".to_string(),
+                status: 414,
+            });
+        }
+
         // 这里**不再**自己重试。
         //
         // 此前本函数内置一轮最多 3 次的重试循环，而引擎在 Phase 5 也开始按
@@ -183,5 +221,93 @@ impl TranslationProvider for GoogleProvider {
 
     async fn validate_credentials(&self) -> Result<bool, AppError> {
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 审计 QT-012 验收：测量各长度档位的最终 URL 字节长度。
+    ///
+    /// 编码事实（form-urlencoded，UTF-8）：ASCII 1:1、CJK 9 字节/字、
+    /// emoji 12 字节/字 —— 5000 个 CJK 字符的 q 参数一项就 ≈45KB。
+    #[test]
+    fn encoded_url_length_grows_with_multibyte_content() {
+        let base = GoogleProvider::encoded_url_len("", "zh-CN");
+
+        let l1 = GoogleProvider::encoded_url_len("a", "zh-CN");
+        assert_eq!(l1, base + 1, "1 个 ASCII 字符占 1 字节");
+
+        let l_ascii_200 = GoogleProvider::encoded_url_len(&"a".repeat(200), "zh-CN");
+        assert_eq!(l_ascii_200, base + 200);
+
+        let l_cjk_200 = GoogleProvider::encoded_url_len(&"中".repeat(200), "zh-CN");
+        assert_eq!(l_cjk_200, base + 200 * 9, "每个 CJK 字符编码后占 9 字节");
+
+        let l_emoji_200 = GoogleProvider::encoded_url_len(&"😀".repeat(200), "zh-CN");
+        assert_eq!(
+            l_emoji_200,
+            base + 200 * 12,
+            "每个 emoji（4 字节 UTF-8）编码后占 12 字节"
+        );
+    }
+
+    /// 审计验收的核心测量：全局上限 5000 字符在不同字符集下的最终 URL 长度。
+    /// ASCII 档安全（≈6KB），CJK 档（≈45KB）与 emoji 档（≈60KB）远超任何
+    /// 服务器/代理的合理 URL 预算 —— 客户端护栏必须在请求发出前拦截。
+    #[test]
+    fn max_length_inputs_measure_as_documented() {
+        let ascii = GoogleProvider::encoded_url_len(&"a".repeat(5000), "zh-CN");
+        assert_eq!(ascii, GoogleProvider::encoded_url_len("", "zh-CN") + 5000);
+
+        let cjk = GoogleProvider::encoded_url_len(&"中".repeat(5000), "zh-CN");
+        assert!(
+            cjk > 40_000,
+            "5000 CJK 编码后应远超 8KB 常见预算，实测 {}",
+            cjk
+        );
+
+        let emoji = GoogleProvider::encoded_url_len(&"😀".repeat(5000), "zh-CN");
+        assert!(emoji > cjk, "emoji 编码膨胀更甚于 CJK");
+    }
+
+    /// 护栏：超限文本在进入网络层之前快速失败，分类为 Permanent
+    /// （414 = URI Too Long）—— 不熔断健康的 Google，fallback 继续尝试
+    /// POST 型翻译源。
+    #[tokio::test]
+    async fn over_limit_text_fails_fast_without_network() {
+        let provider = GoogleProvider::new(Arc::new(HttpClient::new()));
+        let cjk_5000 = "中".repeat(crate::system::translation::request::MAX_TEXT_CHARS);
+
+        let err = provider
+            .translate(&cjk_5000, "zh")
+            .await
+            .expect_err("超限文本必须被拦截");
+
+        match err {
+            AppError::ProviderRejected { provider, status } => {
+                assert_eq!(provider, "google");
+                assert_eq!(status, 414, "语义必须是 URI Too Long");
+            }
+            other => panic!("应分类为 ProviderRejected(414)，实际: {:?}", other),
+        }
+    }
+
+    /// 边界：护栏只拦「编码后超限」的请求 —— 短文本（哪怕 5000 个
+    /// ASCII 字符，≈6KB）必须放行到网络层。这里不真发请求：护栏判定
+    /// 是纯函数，直接断言阈值两侧的判定结果。
+    #[test]
+    fn guard_boundary_matches_encoded_length() {
+        let under = "a".repeat(5000); // ≈6.1KB < 7500
+        assert!(
+            GoogleProvider::encoded_url_len(&under, "zh-CN") <= GOOGLE_MAX_URL_BYTES,
+            "5000 ASCII 应在预算内"
+        );
+        let over = "中".repeat(1000); // 9KB > 7500
+        assert!(
+            GoogleProvider::encoded_url_len(&over, "zh-CN") > GOOGLE_MAX_URL_BYTES,
+            "1000 CJK（9KB 编码）应超预算"
+        );
     }
 }
