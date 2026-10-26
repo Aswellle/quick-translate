@@ -59,20 +59,25 @@ pub enum WorkerExit {
 
 /// 吸收当前剪贴板内容，返回 (要记为 last_text 的内容, 当时的序列号)。
 ///
-/// 语义与 F8 修复后的 hide_popup 路径一致，不要「顺手简化」：
-///   序列号可用   → last_text = 当前内容（同文本 + 同序列号不再触发）
-///   序列号不可用 → last_text = None（保住 reset_last_text 承诺的
-///                  「重复复制仍能触发」，代价是浮窗可能因残留内容再次弹出）
+/// 吸收语义（QT-002 修订）：**无论序列号是否可用都读取并记录当前文本**。
+/// 记录的目的只有一个 —— 让「关闭浮窗」这个动作本身不会造成重新触发：
+/// 吸收后 `last_text` 与剪贴板现状一致，下一轮轮询判定为「原地未动」。
+///
+/// 序列号可用（Windows / macOS changeCount）时同时记录序列号，
+/// 「同文本 + 序列号变化 = 用户重新复制」仍然触发（F8 / 计划 34.4）。
+///
+/// 序列号不可用的平台上存在**显式降级**：无法区分「重新复制了完全相同的
+/// 文本」与「文本原地未动」，此时选择关闭优先 —— 同文本再次复制不触发，
+/// 直到剪贴板内容发生变化。这与旧实现（`last_text = None`，关闭后残留
+/// 内容约 1 秒后自动重新弹出）相反：旧实现保住了「重复复制仍能触发」，
+/// 却让关闭动作自身变成重新触发的扳机，违反「关闭就是关闭」这条更根本
+/// 的产品承诺。
 fn absorb_current(backend: &mut dyn ClipboardBackend) -> (Option<String>, Option<u32>) {
     let seq = backend.seq();
-    let text = if seq.is_some() {
-        match backend.get_text() {
-            Ok(ClipboardRead::Text(t)) => Some(t),
-            // 读失败或内容为空时置 None：与重构前 `get_text().ok()` 的行为一致
-            _ => None,
-        }
-    } else {
-        None
+    let text = match backend.get_text() {
+        Ok(ClipboardRead::Text(t)) => Some(t),
+        // 读失败或内容为空时置 None：与 `get_text().ok()` 的既有语义一致
+        _ => None,
     };
     (text, seq)
 }
@@ -660,5 +665,91 @@ mod tests {
         let _ = handle.join().unwrap();
 
         assert_eq!(sink.emitted(), vec!["brand new copy"]);
+    }
+
+    // ── QT-002：关闭浮窗后旧内容不得再次触发 ─────────────────────────────
+
+    /// 核心回归（QT-002）：平台不提供序列号时，hide_popup 的吸收必须记录
+    /// 当前文本 —— 否则关闭动作本身会把未变化的旧内容重新变成「新复制」，
+    /// 浮窗关掉约 1 秒后自己弹回来。
+    ///
+    /// 旧实现的吸收分支在 seq == None 时返回 (None, None)，`is_new_content`
+    /// 对 None 恒判新 —— 本测试在旧代码上会观察到第二次触发而失败。
+    #[test]
+    fn close_does_not_retrigger_without_change_token() {
+        let controller = Arc::new(MonitorController::new());
+        // with_seq(None)：模拟修复前 macOS 的「无变化代数」平台
+        let backend = MockClipboardBackend::new(vec![Step::Text("stable")]).with_seq(None);
+        let (sink, handle) = spawn(backend, &controller, usize::MAX);
+
+        // 首次复制正常触发一次（浮窗显示）
+        assert!(
+            wait_until(Duration::from_secs(2), || sink.emitted().len() == 1),
+            "首次复制必须正常触发"
+        );
+
+        // 用户关闭浮窗 → hide_popup 请求吸收
+        controller.reset_last_text();
+        // 给 worker 足够多的轮次去「犯错」（旧代码在这里会再次弹出）
+        thread::sleep(Duration::from_millis(120));
+
+        controller.request_shutdown();
+        let _ = handle.join().unwrap();
+
+        assert_eq!(
+            sink.emitted(),
+            vec!["stable"],
+            "关闭浮窗后，未变化的剪贴板内容不得自动再次触发（关闭就是关闭）"
+        );
+    }
+
+    /// 行为保持：有序列号的平台（Windows / macOS changeCount），关闭后
+    /// 同文本 + 同序列号同样不得再次触发 —— 吸收语义修订不得波及 Windows。
+    #[test]
+    fn close_does_not_retrigger_with_stable_token() {
+        let controller = Arc::new(MonitorController::new());
+        // 默认 seq = Some(1)：Windows 路径
+        let backend = MockClipboardBackend::new(vec![Step::Text("stable")]);
+        let (sink, handle) = spawn(backend, &controller, usize::MAX);
+
+        assert!(
+            wait_until(Duration::from_secs(2), || sink.emitted().len() == 1),
+            "首次复制必须正常触发"
+        );
+
+        controller.reset_last_text();
+        thread::sleep(Duration::from_millis(120));
+
+        controller.request_shutdown();
+        let _ = handle.join().unwrap();
+
+        assert_eq!(
+            sink.emitted(),
+            vec!["stable"],
+            "同文本 + 同序列号 = 原地未动，关闭后不得再次触发"
+        );
+    }
+
+    /// 行为保持：同文本 + 序列号变化 = 用户真的重新复制了一次，必须再次
+    /// 触发（F8 / 计划 34.4 —— 「关闭浮窗后重复复制仍能翻译」的依据）。
+    ///
+    /// 脚本时序：初始内容稳定超过防抖窗口（先触发一次）→ 序列号变化
+    /// （重新复制）→ 序列号稳定（再次触发后停机）。
+    #[test]
+    fn recopied_same_text_with_changed_token_retriggers() {
+        let backend = MockClipboardBackend::new(vec![
+            Step::Text("stable"),
+            Step::Text("stable"),
+            Step::Text("stable"),
+            Step::Text("stable"),
+            Step::TextAndSeq("stable", 2),
+        ]);
+        let (emitted, _) = run(backend, 2);
+
+        assert_eq!(
+            emitted,
+            vec!["stable", "stable"],
+            "同文本被重新复制（序列号变化）必须再次触发翻译"
+        );
     }
 }

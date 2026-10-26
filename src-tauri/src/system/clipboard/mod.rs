@@ -110,8 +110,22 @@ pub fn clipboard_seq() -> Option<u32> {
     Some(unsafe { windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber() })
 }
 
-/// 非 Windows 平台无对应原语。
-#[cfg(not(target_os = "windows"))]
+/// macOS：NSPasteboard 的 changeCount 就是与 Win32 序列号同语义的
+/// 剪贴板变化代数（QT-002）—— 每次写剪贴板（任何进程）单调递增。
+///
+/// 有了它，worker 的「同文本 + 序列号变化 = 用户重新复制」判定在 macOS
+/// 上与 Windows 完全同构，不再需要任何平台特例。
+#[cfg(target_os = "macos")]
+pub fn clipboard_seq() -> Option<u32> {
+    use objc2_app_kit::NSPasteboard;
+    let count = NSPasteboard::generalPasteboard().changeCount();
+    // changeCount 是单调递增的 NSInteger（isize），负值不可能出现；
+    // u32 溢出需要 40 多亿次剪贴板写入，饱和处理即可
+    Some(u32::try_from(count.max(0)).unwrap_or(u32::MAX))
+}
+
+/// 其余平台无对应原语。
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn clipboard_seq() -> Option<u32> {
     None
 }

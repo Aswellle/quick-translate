@@ -123,6 +123,9 @@ pub(crate) mod mock {
     #[derive(Debug, Clone)]
     pub enum Step {
         Text(&'static str),
+        /// 文本 + 当时的序列号：驱动「同文本 + 序列号变化 = 重新复制」
+        /// 这条判定（Windows / macOS changeCount 路径）。
+        TextAndSeq(&'static str, u32),
         Empty,
         Transient(&'static str),
         Fatal(&'static str),
@@ -131,6 +134,8 @@ pub(crate) mod mock {
     pub struct MockClipboardBackend {
         script: VecDeque<Step>,
         seq: Option<u32>,
+        /// `Step::TextAndSeq` 施加的临时序列号；用完回落到 `seq`
+        step_seq: Option<u32>,
     }
 
     impl MockClipboardBackend {
@@ -138,6 +143,7 @@ pub(crate) mod mock {
             Self {
                 script: script.into(),
                 seq: Some(1),
+                step_seq: None,
             }
         }
 
@@ -162,6 +168,10 @@ pub(crate) mod mock {
 
             match step {
                 Step::Text(t) => Ok(ClipboardRead::Text(t.to_string())),
+                Step::TextAndSeq(t, seq) => {
+                    self.step_seq = Some(seq);
+                    Ok(ClipboardRead::Text(t.to_string()))
+                }
                 Step::Empty => Ok(ClipboardRead::Empty),
                 Step::Transient(code) => {
                     Err(ClipboardBackendError::transient(code, "mock transient"))
@@ -171,7 +181,7 @@ pub(crate) mod mock {
         }
 
         fn seq(&self) -> Option<u32> {
-            self.seq
+            self.step_seq.or(self.seq)
         }
     }
 }
