@@ -22,6 +22,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 tokio = { version = "1", features = ["full"] }
+# URL 解析：open_url 的 scheme 白名单校验基于标准 URL parser，
+# 不再手写 split("://")（QT-004）。reqwest 已依赖同一 crate。
+url = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 uuid = { version = "1", features = ["v4"] }
