@@ -175,7 +175,12 @@ pub fn ensure_popup_window(app: &AppHandle) {
         // popup 已存在但可能被隐藏，重新显示。
         // 不 set_focus()：浮窗默认不抢焦点（Phase 8b）。
         tracing::info!("[ensure_popup] popup 已存在，调用 show()");
-        let _ = window.show();
+        if !submit_show(|| window.show()) {
+            app.state::<crate::state::AppState>().runtime.report_popup(
+                crate::runtime::ComponentState::Degraded,
+                Some("POPUP_SHOW_FAILED"),
+            );
+        }
         return;
     }
     // 不存在，创建新的
@@ -199,6 +204,17 @@ pub fn ensure_popup_window(app: &AppHandle) {
 /// （QT-003）：loading 事件携带 request id，会改变前端的当前请求身份，
 /// 因此「发不发」必须由代际闸门原子裁决；本函数只回答「窗口是否显示成功」。
 ///
+/// 失败语义（QT-007）：`show()` 是核心可见性操作 —— 失败必须如实上报
+/// （返回 false，运行时层据此置 Degraded），绝不能吞掉后假装显示成功。
+/// `set_position` / `set_focusable` 是非关键优化：失败只降级为「位置沿用
+/// 上一次 / 焦点态未复位」，浮窗仍然可见，记录 warn 即可，不值得为它们
+/// 放弃整次显示。
+///
+/// 注意 `show()` 返回 Ok 的含义是「显示请求已提交到主线程队列」，而非
+/// 「此刻已可见」—— tauri 的窗口操作从非主线程调用时是排队投递的。
+/// 立即反查 `is_visible()` 会得到竞态假阴性，因此成功路径以「已提交」
+/// 为准，由 `popup_show_passive` 事件与关闭看守在时间线上观测真实可见性。
+///
 /// 返回 false 表示浮窗没能显示出来 —— 调用方据此上报浮窗组件的健康状态。
 pub(crate) async fn show_popup_window(app: &AppHandle, position: &PopupPosition) -> bool {
     // 位置策略：用户拖拽过窗口就沿用拖拽位置，否则按光标锚点重算。
@@ -217,26 +233,63 @@ pub(crate) async fn show_popup_window(app: &AppHandle, position: &PopupPosition)
 
     if let Some(window) = app.get_webview_window(POPUP_LABEL) {
         tracing::info!("[show_popup_window] 找到 popup，设置位置={:?}", target);
-        let _ = window.set_position(tauri::LogicalPosition::new(target.0, target.1));
+        if let Err(e) = window.set_position(tauri::LogicalPosition::new(target.0, target.1)) {
+            // 位置失败不阻断显示：浮窗沿用上一次的位置，仍然可见
+            tracing::warn!(
+                event = "popup_reposition_degraded",
+                code = "POPUP_SET_POSITION_FAILED",
+                "[show_popup_window] 定位失败（沿用旧位置）: {}",
+                e
+            );
+        }
         // 每次显示都复位为非激活：用户上一次点过浮窗的话，窗口仍是可激活的，
         // 不复位就会在这一轮直接抢走焦点（Phase 8b）
-        let _ = window.set_focusable(false);
-        let _ = window.show();
-    } else {
-        tracing::info!("[show_popup_window] popup 不存在，创建新窗口并立即 show()");
-        match build_popup_window(app, target, false) {
-            Ok(window) => {
-                tracing::info!("[show_popup_window] 新窗口创建成功，调用 show()");
-                let _ = window.show();
-            }
-            Err(e) => {
-                tracing::error!("[show_popup_window] 创建浮窗失败: {}", e);
-                return false;
-            }
+        if let Err(e) = window.set_focusable(false) {
+            tracing::warn!(
+                event = "popup_reposition_degraded",
+                code = "POPUP_SET_FOCUSABLE_FAILED",
+                "[show_popup_window] 焦点态复位失败: {}",
+                e
+            );
         }
+        return submit_show(|| window.show());
     }
 
-    true
+    tracing::info!("[show_popup_window] popup 不存在，创建新窗口并立即 show()");
+    match build_popup_window(app, target, false) {
+        Ok(window) => {
+            tracing::info!("[show_popup_window] 新窗口创建成功，调用 show()");
+            submit_show(|| window.show())
+        }
+        Err(e) => {
+            tracing::error!(
+                event = "popup_show_failed",
+                code = "POPUP_CREATE_FAILED",
+                "[show_popup_window] 创建浮窗失败: {}",
+                e
+            );
+            false
+        }
+    }
+}
+
+/// 提交 show 请求并如实回报结果（QT-007）。
+///
+/// 失败必须带稳定错误码落地日志 —— 此前的 `let _ = window.show()` 会让
+/// 「用户看不到浮窗」与「运行时报告 healthy」同时成立，排查无从下手。
+fn submit_show(show: impl FnOnce() -> Result<(), tauri::Error>) -> bool {
+    match show() {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::error!(
+                event = "popup_show_failed",
+                code = "POPUP_SHOW_FAILED",
+                "[show_popup_window] show() 提交失败: {}",
+                e
+            );
+            false
+        }
+    }
 }
 
 /// 发送 loading 事件。**必须经 coordinator 的代际闸门调用** ——
