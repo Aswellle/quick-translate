@@ -45,7 +45,22 @@ pub trait TranslationProvider: Send + Sync {
 
     fn info(&self) -> ProviderInfo;
 
+    /// 校验凭证是否有效。
+    ///
+    /// 返回 `Ok(false)` 表示凭证被服务商明确拒绝（401/403 类）；
+    /// `Err` 是网络/限流/配额等**无法判定**的状态 —— 与「无效」分开，
+    /// 界面才不会把断网显示成「密钥错误」。
     async fn validate_credentials(&self) -> Result<bool, AppError>;
+
+    /// 该翻译源的凭证校验是否走真实翻译请求（QT-005）。
+    ///
+    /// 服务商若提供独立的认证/用量查询端点，校验可以零配额完成（DeepL
+    /// 的 `/v2/usage`）；若没有（腾讯/百度/有道），唯一的校验方式就是
+    /// 提交一次极短的测试翻译 —— 它会计入当月字符额度。设置页据此
+    /// 如实告知用户，不再无条件宣称「不消耗配额」。
+    fn validation_uses_translation(&self) -> bool {
+        true
+    }
 }
 
 /// 每个 provider 需要哪些凭证字段（config key 与 credential key 同名）。
@@ -629,7 +644,11 @@ impl TranslationEngine {
         *self.fallback_enabled.write().await = enabled;
     }
 
-    /// 验证指定翻译源的凭证（调用 validate_credentials，不消耗翻译配额）。
+    /// 验证指定翻译源的凭证。
+    ///
+    /// 配额行为由各 provider 的 [`TranslationProvider::validation_uses_translation`]
+    /// 声明：DeepL 查询用量接口（零配额）；腾讯/百度/有道提交一次极短测试翻译
+    /// （计入当月额度）—— 界面文案必须与此一致（QT-005）。
     ///
     /// 刻意**不**触碰熔断器（计划第 29 节）：手动验证与运行时翻译是两套独立
     /// 状态。让一次「点测试按钮」触发的验证去污染熔断器，会把一个明明正常的

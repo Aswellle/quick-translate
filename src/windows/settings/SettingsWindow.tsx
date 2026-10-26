@@ -1147,25 +1147,34 @@ function ProviderCard({
           ))}
 
           {/* 测试按钮 */}
-          <button
-            onClick={onTest}
-            disabled={isTesting || !hasCredentials}
-            className="text-[12.5px] font-medium px-3.5 py-1.5 rounded-lg border border-[var(--border-primary)] hover:bg-[var(--hover-bg)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-[var(--text-primary)] flex items-center gap-1.5"
-          >
-            {isTesting ? (
-              <>
-                <div className="w-3.5 h-3.5 border border-current border-t-transparent rounded-full animate-spin" />
-                测试中…
-              </>
-            ) : (
-              <>
-                <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none">
-                  <path d="M13 3L3 8l10 5M13 3l-3 5H3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-                </svg>
-                测试连接
-              </>
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <button
+              onClick={onTest}
+              disabled={isTesting || !hasCredentials}
+              className="text-[12.5px] font-medium px-3.5 py-1.5 rounded-lg border border-[var(--border-primary)] hover:bg-[var(--hover-bg)] disabled:opacity-40 disabled:cursor-not-allowed transition-colors text-[var(--text-primary)] flex items-center gap-1.5"
+            >
+              {isTesting ? (
+                <>
+                  <div className="w-3.5 h-3.5 border border-current border-t-transparent rounded-full animate-spin" />
+                  测试中…
+                </>
+              ) : (
+                <>
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none">
+                    <path d="M13 3L3 8l10 5M13 3l-3 5H3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  测试连接
+                </>
+              )}
+            </button>
+            {/* 配额影响如实告知（QT-005）：DeepL 走用量接口零配额，
+                其余翻译源是真实测试翻译，必须让用户知道再点 */}
+            {hasCredentials && provider.validationNote && (
+              <span className="text-[11px] text-[var(--text-tertiary)]">
+                {provider.validationNote}
+              </span>
             )}
-          </button>
+          </div>
         </div>
       )}
     </div>

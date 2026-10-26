@@ -30,6 +30,7 @@ export const PROVIDERS = [
     badgeColor: "bg-blue-500",
     dotColor: "#007AFF",
     freeQuota: "500 万字符/月",
+    validationNote: "验证会发送一次极短的测试翻译（计入当月额度）",
     quality: "high",
     requiresApiKey: true,
     credentialFields: [
@@ -52,6 +53,7 @@ export const PROVIDERS = [
     badgeColor: "bg-purple-500",
     dotColor: "#AF52DE",
     freeQuota: "50 万字符/月",
+    validationNote: "验证查询 DeepL 用量接口，不消耗字符额度",
     quality: "highest",
     requiresApiKey: true,
     credentialFields: [
@@ -73,6 +75,7 @@ export const PROVIDERS = [
     badgeColor: "bg-red-500",
     dotColor: "#FF3B30",
     freeQuota: "100 万字符/月",
+    validationNote: "验证会发送一次极短的测试翻译（计入当月额度）",
     quality: "high",
     requiresApiKey: true,
     credentialFields: [
@@ -95,6 +98,7 @@ export const PROVIDERS = [
     badgeColor: "bg-green-500",
     dotColor: "#34C759",
     freeQuota: "按量计费",
+    validationNote: "验证会发送一次极短的测试翻译（消耗赠送额度）",
     quality: "medium",
     requiresApiKey: true,
     credentialFields: [
@@ -117,6 +121,7 @@ export const PROVIDERS = [
     badgeColor: "bg-gray-500",
     dotColor: "#8E8E93",
     freeQuota: "无限制（非官方）",
+    validationNote: "无需配置凭证，无需验证",
     quality: "medium",
     requiresApiKey: false,
     credentialFields: [],

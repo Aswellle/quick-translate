@@ -256,6 +256,12 @@ impl TranslationProvider for TencentProvider {
         }
     }
 
+    /// 校验凭证：提交一次极短的测试翻译（QT-005）。
+    ///
+    /// 腾讯翻译没有独立的认证/用量查询端点，唯一的校验方式就是一次真实
+    /// 翻译请求 —— 它会计入当月字符额度（本例约 5 个字符）。
+    /// `validation_uses_translation` 默认返回 true 与此对应，设置页据此
+    /// 向用户如实说明。
     async fn validate_credentials(&self) -> Result<bool, AppError> {
         if self.secret_id.is_empty() || self.secret_key.is_empty() {
             return Ok(false);
