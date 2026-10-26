@@ -140,7 +140,15 @@ impl ProviderEntry {
 /// 此前所有非 200 响应一律折进 `NetworkError`，于是「语种不支持」这类请求
 /// 本身的问题会被当成 provider 故障 —— 撞够三次就把一个完全正常的源
 /// 熔断十分钟。这是本次拆分要修的东西。
+///
+/// 响应体脱敏（QT-011）：完整 body **默认不进入任何错误对象** —— 第三方
+/// 异常响应可能回显请求参数、账户标识或服务端调试内容，把它们拼进
+/// `Display` 会被 coordinator 无差别记入日志、甚至显示给用户。唯一例外
+/// 是白名单提取的结构化错误代码（已知服务商 JSON 错误体的
+/// `error_code`/`code` 字段，值必须 ≤16 位字母数字/下划线/点的短标识）
+/// —— 它是定位问题的稳定线索，且形态上不可能携带句子级内容。
 pub fn http_status_error(provider: &str, status: u16, body: String) -> AppError {
+    let detail = redact_body_digest(&body);
     match status {
         401 | 403 => AppError::AuthError {
             provider: provider.to_string(),
@@ -150,13 +158,39 @@ pub fn http_status_error(provider: &str, status: u16, body: String) -> AppError 
             retry_after_secs: None,
         },
         // 408 是服务端在等请求超时，属于暂态
-        408 => AppError::NetworkError(format!("{} HTTP 408: {}", provider, body)),
+        408 => AppError::NetworkError(format!("{} HTTP 408（服务端等待超时）{}", provider, detail)),
         400..=499 => AppError::ProviderRejected {
             provider: provider.to_string(),
             status,
         },
-        _ => AppError::NetworkError(format!("{} HTTP {}: {}", provider, status, body)),
+        _ => AppError::NetworkError(format!("{} HTTP {}: {}", provider, status, detail)),
     }
+}
+
+/// 响应体进入错误/日志前的统一脱敏（见 [`http_status_error`]）。
+pub(crate) fn redact_body_digest(body: &str) -> String {
+    match json_error_code(body) {
+        Some(code) => format!("（error_code={}）", code),
+        None => String::new(),
+    }
+}
+
+/// 从疑似 JSON 的错误响应中提取白名单错误代码。
+///
+/// 解析失败、字段缺失、值形态超出白名单（长度/字符集）一律返回 None
+/// —— 宁可丢诊断信息，不可猜测内容。
+fn json_error_code(body: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let code = value.get("error_code").or_else(|| value.get("code"))?;
+    let s = code
+        .as_str()
+        .map(|s| s.to_string())
+        .or_else(|| code.as_i64().map(|n| n.to_string()))?;
+    let whitelisted = !s.is_empty()
+        && s.len() <= 16
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.');
+    whitelisted.then_some(s)
 }
 
 /// 解析 429 响应的 Retry-After 头（计划第 8 节：按 Retry-After 退避）。
@@ -677,6 +711,102 @@ impl TranslationEngine {
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
+
+    // ── QT-011：上游响应体不得进入错误消息/日志 ─────────────────────────
+
+    /// 审计验收用例：mock HTTP error body 内埋三类哨兵（伪造 API Key、
+    /// 随机敏感片段、用户原文），断言错误 Display 与错误码中一个都不出现。
+    #[test]
+    fn http_status_error_never_leaks_response_body() {
+        const KEY_SENTINEL: &str = "TEST_API_KEY_1234567890";
+        const SECRET_SENTINEL: &str = "TEST_SIGNING_SECRET_abcdef";
+        const TEXT_SENTINEL: &str = "PRIVATE_USER_CLIPBOARD_TEXT_DO_NOT_LOG";
+
+        let body = format!(
+            r#"{{"error":"failed","key":"{k}","sign":"{s}","echo":"{t}","stack":"line1
+line2"}}"#,
+            k = KEY_SENTINEL,
+            s = SECRET_SENTINEL,
+            t = TEXT_SENTINEL
+        );
+
+        for status in [401u16, 403, 429, 408, 400, 500, 503] {
+            let err = http_status_error("deepl", status, body.clone());
+            let display = err.to_string();
+            assert!(
+                !display.contains(KEY_SENTINEL),
+                "状态 {} 的错误消息泄漏了 API Key 哨兵: {}",
+                status,
+                display
+            );
+            assert!(
+                !display.contains(SECRET_SENTINEL),
+                "状态 {}: 泄漏签名哨兵",
+                status
+            );
+            assert!(
+                !display.contains(TEXT_SENTINEL),
+                "状态 {}: 泄漏用户原文哨兵",
+                status
+            );
+            // 分类不受脱敏影响
+            let expected_code = match status {
+                401 | 403 => "AUTH_ERROR",
+                429 => "RATE_LIMIT",
+                408 | 500 | 503 => "NETWORK_ERROR",
+                _ => "PROVIDER_REJECTED",
+            };
+            assert_eq!(
+                err.error_code(),
+                expected_code,
+                "状态 {} 分类被破坏",
+                status
+            );
+        }
+    }
+
+    /// 白名单提取：已知服务商 JSON 错误体的 error_code 可以保留 ——
+    /// 它是定位问题的稳定线索，且是短字母数字标识，不可能携带句子内容。
+    #[test]
+    fn whitelisted_error_code_survives_redaction() {
+        let err = http_status_error(
+            "baidu",
+            500,
+            r#"{"error_code":"54001","error_msg":"Invalid signature with a very long echo that must not appear"}"#.to_string(),
+        );
+        let display = err.to_string();
+        assert!(
+            display.contains("54001"),
+            "白名单错误代码应保留: {}",
+            display
+        );
+        assert!(
+            !display.contains("Invalid signature"),
+            "错误消息原文不得随行: {}",
+            display
+        );
+    }
+
+    /// 超出白名单形态的 code 值（过长/含可疑字符）不得透传。
+    #[test]
+    fn non_conforming_code_values_are_dropped() {
+        // 17 位 —— 超过 16 位上限
+        let long_code = "A".repeat(17);
+        let err = http_status_error("x", 500, format!(r#"{{"error_code":"{}"}}"#, long_code));
+        assert!(!err.to_string().contains(&long_code));
+
+        // 含引号/空白等非白名单字符
+        let err = http_status_error(
+            "x",
+            500,
+            r#"{"error_code":"echo user text here"}"#.to_string(),
+        );
+        assert!(!err.to_string().contains("echo user text"));
+
+        // 非 JSON 响应体：什么都不保留
+        let err = http_status_error("x", 500, "<html>gateway timeout page</html>".to_string());
+        assert!(!err.to_string().contains("<html>"));
+    }
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
