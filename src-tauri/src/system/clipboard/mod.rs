@@ -69,30 +69,138 @@ pub fn normalize_text(text: &str) -> String {
     normalized
 }
 
-/// 获取当前鼠标光标位置（屏幕坐标）
+/// 获取当前鼠标光标位置（屏幕坐标）。
+///
+/// 返回值与 Windows `GetCursorPos` 同语义：**物理像素**、全局坐标。
+/// 这是 `compute_popup_position_dpi` 的输入契约 —— 它会把坐标除以
+/// 目标显示器的缩放比换算成逻辑像素。
+///
+/// 读取失败时退化为 `(0, 0)`，但**绝不静默**：发出 `cursor_position_*`
+/// 稳定事件日志。退化位置由 `place_popup` 的工作区钳制兜底，至少保证
+/// 浮窗完整可见。
+#[cfg(target_os = "windows")]
 pub fn get_cursor_position() -> (f64, f64) {
-    #[cfg(target_os = "windows")]
-    {
-        use windows_sys::Win32::Foundation::POINT;
-        use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
-        let mut point = POINT { x: 0, y: 0 };
-        unsafe {
-            GetCursorPos(&mut point);
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    let mut point = POINT { x: 0, y: 0 };
+    // SAFETY: 输出指针指向本函数自己的局部变量，无其他副作用
+    unsafe {
+        GetCursorPos(&mut point);
+    }
+    (point.x as f64, point.y as f64)
+}
+
+/// macOS 光标位置。
+///
+/// 实现走 CoreGraphics 而不是 AppKit：
+/// - `CGEventGetLocation` 直接返回 **CG 全局显示空间**坐标 —— 主屏左上为
+///   原点、y 向下、单位为「点」。这与 `CGDisplayBounds` 及 tao/tauri
+///   `Monitor::position()`（CG 点 × 该屏缩放比 = 物理像素）是同一坐标系，
+///   不需要 Cocoa（NSEvent.mouseLocation）的左下原点翻转；
+/// - CG 事件/显示查询是文档化的线程安全 API，可在剪贴板 worker 线程直接
+///   调用；`NSScreen` 系列需要 `MainThreadMarker`，worker 线程拿不到；
+/// - 每台显示器的缩放比用 `CGDisplayMode pixel_width / CGDisplayBounds
+///   width` 推导 —— 与 `NSScreen.backingScaleFactor` 同义，但同样不依赖
+///   主线程。这正是 tao 把显示器坐标从点换算成物理像素所用的比例
+///   （见 tao `platform_impl/macos/monitor.rs` 的 `position()`），
+///   只有同一比例才能保证光标坐标与 Tauri 显示器几何可比。
+#[cfg(target_os = "macos")]
+pub fn get_cursor_position() -> (f64, f64) {
+    use core_graphics::display::CGDisplay;
+    use core_graphics::event::CGEvent;
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
+    // 1. 光标的 CG 点坐标
+    let location = CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
+        .and_then(CGEvent::new)
+        .map(|event| event.location());
+    let (mx, my) = match location {
+        Ok(pt) => (pt.x, pt.y),
+        Err(_) => {
+            tracing::warn!(
+                event = "cursor_position_unavailable",
+                platform = "macos",
+                code = "CURSOR_QUERY_FAILED",
+                "[cursor] CGEvent 查询失败，浮窗定位退化为工作区原点"
+            );
+            return (0.0, 0.0);
         }
-        (point.x as f64, point.y as f64)
-    }
+    };
 
-    #[cfg(target_os = "macos")]
-    {
-        // macOS: 使用 NSEvent.mouseLocation
-        // 坐标系从左下角开始，需转换为从左上角
-        (0.0, 0.0) // TODO: 接入 core-graphics
-    }
+    // 2. 光标所在显示器的缩放比。找不到时回退主屏缩放比（光标落在
+    //    显示器排列的缝隙里，或枚举瞬间显示器变动）
+    let displays: Vec<_> = CGDisplay::active_displays()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|id| {
+            let d = CGDisplay::new(id);
+            let bounds = d.bounds();
+            let pixel_width = d.display_mode().map_or(0, |m| m.pixel_width());
+            (
+                (
+                    bounds.origin.x as f64,
+                    bounds.origin.y as f64,
+                    bounds.size.width as f64,
+                    bounds.size.height as f64,
+                ),
+                pixel_width,
+            )
+        })
+        .collect();
+    let fallback = macos_scale_for_display_of(&CGDisplay::main());
+    let scale = macos_scale_for_cursor((mx, my), &displays, fallback);
 
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    {
-        (0.0, 0.0)
+    // 3. 点 → 物理像素：与 tao Monitor::position 的换算一致（乘所在屏缩放比）
+    (mx * scale, my * scale)
+}
+
+/// 单台显示器的缩放比 = 显示模式像素宽 / CG 显示空间宽。
+///
+/// 两者的比值就是该屏的 backing scale（Retina 2.0、普通屏 1.0）。
+/// bounds 宽为 0（枚举到已断开的显示器）时按 1.0 处理。
+#[cfg(target_os = "macos")]
+fn macos_scale_for_display_of(display: &core_graphics::display::CGDisplay) -> f64 {
+    let bounds = display.bounds();
+    let w = bounds.size.width as f64;
+    let pixel_width = display.display_mode().map_or(0, |m| m.pixel_width());
+    if w <= 0.0 || pixel_width == 0 {
+        1.0
+    } else {
+        pixel_width as f64 / w
     }
+}
+
+/// 找出包含 CG 点坐标的显示器并返回其缩放比（物理像素/点）。
+///
+/// 纯几何函数，与平台 API 解耦 —— 单元测试在所有平台上跑
+/// （审计 QT-001 验收：坐标换算必须有单测，实机只验证真实 API）。
+///
+/// `displays` 的每项是 `(CG 全局显示空间矩形 (x, y, w, h)，显示模式像素宽)`；
+/// `fallback` 是没有任何显示器包含该点时的回退缩放比。
+#[cfg(any(target_os = "macos", test))]
+fn macos_scale_for_cursor(
+    cursor: (f64, f64),
+    displays: &[((f64, f64, f64, f64), u64)],
+    fallback: f64,
+) -> f64 {
+    let (cx, cy) = cursor;
+    for ((x, y, w, h), pixel_width) in displays {
+        if cx >= *x && cx < x + w && cy >= *y && cy < y + h {
+            let scale = if *w <= 0.0 || *pixel_width == 0 {
+                1.0
+            } else {
+                *pixel_width as f64 / w
+            };
+            return scale;
+        }
+    }
+    fallback
+}
+
+/// 其余平台无实现：剪贴板监控当前只在 Windows / macOS 启用。
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub fn get_cursor_position() -> (f64, f64) {
+    (0.0, 0.0)
 }
 
 /// 剪贴板变更序列号。`Some(n)` = 平台提供权威序列号；`None` = 不可用。
@@ -152,5 +260,91 @@ mod tests {
         let input = "a\nb\nc\nd\ne";
         // 5 个换行 > 3 → 走结构化分支
         assert_eq!(normalize_text(input), "a b c d e");
+    }
+
+    // ── QT-001：macOS 光标坐标换算（纯函数部分，全平台可测）────────────
+
+    /// 布景：主屏 Retina（CG 空间 0,0 起 1512×982 点，像素宽 3024 → scale 2.0），
+    /// 副屏普通 DPI 在主屏右侧（CG x 1512 起 1920×1080 点，像素宽 1920 → scale 1.0）。
+    /// 与 tao Monitor::position 的「CG 点 × 该屏 scale = 物理」模型一致。
+    fn two_display_layout() -> Vec<((f64, f64, f64, f64), u64)> {
+        vec![
+            ((0.0, 0.0, 1512.0, 982.0), 3024),     // 主屏 Retina
+            ((1512.0, 0.0, 1920.0, 1080.0), 1920), // 副屏 1x
+        ]
+    }
+
+    #[test]
+    fn scale_is_taken_from_the_display_containing_the_cursor() {
+        let displays = two_display_layout();
+        let s_main = macos_scale_for_cursor((756.0, 491.0), &displays, 1.0);
+        assert!((s_main - 2.0).abs() < 1e-9, "主屏内光标应取 Retina 缩放比");
+        let s_side = macos_scale_for_cursor((2000.0, 100.0), &displays, 1.0);
+        assert!((s_side - 1.0).abs() < 1e-9, "副屏内光标应取副屏缩放比");
+    }
+
+    /// 光标落在主屏四个象限与边缘附近：缩放比必须始终来自主屏，
+    /// 边界判定与 `place_popup` 一样是左闭右开（右边缘属于下一台屏）。
+    #[test]
+    fn quadrant_and_edge_positions_resolve_to_the_right_display() {
+        let displays = two_display_layout();
+        // 四象限（主屏内）
+        for (x, y) in [(10.0, 10.0), (1500.0, 10.0), (10.0, 970.0), (1500.0, 970.0)] {
+            let s = macos_scale_for_cursor((x, y), &displays, 1.0);
+            assert!((s - 2.0).abs() < 1e-9, "({x},{y}) 应判定为主屏");
+        }
+        // 右边缘：x=1512 已属于副屏（左闭右开）
+        let s = macos_scale_for_cursor((1512.0, 5.0), &displays, 1.0);
+        assert!((s - 1.0).abs() < 1e-9, "主屏右边缘之外属于副屏");
+        // 主屏最右一点（x=1511.99）仍属主屏
+        let s = macos_scale_for_cursor((1511.9, 5.0), &displays, 1.0);
+        assert!((s - 2.0).abs() < 1e-9);
+    }
+
+    /// 负坐标显示器（副屏在主屏左侧 / 上方是常见摆放）：
+    /// CG 空间里它们的 x / y 为负，包含判定与缩放比必须照常工作。
+    #[test]
+    fn negative_coordinate_displays_are_matched() {
+        let displays = vec![
+            ((0.0, 0.0, 1512.0, 982.0), 3024),      // 主屏
+            ((-1920.0, 0.0, 1920.0, 1080.0), 3840), // 左侧副屏 2x
+            ((0.0, -982.0, 1512.0, 982.0), 3024),   // 上方副屏 Retina
+        ];
+        let s_left = macos_scale_for_cursor((-100.0, 500.0), &displays, 1.0);
+        assert!((s_left - 2.0).abs() < 1e-9, "左侧屏内光标取该屏缩放比");
+        let s_top = macos_scale_for_cursor((700.0, -50.0), &displays, 1.0);
+        assert!((s_top - 2.0).abs() < 1e-9, "上方屏内光标取该屏缩放比");
+    }
+
+    /// 光标在所有显示器之外的缝隙：回退到调用方给的主屏缩放比。
+    #[test]
+    fn cursor_outside_all_displays_falls_back() {
+        let displays = two_display_layout();
+        // 两台屏之间的垂直缝隙（y = 1100 超出两台屏的高度）
+        let s = macos_scale_for_cursor((700.0, 1100.0), &displays, 2.0);
+        assert!((s - 2.0).abs() < 1e-9, "缝隙内光标使用回退缩放比");
+    }
+
+    /// 缩放比推导：像素宽 / CG 宽。除零（枚举到断开的显示器）按 1.0。
+    #[test]
+    fn scale_derivation_guards_zero_width() {
+        let displays = vec![
+            ((0.0, 0.0, 0.0, 0.0), 3024),  // 异常显示器：宽 0
+            ((0.0, 0.0, 100.0, 100.0), 0), // 异常显示器：像素宽 0
+        ];
+        // 都无法推导 → 回退
+        let s = macos_scale_for_cursor((50.0, 50.0), &displays, 1.0);
+        assert!((s - 1.0).abs() < 1e-9, "退化显示器必须走回退而不是除零/NaN");
+    }
+
+    /// 物理换算契约：物理 = CG 点 × 所在屏缩放比（与 tao Monitor::position
+    /// 相同的换算）。这是 compute_popup_position_dpi 除以 scale 的逆运算，
+    /// 两侧必须互逆，否则高 DPI 屏上浮窗锚点会偏移 scale 倍。
+    #[test]
+    fn point_times_scale_is_the_physical_contract() {
+        // 主屏中心：CG 点 (756, 491) × 2.0 = 物理 (1512, 982)
+        let displays = two_display_layout();
+        let s = macos_scale_for_cursor((756.0, 491.0), &displays, 1.0);
+        assert_eq!((756.0 * s, 491.0 * s), (1512.0, 982.0));
     }
 }

@@ -71,7 +71,11 @@ windows-sys = { version = "0.52", features = [
 #
 # NSPasteboard 为剪贴板监控提供 changeCount（剪贴板变化代数）：没有它，
 # macOS 上「关闭浮窗后同文本是否被用户重新复制」无从判定（QT-002）。
-# NSEvent 为浮窗定位提供真实光标坐标 mouseLocation（QT-001）。
+#
+# core-graphics 为浮窗定位提供真实光标坐标（CGEventGetLocation）与显示器
+# 几何（CGDisplayBounds / CGDisplayMode pixel width），全部线程安全，可在
+# 剪贴板 worker 线程直接调用 —— NSScreen 需要 MainThreadMarker，worker
+# 线程拿不到（QT-001）。tao 已依赖同一 crate（0.25），不新增依赖树。
 #
 # 这几项都在 objc2-app-kit 0.3.2 的 `default` 里，显式列出是冗余的；
 # 保留的原因是把「本 crate 实际用到哪些 AppKit 能力」写进清单 —— 将来
@@ -85,8 +89,8 @@ objc2-app-kit = { version = "0.3", features = [
     "NSAppearance",
     "NSResponder",
     "NSPasteboard",
-    "NSEvent",
 ] }
+core-graphics = "0.25"
 
 [profile.release]
 lto = true
