@@ -112,6 +112,26 @@ fn is_new_content(
     }
 }
 
+/// 防抖挂起的一份复制（QT-009）。
+///
+/// `request_text` 是送给翻译源的文本（结构保真整理）。去重不依赖它：
+/// 每轮的 is_new 判定独立用 normalize_text 键比较（见 run_worker），
+/// pending 只需要记住「最终要发送什么」和「从什么时候等起」。
+#[derive(Debug, Clone)]
+struct PendingCopy {
+    request_text: String,
+    since: Instant,
+}
+
+impl PendingCopy {
+    fn new(raw: &str) -> Self {
+        Self {
+            request_text: super::build_request_text(raw),
+            since: Instant::now(),
+        }
+    }
+}
+
 /// worker 主循环。除非收到停机请求或命中致命错误，否则永不返回。
 pub fn run_worker(
     mut backend: Box<dyn ClipboardBackend>,
@@ -120,9 +140,11 @@ pub fn run_worker(
     timing: WorkerTiming,
 ) -> WorkerExit {
     let mut last_text: Option<String> = None;
-    // 防抖挂起项：(归一化文本, 入队时刻)。合并为单元组后，
-    // 各分支的重置从两行收敛为一次赋值（C6）
-    let mut pending: Option<(String, Instant)> = None;
+    // 防抖挂起项：请求文本（QT-009 的结构保真版本）+ 入队时刻 +
+    // 去重键（normalize_text 的折叠键，与 last_text 的比较语义一致）。
+    // 此前 pending 只存归一化键并把键直接当翻译输入 —— 终端日志与代码
+    // 的空白结构在进入翻译源之前就被折叠掉了。
+    let mut pending: Option<PendingCopy> = None;
     // 上次判定时的剪贴板序列号，用于识别「同一段文本被重新复制」。
     // None = 平台不提供序列号，走 seq 不可用时的降级策略（见 is_new 判定）
     let mut last_seq: Option<u32> = backend.seq();
@@ -275,18 +297,21 @@ pub fn run_worker(
         );
 
         if is_new {
+            pending = Some(PendingCopy::new(&current));
             last_text = Some(current);
+            // 同步去重的序列号基线 —— 漏掉它会让「同文本 + 序列号已同步」
+            // 的下一轮仍被判为重新复制，pending 被无限替换、永不防抖
             last_seq = current_seq;
-            pending = Some((current_normalized, Instant::now()));
-        } else if pending
-            .as_ref()
-            .is_some_and(|(_, start)| start.elapsed() >= timing.debounce_delay)
-        {
-            // 内容未变且防抖到期 → 触发翻译
-            if let Some((text_clone, _)) = pending.take() {
+        } else if let Some(p) = pending.as_ref() {
+            if p.since.elapsed() >= timing.debounce_delay {
+                // 内容未变且防抖到期 → 触发翻译（发送的是结构保真的请求文本）
+                let text_clone = pending
+                    .take()
+                    .expect("pending.is_some() checked")
+                    .request_text;
                 tracing::info!(
                     event = "translation_request_started",
-                    len = text_clone.len(),
+                    len = text_clone.chars().count(),
                     "[clipboard] 防抖到期，触发翻译"
                 );
                 sink.emit(&text_clone);

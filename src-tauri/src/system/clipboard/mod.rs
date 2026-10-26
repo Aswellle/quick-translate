@@ -36,11 +36,15 @@ pub fn write_clipboard_text(text: &str) -> Result<(), AppError> {
         .map_err(|e| AppError::ClipboardError(e.to_string()))
 }
 
-/// 文本规范化处理：
+/// 文本规范化处理（**只用于去重/防抖键**，QT-009）：
 /// - 结构化多行文本（含段落双换行，或换行数 > 3）：
 ///   保留段落分隔（\n\n），仅合并 PDF 断行产生的单个换行
 /// - 普通短文本：将所有换行替换为空格，合并多余空白
 /// - 截断超长文本（> 5000 字符）
+///
+/// 此前这一个函数同时承担「去重键」与「翻译输入」两个角色 —— 终端日志、
+/// Python 缩进、YAML 的空白结构会被不可逆折叠后送进翻译源、写进历史。
+/// 角色分离后，翻译输入走 [`build_request_text`]。
 pub fn normalize_text(text: &str) -> String {
     // 统一 \r\n / \r 为 \n，便于后续处理
     let text = text.replace("\r\n", "\n").replace('\r', "\n");
@@ -67,6 +71,95 @@ pub fn normalize_text(text: &str) -> String {
 
     // 截断由调用方（translation_flow::execute_at_position）负责，并设置 truncated 标志
     normalized
+}
+
+/// 单行是否带结构信号（QT-009 的保守启发式）。
+///
+/// 命中任意一条即视为「非散文行」：缩进、列表/引用/提示符/表格标记、
+/// 有序列表前缀、常见代码块结尾符。启发式刻意保守 —— 误判为结构化
+/// 的代价只是换行保留（译文质量略降），误判为散文的代价是缩进结构
+/// 被不可逆折叠（数据保真损失）。
+fn looks_structured_line(line: &str) -> bool {
+    // 缩进（任何前导空白）= 代码/表格/日志对齐
+    if line.starts_with(|c: char| c.is_whitespace()) {
+        return true;
+    }
+    let trimmed = line.trim_end();
+    if trimmed.is_empty() {
+        return true;
+    }
+    // 列表 / 引用 / shell 提示符 / 表格 / markdown 标记
+    if trimmed.starts_with(['-', '*', '•', '·', '>', '#', '$', '|', '+', '[']) {
+        return true;
+    }
+    // 有序列表："1." "2)" "12." …
+    let head: String = trimmed.chars().take(5).collect();
+    if let Some(pos) = head.find(['.', ')']) {
+        if pos > 0 && head[..pos].chars().all(|c| c.is_ascii_digit()) {
+            return true;
+        }
+    }
+    // 常见代码行结尾：语句 / 块 / 赋值
+    if trimmed.ends_with([';', '{', '}', '=']) {
+        return true;
+    }
+    false
+}
+
+/// 构造送给翻译源的请求文本（QT-009）。
+///
+/// 三种文本角色自此分离：
+///   **原始文本** —— 剪贴板原样（worker 的 last_text 保存的就是它）；
+///   **去重键**   —— [`normalize_text`]（跨 CRLF 稳定的折叠比较键）；
+///   **请求文本** —— 本函数：保真优先的结构感知整理，同时是历史/缓存
+///   与翻译源看到的文本。
+///
+/// 规则（保守启发式，不做语言/代码检测）：
+/// 1. CRLF/CR → LF；去首尾空白；
+/// 2. 按 `\n\n+` 分段，段落分隔原样保留；
+/// 3. 段内任何一行带结构信号（见 [`looks_structured_line`]）→ 整段
+///    原样保留 —— Python 缩进、JSON/YAML、堆栈、表格列、日志因此保真；
+/// 4. 无结构信号的段落视为 PDF 硬换行的自然段 → 单换行合并为空格
+///    （延续旧 normalize 对散文的意图，但不再波及结构化内容）。
+///
+/// 已知限制（刻意保守的方向）：完全无缩进、无标记的多行代码会被当作
+/// 散文合并换行 —— 这是启发式的边界；反过来「缩进/标记内容 100% 保真」
+/// 是硬保证。单行文本不受任何影响。
+pub fn build_request_text(text: &str) -> String {
+    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    let text = text.trim();
+
+    if !text.contains('\n') {
+        return text.to_string();
+    }
+
+    // 空行是段落边界；段落分隔（连续空行）原样保留
+    let mut parts: Vec<String> = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+    for line in text.split('\n') {
+        if line.is_empty() {
+            if !current.is_empty() {
+                parts.push(join_paragraph(&current));
+                current.clear();
+            }
+            parts.push(String::new());
+        } else {
+            current.push(line);
+        }
+    }
+    if !current.is_empty() {
+        parts.push(join_paragraph(&current));
+    }
+
+    parts.join("\n")
+}
+
+/// 段内装配：全部行都无结构信号 → 合并软换行；否则原样保留。
+fn join_paragraph(lines: &[&str]) -> String {
+    if lines.iter().any(|l| looks_structured_line(l)) {
+        return lines.join("\n");
+    }
+    lines.iter().map(|l| l.trim()).collect::<Vec<_>>().join(" ")
 }
 
 /// 获取当前鼠标光标位置（屏幕坐标）。
@@ -175,14 +268,14 @@ fn macos_scale_for_display_of(display: &core_graphics::display::CGDisplay) -> f6
 /// 纯几何函数，与平台 API 解耦 —— 单元测试在所有平台上跑
 /// （审计 QT-001 验收：坐标换算必须有单测，实机只验证真实 API）。
 ///
-/// `displays` 的每项是 `(CG 全局显示空间矩形 (x, y, w, h)，显示模式像素宽)`；
+/// 一台显示器的几何描述：(CG 全局显示空间矩形 (x, y, w, h)，显示模式像素宽)。
+#[cfg(any(target_os = "macos", test))]
+type DisplayGeometry = ((f64, f64, f64, f64), u64);
+
+/// `displays` 的每项是 [`DisplayGeometry`]；
 /// `fallback` 是没有任何显示器包含该点时的回退缩放比。
 #[cfg(any(target_os = "macos", test))]
-fn macos_scale_for_cursor(
-    cursor: (f64, f64),
-    displays: &[((f64, f64, f64, f64), u64)],
-    fallback: f64,
-) -> f64 {
+fn macos_scale_for_cursor(cursor: (f64, f64), displays: &[DisplayGeometry], fallback: f64) -> f64 {
     let (cx, cy) = cursor;
     for ((x, y, w, h), pixel_width) in displays {
         if cx >= *x && cx < x + w && cy >= *y && cy < y + h {
@@ -346,5 +439,90 @@ mod tests {
         let displays = two_display_layout();
         let s = macos_scale_for_cursor((756.0, 491.0), &displays, 1.0);
         assert_eq!((756.0 * s, 491.0 * s), (1512.0, 982.0));
+    }
+}
+
+#[cfg(test)]
+mod request_text_tests {
+    use super::*;
+
+    /// 普通散文：单换行按 PDF 软换行合并（与旧 normalize 的意图一致）
+    #[test]
+    fn prose_soft_wraps_are_joined() {
+        assert_eq!(build_request_text("hello\nworld"), "hello world");
+        assert_eq!(build_request_text("hello\r\nworld"), "hello world");
+        assert_eq!(build_request_text("  trimmed  "), "trimmed");
+    }
+
+    /// Python 缩进：任何行带前导空白 → 整段原样保留
+    #[test]
+    fn indented_code_is_preserved_verbatim() {
+        let code = "def f():\n    if x:\n        return 1";
+        assert_eq!(build_request_text(code), code);
+    }
+
+    /// 终端堆栈：\t 缩进行 → 原样保留（旧实现会折叠成一行空格分隔）
+    #[test]
+    fn stack_trace_is_preserved_verbatim() {
+        let trace = "Exception in thread main\n\tat com.foo.Bar.baz(Bar.java:1)\n\tat com.foo.Qux.run(Qux.java:2)";
+        assert_eq!(build_request_text(trace), trace);
+    }
+
+    /// YAML / 列表 / 表格 / 引用 / 提示符：结构标记 → 原样保留
+    #[test]
+    fn structured_markers_preserve_line_breaks() {
+        let yaml = "services:\n  web:\n    image: nginx";
+        assert_eq!(build_request_text(yaml), yaml);
+
+        let list = "- name: a\n- name: b";
+        assert_eq!(build_request_text(list), list);
+
+        let numbered = "1. first\n2. second";
+        assert_eq!(build_request_text(numbered), numbered);
+
+        let table = "| a | b |\n| c | d |";
+        assert_eq!(build_request_text(table), table);
+
+        let shell = "$ npm run build\n$ echo done";
+        assert_eq!(build_request_text(shell), shell);
+    }
+
+    /// 代码块结尾符（; { } =）所在段落原样保留
+    #[test]
+    fn code_terminators_preserve_line_breaks() {
+        // 无缩进、无标记的行以块结尾符收尾时同样判为结构化
+        let json = "{\"a\":1}";
+        assert_eq!(build_request_text(json), json);
+
+        let block = "if (x) {\ndo();\n}";
+        assert_eq!(build_request_text(block), block);
+    }
+
+    /// 混合段落：散文段合并软换行，结构段原样保留，段间分隔不丢
+    #[test]
+    fn mixed_paragraphs_get_per_paragraph_treatment() {
+        let input = "first prose line\nsecond prose line\n\ndef f():\n    return 1";
+        let expected = "first prose line second prose line\n\ndef f():\n    return 1";
+        assert_eq!(build_request_text(input), expected);
+    }
+
+    /// 连续空行（\n\n\n）作为段落分隔原样保留
+    #[test]
+    fn paragraph_breaks_are_preserved() {
+        let input = "para one\n\n\npara two";
+        assert_eq!(build_request_text(input), "para one\n\n\npara two");
+    }
+
+    /// 与去重键的角色分离：同一段代码，去重键折叠、请求文本保真 ——
+    /// 两个值不再互相冒用。
+    #[test]
+    fn request_text_differs_from_dedupe_key_for_code() {
+        let code = "def f():\n    return 1";
+        assert_eq!(build_request_text(code), code, "请求文本保真");
+        assert_eq!(
+            normalize_text(code),
+            "def f(): return 1",
+            "去重键仍是折叠键（比较用途）"
+        );
     }
 }

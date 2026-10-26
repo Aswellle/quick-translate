@@ -887,7 +887,6 @@ mod tests {
         let positions: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
 
         let c_in_task = c.clone();
-        let positions_in_a = positions.clone();
         let a_handle = tauri::async_runtime::spawn(async move {
             c_in_task
                 .commit_popup_show(
