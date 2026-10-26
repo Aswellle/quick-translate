@@ -49,11 +49,15 @@ impl DeepLProvider {
         self.endpoint().replace("/translate", "/usage")
     }
 
-    /// 将 ISO 639-1 语言代码转换为 DeepL 格式（大写，zh → ZH）
+    /// 将应用内语言代码转换为 DeepL 目标语言代码（QT-006）。
+    ///
+    /// DeepL 官方代码表（developers.deepl.com）：ZH 为简体（历史代码）、
+    /// **ZH-HANT 为繁体**。此前 zh-tw 被映射成 "ZH"，繁体目标被静默
+    /// 替换成简体 —— 现按官方代码表显式区分。
     fn to_deepl_lang(lang: &str) -> String {
         match lang {
             "zh" => "ZH".to_string(),
-            "zh-tw" => "ZH".to_string(),
+            "zh-tw" => "ZH-HANT".to_string(),
             _ => lang.to_uppercase(),
         }
     }
@@ -346,5 +350,40 @@ mod tests {
             !provider.validation_uses_translation(),
             "DeepL 走用量接口，不得声明为消耗配额"
         );
+    }
+
+    /// QT-006：目标语言映射必须对齐 DeepL 官方代码表
+    /// （developers.deepl.com/docs/getting-started/supported-languages）：
+    /// ZH 简体（历史代码）、ZH-HANT 繁体。此前 zh-tw 被静默换成简体 ZH。
+    #[test]
+    fn target_lang_mapping_matches_official_codes() {
+        let cases: &[(&str, &str)] = &[
+            ("zh", "ZH"),
+            ("zh-tw", "ZH-HANT"), // 繁体：官方专用代码
+            ("en", "EN"),
+            ("ja", "JA"),
+            ("ko", "KO"),
+            ("fr", "FR"),
+            ("de", "DE"),
+            ("es", "ES"),
+            ("ru", "RU"),
+            ("pt", "PT"),
+            ("it", "IT"),
+            ("ar", "AR"),
+        ];
+        for &(input, expected) in cases {
+            assert_eq!(
+                DeepLProvider::to_deepl_lang(input),
+                expected,
+                "语言 {} 映射错误",
+                input
+            );
+        }
+    }
+
+    /// 未知/未来代码按大写透传。
+    #[test]
+    fn unknown_lang_codes_pass_through_uppercased() {
+        assert_eq!(DeepLProvider::to_deepl_lang("th"), "TH");
     }
 }
