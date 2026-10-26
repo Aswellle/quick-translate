@@ -135,6 +135,12 @@ impl PersistenceWriter {
 /// 首次尝试里的 SQLite 锁竞争由 `busy_timeout = 5000` 兜住，因此重试针对的
 /// 是另一种短暂故障 —— 杀软扫描、磁盘瞬时卡顿这类；重试仍失败就是真实
 /// 错误（磁盘满、库损坏），按计划记录 error 后丢弃，绝不反噬主链路。
+///
+/// 健康语义（QT-008）：写入成功但**保留清理失败**不是健康 —— 清理失效
+/// 意味着保留上限形同虚设，history/cache 会无界膨胀。清理失败以稳定
+/// 错误码（`HISTORY_RETENTION_FAILED` / `CACHE_RETENTION_FAILED`）上报
+/// Degraded；随后的成功任务会自然把状态带回 Healthy，一次暂态失败
+/// 不会永久标红。
 async fn process(
     history: &HistoryRepository,
     cache: &TranslationCache,
@@ -152,7 +158,13 @@ async fn process(
     match history.insert(&record).await {
         Ok(()) => {
             if let Err(e) = history.enforce_limit(history_limit).await {
-                error!(event = "history_limit_failed", "历史清理失败: {}", e);
+                error!(
+                    event = "history_limit_failed",
+                    code = "HISTORY_RETENTION_FAILED",
+                    "历史清理失败（保留上限失效）: {}",
+                    e
+                );
+                storage_error.get_or_insert("HISTORY_RETENTION_FAILED");
             }
         }
         Err(first) => {
@@ -164,7 +176,13 @@ async fn process(
                         "历史写入首次失败后重试成功: {}", first
                     );
                     if let Err(e) = history.enforce_limit(history_limit).await {
-                        error!(event = "history_limit_failed", "历史清理失败: {}", e);
+                        error!(
+                            event = "history_limit_failed",
+                            code = "HISTORY_RETENTION_FAILED",
+                            "历史清理失败（保留上限失效）: {}",
+                            e
+                        );
+                        storage_error.get_or_insert("HISTORY_RETENTION_FAILED");
                     }
                 }
                 Err(second) => {
@@ -181,7 +199,13 @@ async fn process(
     match cache.put(cache_entry.as_entry()).await {
         Ok(()) => {
             if let Err(e) = cache.enforce_limits().await {
-                warn!(event = "cache_limit_failed", "本地缓存清理失败: {}", e);
+                warn!(
+                    event = "cache_limit_failed",
+                    code = "CACHE_RETENTION_FAILED",
+                    "本地缓存清理失败（保留上限失效）: {}",
+                    e
+                );
+                storage_error.get_or_insert("CACHE_RETENTION_FAILED");
             }
         }
         Err(e) => {
@@ -354,6 +378,170 @@ mod tests {
         assert!(
             QUEUE_CAPACITY > 0 && QUEUE_CAPACITY <= 256,
             "计划第 41 节要求所有 channel 有界且不夸张"
+        );
+    }
+
+    // ── QT-008：保留清理失败必须反映到存储健康 ──────────────────────────
+
+    /// 故障注入：给表挂一个 BEFORE DELETE ... RAISE(ABORT) 触发器。
+    /// 这样 INSERT 依旧成功而 DELETE 必然失败 —— 与真实的清理故障
+    /// （磁盘满 / 库损坏 / 权限）走同一条 rusqlite 错误路径，且完全确定。
+    fn inject_delete_failure(conn: &Connection, table: &str) {
+        conn.execute(
+            &format!(
+                "CREATE TRIGGER fail_delete_{table} BEFORE DELETE ON {table}
+                 BEGIN SELECT RAISE(ABORT, 'injected retention failure'); END"
+            ),
+            [],
+        )
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn history_retention_failure_is_reported_as_degraded() {
+        let db = migrated_db();
+        let history = Arc::new(HistoryRepository::new(
+            crate::infra::database::Db::available(db.clone()),
+        ));
+        let cache = Arc::new(TranslationCache::new(
+            crate::infra::database::Db::available(db.clone()),
+        ));
+        let runtime = test_runtime();
+
+        inject_delete_failure(&db.try_lock().unwrap(), "translation_records");
+
+        // 预置超出限额的旧行：enforce_limit 必须真的执行删除，
+        // BEFORE DELETE 触发器才会命中（表内无需删除时 RAISE 不触发）
+        {
+            let conn = db.try_lock().unwrap();
+            for i in 0..3 {
+                conn.execute(
+                    "INSERT INTO translation_records
+                     (id, source_text, translated_text, source_lang, target_lang,
+                      provider, created_at, duration_ms, is_starred)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, 0)",
+                    rusqlite::params![
+                        format!("old-{}", i),
+                        "old",
+                        "旧",
+                        "en",
+                        "zh",
+                        "deepl",
+                        1000 + i
+                    ],
+                )
+                .unwrap();
+            }
+        }
+
+        let mut oversized = job("retention-fails");
+        oversized.history_limit = 2;
+
+        process(&history, &cache, &runtime, oversized).await;
+
+        let storage = runtime.snapshot().storage;
+        assert_eq!(
+            storage.state,
+            ComponentState::Degraded,
+            "清理失败不得被报告为健康 —— 保留上限失效会让历史无界膨胀"
+        );
+        assert_eq!(
+            storage.last_error_code.as_deref(),
+            Some("HISTORY_RETENTION_FAILED")
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_retention_failure_is_reported_as_degraded() {
+        let db = migrated_db();
+        let history = Arc::new(HistoryRepository::new(
+            crate::infra::database::Db::available(db.clone()),
+        ));
+        let cache = Arc::new(TranslationCache::new(
+            crate::infra::database::Db::available(db.clone()),
+        ));
+        let runtime = test_runtime();
+
+        inject_delete_failure(&db.try_lock().unwrap(), "translation_cache");
+
+        // 预置一条已过期（created_at 远早于 TTL）的缓存行：
+        // enforce_limits 的第一条 DELETE 就会命中它 → 触发注入的故障
+        {
+            let conn = db.try_lock().unwrap();
+            conn.execute(
+                "INSERT INTO translation_cache
+                 (cache_key, source_text, translated_text, source_lang, provider,
+                  created_at, last_hit_at, hit_count)
+                 VALUES ('expired-key', 'old', '旧', 'en', 'deepl', 1000, 1000, 0)",
+                [],
+            )
+            .unwrap();
+        }
+
+        process(&history, &cache, &runtime, job("cache-fails")).await;
+
+        let storage = runtime.snapshot().storage;
+        assert_eq!(storage.state, ComponentState::Degraded);
+        assert_eq!(
+            storage.last_error_code.as_deref(),
+            Some("CACHE_RETENTION_FAILED")
+        );
+    }
+
+    /// 一次暂态的清理失败不能永久标红：故障消除后的下一个成功任务
+    /// 必须把存储状态带回 Healthy。
+    #[tokio::test]
+    async fn storage_health_recovers_after_retention_failure() {
+        let db = migrated_db();
+        let history = Arc::new(HistoryRepository::new(
+            crate::infra::database::Db::available(db.clone()),
+        ));
+        let cache = Arc::new(TranslationCache::new(
+            crate::infra::database::Db::available(db.clone()),
+        ));
+        let runtime = test_runtime();
+
+        inject_delete_failure(&db.try_lock().unwrap(), "translation_records");
+        {
+            let conn = db.try_lock().unwrap();
+            for i in 0..3 {
+                conn.execute(
+                    "INSERT INTO translation_records
+                     (id, source_text, translated_text, source_lang, target_lang,
+                      provider, created_at, duration_ms, is_starred)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL, 0)",
+                    rusqlite::params![
+                        format!("old-{}", i),
+                        "old",
+                        "旧",
+                        "en",
+                        "zh",
+                        "deepl",
+                        1000 + i
+                    ],
+                )
+                .unwrap();
+            }
+        }
+        let mut oversized = job("bad");
+        oversized.history_limit = 2;
+        process(&history, &cache, &runtime, oversized).await;
+        assert_eq!(runtime.snapshot().storage.state, ComponentState::Degraded);
+
+        // 故障消除
+        db.try_lock()
+            .unwrap()
+            .execute("DROP TRIGGER fail_delete_translation_records", [])
+            .unwrap();
+        process(&history, &cache, &runtime, job("good")).await;
+
+        let storage = runtime.snapshot().storage;
+        assert_eq!(storage.state, ComponentState::Healthy, "恢复后必须回到健康");
+        // last_error_code 是刻意保留的诊断历史（最后一次错误的稳定码），
+        // 恢复这一事实由 last_recovery_at_ms 表达 —— 状态与历史是两个字段
+        assert!(
+            storage.last_recovery_at_ms.is_some(),
+            "从故障恢复必须记录恢复时刻"
         );
     }
 }
