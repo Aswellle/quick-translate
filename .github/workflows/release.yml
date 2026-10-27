@@ -99,6 +99,9 @@ jobs:
       # 新增高危公告（或移除豁免）会让本步骤变红 —— 不再被
       # continue-on-error 静默放行。
       - name: npm audit (high severity gate)
+        # Windows runner 默认 pwsh：set -euo pipefail 会直接语法报错，
+        # 门禁脚本必须显式走 bash（macOS 默认即 bash，此前没暴露）
+        shell: bash
         env:
           AUDIT_EXEMPT: >-
             GHSA-c83g-rgw3-j3cx
@@ -232,6 +235,9 @@ jobs:
       # 新增高危公告（或移除豁免）会让本步骤变红 —— 不再被
       # continue-on-error 静默放行。
       - name: npm audit (high severity gate)
+        # Windows runner 默认 pwsh：set -euo pipefail 会直接语法报错，
+        # 门禁脚本必须显式走 bash（macOS 默认即 bash，此前没暴露）
+        shell: bash
         env:
           AUDIT_EXEMPT: >-
             GHSA-c83g-rgw3-j3cx
