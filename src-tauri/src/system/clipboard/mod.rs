@@ -230,11 +230,12 @@ pub fn get_cursor_position() -> (f64, f64) {
             let bounds = d.bounds();
             let pixel_width = d.display_mode().map_or(0, |m| m.pixel_width());
             (
+                // CGRect 字段即 CGFloat = f64：直接取值，无需转换
                 (
-                    bounds.origin.x as f64,
-                    bounds.origin.y as f64,
-                    bounds.size.width as f64,
-                    bounds.size.height as f64,
+                    bounds.origin.x,
+                    bounds.origin.y,
+                    bounds.size.width,
+                    bounds.size.height,
                 ),
                 pixel_width,
             )
@@ -254,7 +255,7 @@ pub fn get_cursor_position() -> (f64, f64) {
 #[cfg(target_os = "macos")]
 fn macos_scale_for_display_of(display: &core_graphics::display::CGDisplay) -> f64 {
     let bounds = display.bounds();
-    let w = bounds.size.width as f64;
+    let w = bounds.size.width;
     let pixel_width = display.display_mode().map_or(0, |m| m.pixel_width());
     if w <= 0.0 || pixel_width == 0 {
         1.0
