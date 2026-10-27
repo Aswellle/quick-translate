@@ -41,6 +41,28 @@ struct Inner {
     in_flight: Option<JoinHandle<()>>,
 }
 
+/// 浮窗 show 流程的跨请求互斥锁。
+///
+/// 两个并发 `execute_at_position` 的窗口操作（set_position / show）若不串行，
+/// `B.pos → A.pos → B.show → A.show` 这样的交错会把窗口永久留在**过期请求**的
+/// 位置上。锁必须横跨「代际检查 → 窗口操作 → loading 提交」整段 —— 它是
+/// async 锁，窗口操作要 await；但代际的判定与提交仍由同步的
+/// `RequestGeneration` 闸门完成，互斥锁只负责把窗口操作的顺序定下来。
+static POPUP_SHOW_OPS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// 浮窗 show 流程的提交结果（QT-003 / QT-007 的契约核心）。
+#[derive(Debug, PartialEq, Eq)]
+pub enum ShowCommit {
+    /// 窗口已显示，loading 事件已按当前代原子提交。
+    Committed,
+    /// 请求已过期：未发任何事件。窗口操作是否已执行取决于过期发生在
+    /// 哪个阶段 —— 窗锁的串行保证**当前代请求的 show 随后必然执行**，
+    /// 并把窗口位置带回当前代自己的锚点。
+    Superseded,
+    /// 窗口创建或显示失败（WebView 异常等）。
+    Failed,
+}
+
 /// 翻译请求协调器。
 ///
 /// 所有方法都是**同步**的，锁绝不会跨越 await —— 这一点是刻意的：
@@ -112,6 +134,58 @@ impl TranslationCoordinator {
         self.lock().generation.current()
     }
 
+    /// 该请求是否仍是当前代。
+    ///
+    /// 供 show 流程在触碰窗口**之前**做快速出局判断。注意单独使用它不构成
+    /// 提交 —— 「检查」与「提交」之间隔着 await，必须配合 [`Self::run_if_current`]
+    /// 的原子提交（QT-003 的核心约束）。
+    pub fn is_current(&self, id: RequestId) -> bool {
+        self.lock().generation.is_current(id)
+    }
+
+    /// 浮窗 show 流程的统一提交协议（QT-003）。
+    ///
+    /// 旧实现（translation_flow::show_popup_loading）的顺序是「窗口操作 →
+    /// 无条件 emit loading」。loading 事件会把前端的 request identity 改成
+    /// 发送者 —— 过期请求 A 在 B 已显示之后恢复，仍能把 UI 身份改成 A，
+    /// 导致 B 的结果抵达时被前端丢弃，浮窗永远停在 loading。
+    ///
+    /// 协议三段，缺一不可：
+    ///
+    /// 1. **窗锁内代际检查**：过期请求不得触碰窗口（移位/显示），否则
+    ///    过期 A 会把窗口从 B 的锚点挪走；
+    /// 2. **窗口操作在窗锁内执行**：跨请求串行，杜绝 set_position/show
+    ///    的交错；
+    /// 3. **loading 事件经 `run_if_current` 原子提交**：判定与 emit 在
+    ///    同一把同步锁内完成，中间没有 await —— 窗锁只串行化窗口操作，
+    ///    真正的「提交与否」由代际闸门单独裁决。
+    ///
+    /// `window_ops` 返回 false 表示窗口创建/显示失败（`Failed`）。
+    pub async fn commit_popup_show(
+        &self,
+        id: RequestId,
+        window_ops: impl std::future::Future<Output = bool>,
+        emit_loading: impl FnOnce(),
+    ) -> ShowCommit {
+        let _ops_guard = POPUP_SHOW_OPS.lock().await;
+
+        if !self.is_current(id) {
+            return ShowCommit::Superseded;
+        }
+
+        if !window_ops.await {
+            return ShowCommit::Failed;
+        }
+
+        if self.run_if_current(id, emit_loading) {
+            ShowCommit::Committed
+        } else {
+            // 窗口操作期间被取代：不发事件。窗锁保证当前代的 show 随后
+            // 执行并夺回窗口位置（见 ShowCommit::Superseded 的文档）。
+            ShowCommit::Superseded
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn has_in_flight(&self) -> bool {
         self.lock().in_flight.is_some()
@@ -150,28 +224,55 @@ pub async fn execute_at_position(app: &AppHandle, cursor_x: f64, cursor_y: f64, 
     let request = TranslationRequest::new(id, text, target_lang, (cursor_x, cursor_y));
 
     let position = translation_flow::compute_popup_position_dpi(app, cursor_x, cursor_y);
+
+    // 浮窗 show + loading 走统一提交协议（QT-003）：过期请求在这里出局，
+    // 不建窗、不移位、不发 loading、不启动翻译任务 —— 它们没有任何一条
+    // 路径能再改变 UI 的当前请求身份。
+    //
     // 浮窗建不起来（WebView2 异常等）是真实的故障模式，上报给运行时层，
-    // 让界面能如实显示，而不是让用户面对一个「什么都没发生」的复制操作
-    let shown = translation_flow::show_popup_loading(app, &position, &id.full()).await;
+    // 让界面能如实显示，而不是让用户面对一个「什么都没发生」的复制操作。
+    let show = state
+        .coordinator
+        .commit_popup_show(
+            id,
+            translation_flow::show_popup_window(app, &position),
+            || translation_flow::emit_loading(app, &position, &id.full()),
+        )
+        .await;
 
-    // 浮窗已显示才记录基线：被动态的关闭看守要拿「浮窗出现时用户正在用谁」
-    // 当参照物（Phase 8b）
-    if shown {
-        state.popup_watch.begin();
+    match show {
+        ShowCommit::Committed => {
+            // 浮窗已显示才记录基线：被动态的关闭看守要拿「浮窗出现时用户
+            // 正在用谁」当参照物（Phase 8b）
+            state.popup_watch.begin();
+            state
+                .runtime
+                .report_popup(crate::runtime::ComponentState::Healthy, None);
+            // 计划第 32 节：被动显示（未抢焦点）也要可观测 —— 排查「浮窗没
+            // 弹出来」时，这条事件与 popup_watch 的关闭事件是同一条时间线的两端。
+            tracing::info!(
+                event = "popup_show_passive",
+                request_id = %id,
+                "[popup] 浮窗以被动态显示"
+            );
+        }
+        ShowCommit::Superseded => {
+            tracing::info!(
+                event = "translation_request_superseded",
+                request_id = %id,
+                "[coordinator] 请求在显示阶段被更新的请求取代，已退出"
+            );
+            return;
+        }
+        ShowCommit::Failed => {
+            state.runtime.report_popup(
+                crate::runtime::ComponentState::Degraded,
+                Some("POPUP_SHOW_FAILED"),
+            );
+            // 与旧行为一致：显示失败不阻断翻译任务 —— 结果事件仍会发出，
+            // 窗口恢复后的下一轮操作还有机会看到状态
+        }
     }
-
-    state.runtime.report_popup(
-        if shown {
-            crate::runtime::ComponentState::Healthy
-        } else {
-            crate::runtime::ComponentState::Degraded
-        },
-        if shown {
-            None
-        } else {
-            Some("POPUP_SHOW_FAILED")
-        },
-    );
 
     let app_clone = app.clone();
     let task = tauri::async_runtime::spawn(async move {
@@ -562,6 +663,279 @@ mod tests {
         assert!(
             !side_effect.load(Ordering::SeqCst),
             "过期请求绝不能产生副作用"
+        );
+    }
+
+    // ── QT-003：show + loading 提交协议（commit_popup_show）──────────────
+    //
+    // 旧实现的病理：show_popup_loading 在窗口操作后**无条件** emit loading。
+    // A 在配置读取处暂停 → B 取代并显示 loading(B) → A 恢复，重新定位窗口
+    // 并 emit loading(A) → 前端 request identity 变成 A → B 的结果抵达时被
+    // 丢弃，浮窗永远停在 loading。下面的测试用受控交错把这条时序锁死：
+    // 协议若失去任何一段闸门，对应的断言就会失败。
+
+    /// 等待条件成立（单测内轮询，超时 2 秒）。
+    fn wait_until(timeout: std::time::Duration, mut cond: impl FnMut() -> bool) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        while std::time::Instant::now() < deadline {
+            if cond() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        cond()
+    }
+
+    /// 核心交错：A 通过窗锁内的代际检查、进入窗口操作；B 在 A 的窗口操作
+    /// 期间取代之；A 完成后提交 loading 必须被拒。
+    ///
+    /// 旧协议（无条件 emit）在这条时序下会发出 loading(A) —— 前端身份被
+    /// 污染、B 的结果被丢弃。新协议断言 A 什么都不能提交。
+    #[test]
+    fn stale_show_cannot_commit_loading_after_window_ops() {
+        let c = Arc::new(TranslationCoordinator::new());
+        let a = c.supersede();
+
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        let entered = Arc::new(AtomicBool::new(false));
+        let entered_in_ops = entered.clone();
+        let committed_a = Arc::new(AtomicBool::new(false));
+        let committed_flag = committed_a.clone();
+
+        let c_in_task = c.clone();
+        let handle = tauri::async_runtime::spawn(async move {
+            c_in_task
+                .commit_popup_show(
+                    a,
+                    async move {
+                        // 走到这里说明已通过窗锁内的代际检查（此刻 A 仍是当前代）
+                        entered_in_ops.store(true, Ordering::SeqCst);
+                        let _ = release_rx.await;
+                        true // 窗口操作「成功」
+                    },
+                    || {
+                        committed_flag.store(true, Ordering::SeqCst);
+                    },
+                )
+                .await
+        });
+
+        assert!(
+            wait_until(Duration::from_secs(2), || entered.load(Ordering::SeqCst)),
+            "A 应通过代际检查并进入窗口操作"
+        );
+
+        // A 卡在窗口操作期间，B 取代之
+        let _b = c.supersede();
+        let _ = release_tx.send(());
+
+        let outcome = tauri::async_runtime::block_on(handle).unwrap();
+        assert_eq!(
+            outcome,
+            ShowCommit::Superseded,
+            "窗口操作期间被取代的请求必须以 Superseded 结束"
+        );
+        assert!(
+            !committed_a.load(Ordering::SeqCst),
+            "旧行为的病灶：过期请求的 loading 事件绝不能发出"
+        );
+    }
+
+    /// 已过期的请求在窗锁内的第一道检查就必须出局：不触碰窗口（不移位、
+    /// 不显示），更不发事件。
+    #[test]
+    fn superseded_request_never_touches_the_window() {
+        let c = TranslationCoordinator::new();
+        let a = c.supersede();
+        let _b = c.supersede(); // A 在进入流程前就已被取代
+
+        let touched = Arc::new(AtomicBool::new(false));
+        let touched_flag = touched.clone();
+        let committed = Arc::new(AtomicBool::new(false));
+        let committed_flag = committed.clone();
+
+        let outcome = tauri::async_runtime::block_on(c.commit_popup_show(
+            a,
+            async {
+                touched_flag.store(true, Ordering::SeqCst);
+                true
+            },
+            || committed_flag.store(true, Ordering::SeqCst),
+        ));
+
+        assert_eq!(outcome, ShowCommit::Superseded);
+        assert!(
+            !touched.load(Ordering::SeqCst),
+            "过期请求不得执行任何窗口操作（B 的锚点不能被挪走）"
+        );
+        assert!(!committed.load(Ordering::SeqCst));
+    }
+
+    /// 窗口创建/显示失败必须如实上报 Failed，而不是伪装成已显示。
+    #[test]
+    fn failed_window_ops_report_failed() {
+        let c = TranslationCoordinator::new();
+        let a = c.supersede();
+
+        let outcome = tauri::async_runtime::block_on(c.commit_popup_show(
+            a,
+            async { false }, // 建窗失败
+            || {},
+        ));
+
+        assert_eq!(outcome, ShowCommit::Failed);
+    }
+
+    /// 当前代请求的完整提交：窗口操作成功 + loading 事件发出 = Committed。
+    #[test]
+    fn current_show_commits_loading() {
+        let c = TranslationCoordinator::new();
+        let a = c.supersede();
+
+        let committed = Arc::new(AtomicBool::new(false));
+        let committed_flag = committed.clone();
+
+        let outcome =
+            tauri::async_runtime::block_on(c.commit_popup_show(a, async { true }, || {
+                committed_flag.store(true, Ordering::SeqCst)
+            }));
+
+        assert_eq!(outcome, ShowCommit::Committed);
+        assert!(
+            committed.load(Ordering::SeqCst),
+            "当前代的 loading 必须发出"
+        );
+    }
+
+    /// 完整 A/B 交错（对齐 TEST_PLAN §4 的推荐序列）：
+    /// A 通过检查并暂停在窗口操作里 → B 取代并完整走完 show → A 恢复。
+    /// 断言：A 不发事件；B 的 loading 是唯一被提交的；后续 B 的结果仍能过闸门。
+    #[test]
+    fn interleave_a_paused_b_completes_then_a_resumes() {
+        let c = Arc::new(TranslationCoordinator::new());
+        let a = c.supersede();
+
+        let (release_a_tx, release_a_rx) = tokio::sync::oneshot::channel::<()>();
+        let entered = Arc::new(AtomicBool::new(false));
+        let entered_in_ops = entered.clone();
+        let loadings: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let c_in_task = c.clone();
+        let loadings_in_task = loadings.clone();
+        let a_handle = tauri::async_runtime::spawn(async move {
+            c_in_task
+                .commit_popup_show(
+                    a,
+                    async move {
+                        entered_in_ops.store(true, Ordering::SeqCst);
+                        let _ = release_a_rx.await;
+                        true
+                    },
+                    move || loadings_in_task.lock().unwrap().push("A"),
+                )
+                .await
+        });
+
+        assert!(wait_until(Duration::from_secs(2), || entered.load(Ordering::SeqCst)));
+
+        // B 取代 A，并启动自己的 show（此刻窗锁仍被 A 持有，B 只能等待）
+        let b = c.supersede();
+        let c_in_b = c.clone();
+        let loadings_in_b = loadings.clone();
+        let b_handle = tauri::async_runtime::spawn(async move {
+            c_in_b
+                .commit_popup_show(b, async { true }, move || {
+                    loadings_in_b.lock().unwrap().push("B")
+                })
+                .await
+        });
+
+        // 释放 A：A 的 loading 提交被代际闸门拒绝（不发事件），窗锁随之释放
+        let _ = release_a_tx.send(());
+        let a_outcome = tauri::async_runtime::block_on(a_handle).unwrap();
+        let b_outcome = tauri::async_runtime::block_on(b_handle).unwrap();
+
+        assert_eq!(a_outcome, ShowCommit::Superseded);
+        assert_eq!(
+            b_outcome,
+            ShowCommit::Committed,
+            "B 在 A 释放窗锁后必须能完整提交 —— 串行不得变成永久阻塞"
+        );
+        assert_eq!(
+            *loadings.lock().unwrap(),
+            vec!["B"],
+            "被提交的 loading 只能有 B —— 过期请求不得改变 UI 的当前请求身份"
+        );
+
+        // B 的结果仍能通过结果闸门（前端不会收到身份不匹配的丢弃）
+        let result_emitted = Arc::new(AtomicBool::new(false));
+        let flag = result_emitted.clone();
+        assert!(c.run_if_current(b, || flag.store(true, Ordering::SeqCst)));
+        assert!(result_emitted.load(Ordering::SeqCst));
+    }
+
+    /// 窗锁串行：A 持锁期间 B 的 show 必须等待，B 在 A 之后完成并把窗口
+    /// 带回 B 的位置 —— 最终窗口状态属于当前代。
+    #[test]
+    fn window_ops_are_serialized_and_current_generation_wins_the_position() {
+        let c = Arc::new(TranslationCoordinator::new());
+        let a = c.supersede();
+
+        let (release_a_tx, release_a_rx) = tokio::sync::oneshot::channel::<()>();
+        let entered = Arc::new(AtomicBool::new(false));
+        let entered_in_ops = entered.clone();
+        let positions: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let c_in_task = c.clone();
+        let a_handle = tauri::async_runtime::spawn(async move {
+            c_in_task
+                .commit_popup_show(
+                    a,
+                    async move {
+                        entered_in_ops.store(true, Ordering::SeqCst);
+                        let _ = release_a_rx.await;
+                        true
+                    },
+                    || {},
+                )
+                .await
+        });
+
+        assert!(wait_until(Duration::from_secs(2), || entered.load(Ordering::SeqCst)));
+
+        let b = c.supersede();
+        let c_in_b = c.clone();
+        let positions_in_b = positions.clone();
+        let b_handle = tauri::async_runtime::spawn(async move {
+            c_in_b
+                .commit_popup_show(
+                    b,
+                    async move {
+                        positions_in_b.lock().unwrap().push("B");
+                        true
+                    },
+                    || {},
+                )
+                .await
+        });
+
+        // B 此刻必须被窗锁挡住（A 还没释放）
+        std::thread::sleep(Duration::from_millis(30));
+        assert!(
+            positions.lock().unwrap().is_empty(),
+            "B 的窗口操作必须等待 A 释放窗锁，不得交错"
+        );
+
+        let _ = release_a_tx.send(());
+        let a_outcome = tauri::async_runtime::block_on(a_handle).unwrap();
+        let b_outcome = tauri::async_runtime::block_on(b_handle).unwrap();
+
+        assert_eq!(a_outcome, ShowCommit::Superseded);
+        assert_eq!(b_outcome, ShowCommit::Committed);
+        assert_eq!(
+            *positions.lock().unwrap(),
+            vec!["B"],
+            "最终的窗口位置必须由当前代决定"
         );
     }
 }

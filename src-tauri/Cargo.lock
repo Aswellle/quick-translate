@@ -3360,6 +3360,7 @@ dependencies = [
  "arboard",
  "async-trait",
  "base64 0.22.1",
+ "core-graphics",
  "hex",
  "hmac",
  "md-5",
@@ -3382,6 +3383,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "url",
  "uuid",
  "windows-sys 0.52.0",
 ]

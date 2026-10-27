@@ -46,15 +46,16 @@ impl std::fmt::Display for RequestId {
 
 /// 一次翻译请求的完整描述。
 ///
-/// 刻意只有一个 `text` 字段，而不是计划里写的 `source_text` + `normalized_text`
-/// 两个：worker 在归一化那一刻就丢弃了原文（`clipboard::worker` 的 pending
-/// 存的就是归一化结果），下游 `TranslationRecord` 与翻译引擎消费的也全是
-/// 归一化文本。今天没有任何消费者需要原文，加它只会得到一个死字段 ——
-/// 真要恢复原文，得先让 worker 同时携带两份文本，那是另一件事。
+/// 刻意只有一个 `text` 字段：它就是请求文本（QT-009 的结构保真版本），
+/// 由 worker 在防抖挂起时从原始文本整理而来（`PendingCopy::request_text`）。
+/// 原始文本在 worker 的 `last_text` 里活着（用于去重比较），去重键单独
+/// 计算 —— 三种角色各自有值，不再互相冒用。
 #[derive(Debug, Clone)]
 pub struct TranslationRequest {
     pub id: RequestId,
-    /// 待翻译文本（已归一化，已按 MAX_TEXT_CHARS 截断）
+    /// 待翻译文本（结构保真整理，见 clipboard::build_request_text；
+    /// 已按 MAX_TEXT_CHARS 截断）。QT-009 起它与去重键（normalize_text）
+    /// 是两个不同的值 —— 缩进、列表、日志结构在此处原样保留。
     pub text: String,
     pub target_lang: String,
     /// 触发时的光标位置（屏幕物理像素，与 `GetCursorPos` 同坐标系）

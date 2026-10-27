@@ -17,7 +17,9 @@ use crate::types::ToastPayload;
 #[tauri::command]
 pub async fn copy_to_clipboard(app: AppHandle, text: String) -> Result<(), AppError> {
     let state = app.state::<crate::state::AppState>();
-    state.clipboard_monitor.mark_app_write(&text);
+    // 基线代数必须在写入之前读取：期望的判据是「代数从登记时刻前进」
+    let baseline_seq = clipboard::clipboard_seq();
+    state.clipboard_monitor.mark_app_write(&text, baseline_seq);
     let result = clipboard::write_clipboard_text(&text);
     if result.is_err() {
         state.clipboard_monitor.unmark_app_write();
@@ -513,20 +515,120 @@ pub async fn check_onboarding(app: AppHandle) -> Result<bool, AppError> {
     Ok(!completed)
 }
 
-/// 使用系统默认浏览器打开指定 URL
-/// 仅允许 http/https，使用 explorer 而非 cmd shell 避免 & | 等字符被解析为 shell 指令
-/// scheme 比较不区分大小写（HTTPS:// 与 https:// 等效）
+/// 使用系统默认浏览器打开指定 URL（QT-004）。
+///
+/// 安全面：URL 先经标准 parser 解析，scheme 白名单只放行 http/https；
+/// `file:`、`javascript:`、`data:` 等一律拒绝。随后按平台调用系统打开器，
+/// URL 作为**单个参数**传递 —— 任何平台都不经过 shell 字符串拼接，
+/// `&`、`|`、空格等字符没有被执行语义。
+///
+/// 平台打开器：Windows `explorer`、macOS `open`、其余 `xdg-open`。
+/// 此前的实现硬编码 `explorer`，macOS 上打开项目页 / 支持链接会直接失败。
 #[tauri::command]
 pub fn open_url(url: String) -> Result<(), AppError> {
-    let scheme = url.split("://").next().unwrap_or("").to_lowercase();
-    if scheme != "http" && scheme != "https" {
-        return Err(AppError::WindowError("仅支持 http/https 链接".to_string()));
-    }
-    std::process::Command::new("explorer")
-        .arg(&url)
+    let parsed = validate_openable_url(&url)?;
+
+    #[cfg(target_os = "windows")]
+    let program = "explorer";
+    #[cfg(target_os = "macos")]
+    let program = "open";
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let program = "xdg-open";
+
+    std::process::Command::new(program)
+        .arg(parsed.as_str())
         .spawn()
         .map_err(|e| AppError::WindowError(format!("打开链接失败: {}", e)))?;
     Ok(())
+}
+
+/// 校验并返回允许打开的 URL（QT-004）。
+///
+/// 只接受能被标准 parser 解析、scheme 为 http/https、且带主机名的绝对
+/// URL（无 host 的 `https:/path` 无法定位任何资源，一并拒绝）。
+/// 大小写不敏感（`HTTPS://` 与 `https://` 等效 —— parser 会把 scheme
+/// 归一化为小写）。scheme 比对基于 `Url::scheme()`，`split("://")` 那种
+/// 「找得到 http 字样就放行」的近似判断在 `http:/path`、`javascript://x`
+/// 这类输入上会走错分支。
+fn validate_openable_url(raw: &str) -> Result<url::Url, AppError> {
+    let parsed =
+        url::Url::parse(raw).map_err(|_| AppError::WindowError("无法解析的链接".to_string()))?;
+    match parsed.scheme() {
+        "http" | "https" if parsed.host_str().is_some() => Ok(parsed),
+        _ => Err(AppError::WindowError("仅支持 http/https 链接".to_string())),
+    }
+}
+
+#[cfg(test)]
+mod open_url_tests {
+    use super::validate_openable_url;
+
+    fn err_of(raw: &str) -> String {
+        validate_openable_url(raw).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn http_and_https_are_allowed() {
+        assert!(validate_openable_url("https://example.com").is_ok());
+        assert!(validate_openable_url("http://example.com/path?q=1&r=2").is_ok());
+        // scheme 大小写不敏感，parser 归一化为小写
+        assert!(validate_openable_url("HTTPS://EXAMPLE.COM/PAGE").is_ok());
+        // 端口、查询、片段
+        assert!(validate_openable_url("https://example.com:8443/a?b=c#d").is_ok());
+    }
+
+    /// 危险 scheme 必须全部拒绝 —— 这些正是浏览器里可执行/可读本地文件的
+    /// 入口，绝不能交给系统打开器。
+    #[test]
+    fn dangerous_schemes_are_rejected() {
+        for raw in [
+            "file:///C:/Windows/system32/config",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "data:text/html,<script>alert(1)</script>",
+            "vbscript:msgbox",
+            "ftp://example.com/pub",
+            "chrome://settings",
+            "about:blank",
+        ] {
+            assert!(validate_openable_url(raw).is_err(), "{raw} 必须被拒绝");
+        }
+    }
+
+    /// 畸形输入：解析本身失败（含空串、无 scheme、纯路径），同样拒绝。
+    #[test]
+    fn malformed_inputs_are_rejected() {
+        for raw in ["", "   ", "example.com", "/local/path"] {
+            assert!(validate_openable_url(raw).is_err(), "{raw} 必须被拒绝");
+        }
+    }
+
+    /// WHATWG 标准对 http/https 等特殊 scheme 容忍单斜杠：
+    /// `https:/missing-slashes` 与 `https://missing-slashes` 等价，
+    /// parser 的裁决是「合法 https」—— 契约与标准对齐，不做二次收紧。
+    #[test]
+    fn special_scheme_single_slash_follows_whatwg() {
+        let parsed = validate_openable_url("https:/missing-slashes").unwrap();
+        assert_eq!(parsed.host_str(), Some("missing-slashes"));
+    }
+
+    /// 回归：旧的 `split("://")` 近似判断放行不了的分支，现在由 parser 精确裁决；
+    /// 而 `javascript://` 这类**含 :// 的危险输入**旧判断会把它当成 scheme
+    /// 「javascript」拒绝，新判断同样拒绝 —— 两层防线都必须在。
+    #[test]
+    fn colon_slash_slash_tricks_do_not_pass() {
+        assert!(err_of("javascript://alert(1)").contains("http"));
+        assert!(err_of("data://text/html,x").contains("http"));
+        assert!(err_of("file://C:/Windows").contains("http"));
+    }
+
+    /// 校验返回的是归一化后的 URL：交给系统打开器的是 parser 重建的串，
+    /// 不是原始输入（多余空白已被 parser 拒绝/清洗）。
+    #[test]
+    fn validated_url_is_normalized() {
+        let parsed = validate_openable_url("https://EXAMPLE.com/Path").unwrap();
+        assert_eq!(parsed.as_str(), "https://example.com/Path");
+    }
 }
 
 /// 设置剪贴板监控开关状态

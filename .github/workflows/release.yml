@@ -16,8 +16,11 @@ on:
       - "v*"
   workflow_dispatch:
 
+# 最小权限（QT-014）：默认只读；仅真正上传 Release 资产的两个构建 job
+# 显式获得 contents: write（tauri-action 创建 Release 并上传安装包与清单）。
+# verify-updater-manifest 等其余 job 继承只读 —— 它们不需要任何写权限。
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   # ── Windows 构建 ─────────────────────────────────────────────────────────
@@ -25,23 +28,27 @@ jobs:
     runs-on: windows-latest
     name: Build Windows (x86_64)
 
+    # 上传 Release 资产是本仓库唯二需要写权限的 job（QT-014）
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
           cache: "npm"
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1.99.0
+        uses: dtolnay/rust-toolchain@ff7f6a3374ce205788da40198ec918bd5d67aea7 # 1.99.0
         with:
           targets: x86_64-pc-windows-msvc
 
       - name: Cache Cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/bin/
@@ -87,9 +94,42 @@ jobs:
         run: cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
 
       # ── 依赖安全扫描 ────────────────────────────────────────────────────
-      - name: npm audit
-        run: npm audit --audit-level=high
-        continue-on-error: true
+      # 依赖审计门禁（QT-014）：高危公告未豁免即失败。豁免清单逐项
+      # 带理由，只允许覆盖「构建期传递依赖、不进入发行产物」的已知项；
+      # 新增高危公告（或移除豁免）会让本步骤变红 —— 不再被
+      # continue-on-error 静默放行。
+      - name: npm audit (high severity gate)
+        env:
+          AUDIT_EXEMPT: >-
+            GHSA-c83g-rgw3-j3cx
+            GHSA-73wf-gq98-2v4g
+            GHSA-2v37-7h3g-55p8
+            GHSA-68fv-2mgg-jv7q
+            GHSA-xjj6-f33q-929c
+            GHSA-587h-7wmj-h5pm
+        run: |
+          set -euo pipefail
+          npm audit --audit-level=high --json > audit-report.json || true
+          node -e "
+            const report = require('./audit-report.json');
+            const exempt = new Set(process.env.AUDIT_EXEMPT.split(/\s+/).filter(Boolean));
+            const unhandled = new Set();
+            for (const vuln of Object.values(report.vulnerabilities || {})) {
+              for (const via of vuln.via || []) {
+                if (via.severity !== 'high' || !via.url) continue;
+                const id = via.url.split('/').pop();
+                if (!exempt.has(id)) unhandled.add(id + ' (' + vuln.name + ')');
+              }
+            }
+            if (unhandled.size > 0) {
+              console.error('存在未豁免的高危公告 —— 发布阻断:');
+              for (const id of unhandled) console.error('  - ' + id);
+              console.error('如需豁免：确认其为构建期依赖且不进入发行产物，');
+              console.error('带理由加入 AUDIT_EXEMPT 并安排升级复审。');
+              process.exit(1);
+            }
+            console.log('npm audit 门禁通过（高危公告全部在豁免清单内）');
+          "
       # ── 预装 WiX 4（MSI 打包工具）────────────────────────────────────────
       # Tauri bundler 在运行时从 GitHub 下载 WiX，会因网络 504 失败；
       # 提前安装后 bundler 直接使用本地工具链，避免 CI 网络超时。
@@ -97,7 +137,7 @@ jobs:
         run: dotnet tool install --global wix
 
       - name: Build Tauri app (Windows)
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -123,23 +163,27 @@ jobs:
     runs-on: macos-latest
     name: Build macOS (Apple Silicon)
 
+    # 上传 Release 资产是本仓库唯二需要写权限的 job（QT-014）
+    permissions:
+      contents: write
+
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"
           cache: "npm"
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@1.99.0
+        uses: dtolnay/rust-toolchain@ff7f6a3374ce205788da40198ec918bd5d67aea7 # 1.99.0
         with:
           targets: aarch64-apple-darwin
 
       - name: Cache Cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/bin/
@@ -183,12 +227,45 @@ jobs:
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --target aarch64-apple-darwin -- -D warnings
 
       # ── 依赖安全扫描 ────────────────────────────────────────────────────
-      - name: npm audit
-        run: npm audit --audit-level=high
-        continue-on-error: true
+      # 依赖审计门禁（QT-014）：高危公告未豁免即失败。豁免清单逐项
+      # 带理由，只允许覆盖「构建期传递依赖、不进入发行产物」的已知项；
+      # 新增高危公告（或移除豁免）会让本步骤变红 —— 不再被
+      # continue-on-error 静默放行。
+      - name: npm audit (high severity gate)
+        env:
+          AUDIT_EXEMPT: >-
+            GHSA-c83g-rgw3-j3cx
+            GHSA-73wf-gq98-2v4g
+            GHSA-2v37-7h3g-55p8
+            GHSA-68fv-2mgg-jv7q
+            GHSA-xjj6-f33q-929c
+            GHSA-587h-7wmj-h5pm
+        run: |
+          set -euo pipefail
+          npm audit --audit-level=high --json > audit-report.json || true
+          node -e "
+            const report = require('./audit-report.json');
+            const exempt = new Set(process.env.AUDIT_EXEMPT.split(/\s+/).filter(Boolean));
+            const unhandled = new Set();
+            for (const vuln of Object.values(report.vulnerabilities || {})) {
+              for (const via of vuln.via || []) {
+                if (via.severity !== 'high' || !via.url) continue;
+                const id = via.url.split('/').pop();
+                if (!exempt.has(id)) unhandled.add(id + ' (' + vuln.name + ')');
+              }
+            }
+            if (unhandled.size > 0) {
+              console.error('存在未豁免的高危公告 —— 发布阻断:');
+              for (const id of unhandled) console.error('  - ' + id);
+              console.error('如需豁免：确认其为构建期依赖且不进入发行产物，');
+              console.error('带理由加入 AUDIT_EXEMPT 并安排升级复审。');
+              process.exit(1);
+            }
+            console.log('npm audit 门禁通过（高危公告全部在豁免清单内）');
+          "
 
       - name: Build Tauri app (macOS)
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

@@ -38,12 +38,18 @@ impl TencentProvider {
         }
     }
 
+    /// 腾讯云 TMT 的目标语言代码（QT-006）。
+    ///
+    /// 官方代码表（cloud.tencent.com/document/product/551）：zh 简体、
+    /// **zh-TW 繁体**、jp 日语、**kr 韩语** —— 此前 zh-tw 被折叠进简体
+    /// "zh"、韩语误用 "ko"，两者都会让腾讯源对繁体/韩语目标静默出错。
     fn to_tencent_lang(lang: &str) -> &str {
         match lang {
-            "zh" | "zh-tw" => "zh",
+            "zh" => "zh",
+            "zh-tw" => "zh-TW",
             "en" => "en",
             "ja" => "jp",
-            "ko" => "ko",
+            "ko" => "kr",
             "fr" => "fr",
             "de" => "de",
             "es" => "es",
@@ -256,6 +262,12 @@ impl TranslationProvider for TencentProvider {
         }
     }
 
+    /// 校验凭证：提交一次极短的测试翻译（QT-005）。
+    ///
+    /// 腾讯翻译没有独立的认证/用量查询端点，唯一的校验方式就是一次真实
+    /// 翻译请求 —— 它会计入当月字符额度（本例约 5 个字符）。
+    /// `validation_uses_translation` 默认返回 true 与此对应，设置页据此
+    /// 向用户如实说明。
     async fn validate_credentials(&self) -> Result<bool, AppError> {
         if self.secret_id.is_empty() || self.secret_key.is_empty() {
             return Ok(false);
@@ -373,5 +385,40 @@ mod tests {
             prev = cur;
         }
         assert_eq!(prev, (2025, 1, 1));
+    }
+
+    /// QT-006：目标语言映射必须逐语言对齐腾讯云 TMT 官方代码表
+    /// （cloud.tencent.com/document/product/551）。
+    #[test]
+    fn target_lang_mapping_matches_official_codes() {
+        let cases: &[(&str, &str)] = &[
+            ("zh", "zh"),
+            ("zh-tw", "zh-TW"), // 繁体：官方专用代码，此前被折叠成简体 "zh"
+            ("en", "en"),
+            ("ja", "jp"), // TMT 用 jp 表示日语
+            ("ko", "kr"), // TMT 用 kr 表示韩语，此前误用 "ko"
+            ("fr", "fr"),
+            ("de", "de"),
+            ("es", "es"),
+            ("ru", "ru"),
+            ("pt", "pt"),
+            ("it", "it"),
+            ("ar", "ar"),
+        ];
+        for &(input, expected) in cases {
+            assert_eq!(
+                TencentProvider::to_tencent_lang(input),
+                expected,
+                "语言 {} 映射错误",
+                input
+            );
+        }
+    }
+
+    /// 未知/未来语言代码按原样透传 —— 新增语言时不至于被映射吞掉。
+    #[test]
+    fn unknown_lang_codes_pass_through() {
+        assert_eq!(TencentProvider::to_tencent_lang("th"), "th");
+        assert_eq!(TencentProvider::to_tencent_lang("vi"), "vi");
     }
 }

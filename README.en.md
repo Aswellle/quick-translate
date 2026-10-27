@@ -119,7 +119,7 @@ Failover order: **DeepL → Tencent → Baidu → Youdao → Google**. Configure
 
 - When the primary provider fails or is rate-limited, traffic moves to the next one automatically — and moves back once it recovers
 - Each provider card in Settings shows live health: healthy / recovering / rate-limited / auth failed / quota exhausted
-- The **Verify** button validates credentials instantly, **without consuming quota**
+- The **Verify** button validates credentials instantly — DeepL queries the official usage endpoint (zero quota); Tencent/Baidu/Youdao submit one tiny test translation (~5 chars, counted against the monthly quota)
 
 ### History and Privacy
 
@@ -201,7 +201,7 @@ Already on an older version? Open **Settings → About → Check for Updates**. 
 
 ## Provider Configuration
 
-Enter credentials in **Settings → Providers** and press **Verify** to validate them instantly (no quota consumed). Credentials are stored locally and encrypted in the database.
+Enter credentials in **Settings → Providers** and press **Verify** to validate them instantly. DeepL validation queries the official usage endpoint (zero quota); Tencent/Baidu/Youdao have no dedicated check endpoint, so validation sends one tiny test translation counted against the monthly quota — the button states this clearly. Credentials are stored locally and encrypted in the database.
 
 Step-by-step instructions for registering each provider are available inside the in-app settings panel. You can switch providers at any time; when the primary is unavailable traffic fails over automatically and returns when it recovers — no manual intervention.
 
