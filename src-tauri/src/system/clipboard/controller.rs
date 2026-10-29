@@ -451,10 +451,7 @@ mod tests {
 
         c.mark_app_write("payload", None);
         c.touch_expected_write();
-        assert!(
-            c.expectation_pending_for_test(),
-            "保活刷新不得清掉期望登记"
-        );
+        assert!(c.expectation_pending_for_test(), "保活刷新不得清掉期望登记");
         assert!(!c.consume_if_expected("other", None));
         assert!(c.consume_if_expected("payload", None), "保活后仍可正常匹配");
     }
