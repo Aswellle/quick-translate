@@ -195,6 +195,8 @@ fn dedupe_path(path: std::path::PathBuf) -> std::path::PathBuf {
 }
 
 /// 本地时间戳（复用已在依赖树中的 `time` crate，不为此新增依赖）。
+/// 精确到毫秒：秒级粒度在同秒内连续两次导出时会生成同名文件、静默
+/// 覆盖第一份——与 dedupe_path「绝不覆盖」的承诺相悖。
 fn local_timestamp() -> String {
     let now = crate::types::now_unix_ms();
     let t = time::OffsetDateTime::from_unix_timestamp(now.div_euclid(1000))
@@ -202,13 +204,14 @@ fn local_timestamp() -> String {
     let local =
         t.to_offset(time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC));
     format!(
-        "{:04}{:02}{:02}-{:02}{:02}{:02}",
+        "{:04}{:02}{:02}-{:02}{:02}{:02}{:03}",
         local.year(),
         local.month() as u8,
         local.day(),
         local.hour(),
         local.minute(),
-        local.second()
+        local.second(),
+        local.nanosecond() / 1_000_000
     )
 }
 
