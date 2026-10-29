@@ -122,14 +122,18 @@ pub async fn export_history_to_file(
         .unwrap_or_default();
 
     let target = if export_dir.trim().is_empty() {
-        // 每次询问：原生保存对话框（blocking API 内部切换线程等待，
-        // 不会堵住调用它的异步执行器）
-        let file = app
+        // 每次询问：原生保存对话框。blocking API 会 park 调用它的线程直到
+        // 用户关闭对话框——包进 spawn_blocking 让这次 park 落在阻塞线程池，
+        // 不占住异步执行器的 worker
+        let dialog = app
             .dialog()
             .file()
             .add_filter("导出文件", &["json", "md", "html"])
             .set_file_name(&file_name);
-        match file.blocking_save_file() {
+        let picked = tauri::async_runtime::spawn_blocking(move || dialog.blocking_save_file())
+            .await
+            .map_err(|e| AppError::ConfigError(format!("保存对话框任务失败: {}", e)))?;
+        match picked {
             Some(path) => path
                 .into_path()
                 .map_err(|e| AppError::ConfigError(format!("无法解析所选路径: {}", e)))?,
@@ -142,9 +146,7 @@ pub async fn export_history_to_file(
         // 这里再断言一次落点确实在导出目录之内 —— 写入面的边界必须由
         // 接收方自己兜住，而不是信任调用方。
         if !target.starts_with(&export_dir) {
-            return Err(AppError::ConfigError(
-                "导出路径越出保存目录".to_string(),
-            ));
+            return Err(AppError::ConfigError("导出路径越出保存目录".to_string()));
         }
         dedupe_path(target)
     };
@@ -220,7 +222,11 @@ fn local_timestamp() -> String {
 #[tauri::command]
 pub async fn choose_export_dir(app: tauri::AppHandle) -> Result<Option<String>, AppError> {
     use tauri_plugin_dialog::DialogExt;
-    match app.dialog().file().blocking_pick_folder() {
+    let dialog = app.dialog().file();
+    let picked = tauri::async_runtime::spawn_blocking(move || dialog.blocking_pick_folder())
+        .await
+        .map_err(|e| AppError::ConfigError(format!("目录选择器任务失败: {}", e)))?;
+    match picked {
         Some(path) => path
             .into_path()
             .map(|p| Some(p.to_string_lossy().to_string()))
@@ -256,7 +262,11 @@ mod tests {
 
     #[test]
     fn plain_file_names_pass_the_gate() {
-        for name in ["report.json", "quicktranslate-history-2026-10-30.md", "x.html"] {
+        for name in [
+            "report.json",
+            "quicktranslate-history-2026-10-30.md",
+            "x.html",
+        ] {
             ensure_plain_file_name(name).expect("纯文件名应放行");
         }
     }
