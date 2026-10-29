@@ -86,6 +86,7 @@ pub async fn export_history_to_file(
             file_name
         )));
     }
+    ensure_plain_file_name(&file_name)?;
 
     let export_dir = state
         .config
@@ -109,7 +110,17 @@ pub async fn export_history_to_file(
             None => return Ok(None),
         }
     } else {
-        dedupe_path(std::path::Path::new(&export_dir).join(&file_name))
+        let target = std::path::Path::new(&export_dir).join(&file_name);
+        // join 的语义会被 file_name 翻转：绝对路径整体替换基路径、`..`
+        // 可以上跳。file_name 已经由 ensure_plain_file_name 卡死为纯文件名，
+        // 这里再断言一次落点确实在导出目录之内 —— 写入面的边界必须由
+        // 接收方自己兜住，而不是信任调用方。
+        if !target.starts_with(&export_dir) {
+            return Err(AppError::ConfigError(
+                "导出路径越出保存目录".to_string(),
+            ));
+        }
+        dedupe_path(target)
     };
 
     std::fs::write(&target, contents.as_bytes())
@@ -118,6 +129,25 @@ pub async fn export_history_to_file(
     let written = target.to_string_lossy().to_string();
     tracing::info!(event = "history_exported", "[history] 已导出到 {}", written);
     Ok(Some(written))
+}
+
+/// 校验 file_name 是纯文件名（不含任何路径分量）。
+///
+/// `Path::join` 对绝对路径参数会整体替换基路径、对 `..\` 分量可目录穿越、
+/// Windows 下 `:` 还可写 ADS——contents 虽来自自家前端，但写入面一旦
+/// 暴露成 IPC 命令，边界就必须卡死在这里。
+pub(crate) fn ensure_plain_file_name(file_name: &str) -> Result<(), AppError> {
+    let path = std::path::Path::new(file_name);
+    let plain = path.file_name().is_some()
+        && path.file_name() == Some(std::ffi::OsStr::new(file_name))
+        && !file_name.contains(['/', '\\', ':']);
+    if !plain {
+        return Err(AppError::ConfigError(format!(
+            "导出文件名必须是纯文件名: {}",
+            file_name
+        )));
+    }
+    Ok(())
 }
 
 /// 目标文件已存在时在扩展名前插入时间戳（`report.md` → `report-20261029-183000.md`），
