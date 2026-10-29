@@ -136,8 +136,10 @@ const CREDENTIAL_KEYS: &[&str] = &[
 /// 未知键一律拒绝：配置键清单就是写入面的边界，放行未知键等于绕过
 /// 全部类型与范围约束直接写库。
 fn validate_value(key: &str, value: &str) -> Result<(), AppError> {
-    let known = matches!(key, "provider" | "target_lang" | "theme" | "history_limit")
-        || BOOL_KEYS.contains(&key)
+    let known = matches!(
+        key,
+        "provider" | "target_lang" | "theme" | "history_limit" | "export_dir"
+    ) || BOOL_KEYS.contains(&key)
         || CREDENTIAL_KEYS.contains(&key);
     if !known {
         return Err(AppError::ConfigError(format!("未知配置键: {}", key)));
@@ -169,6 +171,14 @@ fn validate_value(key: &str, value: &str) -> Result<(), AppError> {
                 ..=crate::domain::config::HISTORY_LIMIT_MAX)
                 .contains(&parsed)
             {
+                return Err(invalid());
+            }
+        }
+        // 导出目录允许清空（空 = 每次导出弹对话框询问）；设值时必须是
+        // 绝对路径形态 —— 相对路径会随进程工作目录漂移，写出的文件位置
+        // 用户找不到
+        "export_dir" => {
+            if !value.is_empty() && !std::path::Path::new(value).is_absolute() {
                 return Err(invalid());
             }
         }

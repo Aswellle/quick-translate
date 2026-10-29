@@ -49,6 +49,12 @@ const KEY_DESCRIPTORS: &[KeyDescriptor] = &[
         set_string: Some(|c, v| c.theme = v),
     },
     KeyDescriptor {
+        key: "export_dir",
+        encrypted: false,
+        get_credential: None,
+        set_string: Some(|c, v| c.export_dir = v),
+    },
+    KeyDescriptor {
         key: "deepl_api_key",
         encrypted: true,
         get_credential: Some(|c| &c.deepl_api_key),
@@ -188,6 +194,7 @@ impl ConfigService {
             "target_lang" => Some(self.cache.target_lang.clone()),
             "provider" => Some(self.cache.provider.clone()),
             "theme" => Some(self.cache.theme.clone()),
+            "export_dir" => Some(self.cache.export_dir.clone()),
             "auto_start" => Some(self.cache.auto_start.to_string()),
             "history_limit" => Some(self.cache.history_limit.to_string()),
             "fallback_enabled" => Some(self.cache.fallback_enabled.to_string()),
@@ -686,6 +693,7 @@ fn read_field_for_test(config: &AppConfig, key: &str) -> String {
         "target_lang" => config.target_lang.clone(),
         "provider" => config.provider.clone(),
         "theme" => config.theme.clone(),
+        "export_dir" => config.export_dir.clone(),
         _ => String::new(),
     }
 }
