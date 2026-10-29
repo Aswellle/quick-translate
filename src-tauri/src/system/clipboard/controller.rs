@@ -175,6 +175,23 @@ impl MonitorController {
         tracing::info!("[MonitorController] unmark_app_write() 已撤销（写入失败）");
     }
 
+    /// worker 读不到剪贴板内容时保活期望登记。
+    ///
+    /// EXPECT_TTL 的前提是「worker 每轮都有机会读到内容去匹配」；读取本身
+    /// 失败（剪贴板被其他进程锁住）时这个前提不成立 —— 读取退避最长可到
+    /// 30s，远超 3s TTL，期望会在 worker 有机会匹配之前就被过期清理，
+    /// app 自己写入的内容随后被当成用户新复制送去翻译。读取失败期间
+    /// 由 worker 调用本方法刷新登记时刻，TTL 恢复为「自上次可匹配的轮次起算」。
+    pub(crate) fn touch_expected_write(&self) {
+        let mut slot = self
+            .expected_write
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(exp) = slot.as_mut() {
+            exp.at = Instant::now();
+        }
+    }
+
     /// worker 调用：当前内容（已归一化）是否匹配已登记的 app 写入。
     ///
     /// `current_seq` 是本轮读取的剪贴板变化代数。匹配 = 文本哈希一致
@@ -422,6 +439,24 @@ mod tests {
             c.consume_if_expected("payload", Some(0)),
             "代数回绕视为变化"
         );
+    }
+
+    /// touch_expected_write：保活不得清掉登记，空槽调用不得 panic。
+    /// （TTL 真实过期依赖 3s 墙钟，这里锁定「touch 是无害刷新」这一契约；
+    /// 「长退避下期望存活更久」由 worker 侧在读取失败时调用它保证。）
+    #[test]
+    fn touch_keeps_pending_expectation_and_is_safe_when_empty() {
+        let c = MonitorController::new();
+        c.touch_expected_write();
+
+        c.mark_app_write("payload", None);
+        c.touch_expected_write();
+        assert!(
+            c.expectation_pending_for_test(),
+            "保活刷新不得清掉期望登记"
+        );
+        assert!(!c.consume_if_expected("other", None));
+        assert!(c.consume_if_expected("payload", None), "保活后仍可正常匹配");
     }
 
     #[test]

@@ -250,6 +250,10 @@ pub fn run_worker(
                     ),
                     &mut rand::thread_rng(),
                 );
+                // 读不到内容就不可能匹配 app 写入期望：这一轮按「已尝试匹配」
+                // 对待，刷新期望登记的存活时刻，避免长退避（最长 30s）把
+                // 3s TTL 的期望在有机会匹配之前过期掉
+                controller.touch_expected_write();
                 tracing::warn!(
                     event = "clipboard_worker_failed",
                     code,
