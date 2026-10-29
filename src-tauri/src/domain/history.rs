@@ -488,3 +488,105 @@ fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TranslationRecord> {
         is_starred: row.get::<_, i64>(8).map(|v| v != 0)?,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    fn repo() -> HistoryRepository {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::infra::database::run_migrations(&conn).unwrap();
+        HistoryRepository::new(crate::infra::database::Db::available(Arc::new(Mutex::new(
+            conn,
+        ))))
+    }
+
+    fn record_at(created_at: i64) -> TranslationRecord {
+        TranslationRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            source_text: "hello".to_string(),
+            translated_text: "你好".to_string(),
+            source_lang: "en".to_string(),
+            target_lang: "zh".to_string(),
+            provider: "google".to_string(),
+            created_at,
+            duration_ms: Some(100),
+            is_starred: false,
+        }
+    }
+
+    /// 第 k 天前（k=0 是今天）本地正午的毫秒时刻：正午离两个日界都远，
+    /// DST 平移不会把种子记录挤到邻天
+    fn noon_days_ago(k: i64) -> i64 {
+        local_midnight_ms(crate::types::now_unix_ms()) - k * MS_PER_DAY + 12 * 60 * 60 * 1000
+    }
+
+    // ── get_stats 的天数钳制 ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn days_parameter_is_clamped_to_bounds() {
+        let repo = repo();
+        for k in 0..10 {
+            repo.insert(&record_at(noon_days_ago(k))).await.unwrap();
+        }
+
+        // 缺省 7 天：今天的部分 + 前 6 天
+        let s = repo.get_stats(None).await.unwrap();
+        assert_eq!(s.daily.len(), 7);
+        assert_eq!(s.daily.last().unwrap().count, 1, "末位是今天");
+
+        // 0 与超界都钳到边界
+        assert_eq!(repo.get_stats(Some(0)).await.unwrap().daily.len(), 1);
+        assert_eq!(repo.get_stats(Some(999)).await.unwrap().daily.len(), 90);
+
+        // 31 天：跨到 9 天前，共 31 个逐日槽位，其中 10 天有数据
+        let s = repo.get_stats(Some(31)).await.unwrap();
+        assert_eq!(s.daily.len(), 31);
+        assert_eq!(s.daily.iter().map(|d| d.count).sum::<u64>(), 10);
+    }
+
+    // ── get_stats_range 的输入校验 ───────────────────────────────────────
+
+    #[tokio::test]
+    async fn stats_range_rejects_inverted_and_oversized_intervals() {
+        let repo = repo();
+
+        let now = crate::types::now_unix_ms();
+        let err = repo
+            .get_stats_range(now, now - MS_PER_DAY)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("结束早于开始"), "倒挂区间应被拒绝: {}", err);
+
+        let err = repo
+            .get_stats_range(now - 91 * MS_PER_DAY, now)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("90"), "超过 90 天的区间应被拒绝: {}", err);
+    }
+
+    #[tokio::test]
+    async fn stats_range_includes_both_endpoint_days() {
+        let repo = repo();
+        // 今天与 2 天前各一条，区间恰好覆盖这两天：同日起止（1 天）到
+        // 首尾都含的 3 天窗口都应正确聚合
+        repo.insert(&record_at(noon_days_ago(0))).await.unwrap();
+        repo.insert(&record_at(noon_days_ago(2))).await.unwrap();
+
+        let s = repo
+            .get_stats_range(noon_days_ago(0), noon_days_ago(0))
+            .await
+            .unwrap();
+        assert_eq!(s.daily.len(), 1, "同日起止 = 单日窗口");
+        assert_eq!(s.daily[0].count, 1);
+
+        let s = repo
+            .get_stats_range(noon_days_ago(2), noon_days_ago(0))
+            .await
+            .unwrap();
+        assert_eq!(s.daily.len(), 3, "两端各自的本地日都应包含在内");
+        assert_eq!(s.daily.iter().map(|d| d.count).sum::<u64>(), 2);
+    }
+}

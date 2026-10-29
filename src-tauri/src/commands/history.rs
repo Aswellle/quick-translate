@@ -218,3 +218,61 @@ pub async fn get_stats_range(
 ) -> Result<StatsResult, AppError> {
     state.history.get_stats_range(start_ms, end_ms).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── ensure_plain_file_name：写入面的路径分量防线 ────────────────────
+
+    #[test]
+    fn plain_file_names_pass_the_gate() {
+        for name in ["report.json", "quicktranslate-history-2026-10-30.md", "x.html"] {
+            ensure_plain_file_name(name).expect("纯文件名应放行");
+        }
+    }
+
+    #[test]
+    fn path_components_are_rejected() {
+        // 绝对路径：Path::join 会整体替换基路径
+        ensure_plain_file_name(r"C:\Temp\evil.json").unwrap_err();
+        ensure_plain_file_name("/etc/evil.json").unwrap_err();
+        // 目录穿越与分隔符
+        ensure_plain_file_name(r"..\evil.json").unwrap_err();
+        ensure_plain_file_name("a/b.json").unwrap_err();
+        ensure_plain_file_name(r"a\b.json").unwrap_err();
+        // Windows ADS 与设备名形态
+        ensure_plain_file_name("f.json:ads").unwrap_err();
+        // 「.」与「..」本身没有 file_name 分量
+        ensure_plain_file_name(".").unwrap_err();
+        ensure_plain_file_name("..").unwrap_err();
+    }
+
+    // ── dedupe_path：已存在的导出不静默覆盖 ─────────────────────────────
+
+    #[test]
+    fn missing_target_keeps_its_name() {
+        let dir = std::env::temp_dir().join(format!("qt-dedupe-{}", uuid::Uuid::new_v4()));
+        let path = dir.join("report.json");
+        assert_eq!(dedupe_path(path.clone()), path, "不存在的目标不改名");
+    }
+
+    #[test]
+    fn existing_target_gets_a_timestamped_sibling() {
+        let dir = std::env::temp_dir().join(format!("qt-dedupe-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("report.md");
+        std::fs::write(&path, b"old").unwrap();
+
+        let deduped = dedupe_path(path.clone());
+        assert_ne!(deduped, path, "已存在的目标必须改名");
+        let name = deduped.file_name().unwrap().to_string_lossy().to_string();
+        assert!(
+            name.starts_with("report-") && name.ends_with(".md"),
+            "应保留词干与扩展名并插入时间戳: {}",
+            name
+        );
+        assert_eq!(deduped.parent(), path.parent(), "仍在同一目录内");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
