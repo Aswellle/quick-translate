@@ -19,8 +19,8 @@ fn main() {
                 .windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest()),
         )
         .expect("failed to run tauri-build");
-        return;
     }
+
     #[cfg(not(windows))]
     {
         tauri_build::build()
