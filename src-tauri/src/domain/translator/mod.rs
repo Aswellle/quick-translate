@@ -369,8 +369,11 @@ async fn try_provider(
 
                 if attempt < policy.max_attempts && policy.should_retry(class) {
                     let backoff = policy.backoff_after(attempt);
-                    if backoff >= budget.remaining() {
-                        // 连退避都睡不起，重试没有意义 —— 省下预算给别的源
+                    // 退避之后还要装得下一次**完整**尝试（策略超时值）：
+                    // 只睡得起退避的重试会在被预算压紧的超时里再失败一次，
+                    // 白白把剩余预算从链尾的健康源手里抢走。放不下就就地
+                    // 放弃重试，把预算让给 fallback。
+                    if backoff + policy.attempt_timeout >= budget.remaining() {
                         errors.push((provider_id, e.to_string()));
                         return AttemptOutcome::Exhausted;
                     }
@@ -1499,6 +1502,42 @@ line2"}}"#,
             start.elapsed()
         );
         assert_eq!(err.error_code(), "ALL_PROVIDERS_FAILED");
+    }
+
+    // ── 重试预算闸：退避后装不下完整尝试就不再重试 ──────────────────────
+
+    /// 反证场景：主源黑洞式超时（每次吃满策略超时）时，旧条件只检查退避
+    /// 睡不睡得起，4s 超时 + 200ms 退避的重试在数学上把 8s 预算吃满，
+    /// 链尾的健康源一个请求都得不到。新条件要求退避 + 一次完整尝试都
+    /// 装得下才重试，省下的预算留给 fallback。
+    #[tokio::test]
+    async fn retry_is_skipped_when_a_full_attempt_no_longer_fits() {
+        let a = MockProvider::new("deepl", vec![Outcome::Timeout]);
+        let engine = engine_with(&[a.clone()], "deepl", false).await;
+
+        // 预算 3s < 退避 200ms + 策略超时 3s：重试必然装不下，直接放弃
+        let err = engine
+            .translate_with_budget("x", "zh", TranslationBudget::new(Duration::from_secs(3)))
+            .await
+            .unwrap_err();
+        assert_eq!(err.error_code(), "ALL_PROVIDERS_FAILED");
+        assert_eq!(
+            a.calls(),
+            1,
+            "放不下完整尝试时不得发起注定失败的重试"
+        );
+    }
+
+    #[tokio::test]
+    async fn retry_still_happens_when_the_full_attempt_fits() {
+        let a = MockProvider::new("deepl", vec![Outcome::Timeout]);
+        let engine = engine_with(&[a.clone()], "deepl", false).await;
+
+        // 预算 5s > 退避 200ms + 策略超时 3s：重试照常
+        let _ = engine
+            .translate_with_budget("x", "zh", TranslationBudget::new(Duration::from_secs(5)))
+            .await;
+        assert_eq!(a.calls(), 2, "装得下完整尝试时重试照常进行");
     }
 
     // ── fallback 排序：健康优先（计划第 10 节）───────────────────────────
