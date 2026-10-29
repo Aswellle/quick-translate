@@ -14,6 +14,7 @@ import { EVENTS } from "@/lib/constants";
 import { toast } from "@/components/ToastManager";
 import { useHistoryStore } from "@/stores/historyStore";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
+import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
 import { formatAsMarkdown, formatAsHtml } from "@/lib/export";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SearchBar } from "./SearchBar";
@@ -81,13 +82,15 @@ export function HistoryWindow() {
   // 销毁，组件树永不重挂载，没有这条事件列表会一直停留在打开时的旧快照
   // （这正是「翻译完几次再打开历史缺记录」的根因）。handler 经 ref 转发，
   // 读最新 store 快照，不依赖 effect 闭包。
-  useTauriEvent(
-    EVENTS.HISTORY_CHANGED,
+  // 窗口隐藏期间事件只记 dirty，转可见时统一补刷（useVisibleRefresh），
+  // 避免看不见的 UI 每条翻译都付一次全量查询
+  const onHistoryChanged = useVisibleRefresh(
     useCallback(() => {
       const { searchQuery, page, starredOnly } = useHistoryStore.getState();
       loadHistory(searchQuery, page, starredOnly);
     }, [loadHistory])
   );
+  useTauriEvent(EVENTS.HISTORY_CHANGED, onHistoryChanged);
 
   const handleSearch = useCallback(
     (query: string) => {

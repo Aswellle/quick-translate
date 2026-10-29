@@ -22,6 +22,7 @@ import {
   type RuntimeDiagnostics,
 } from "@/lib/commands";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
+import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
 import { toast } from "@/components/ToastManager";
 import { SUPPORTED_LANGUAGES, PROVIDERS, ERROR_MESSAGES, EVENTS } from "@/lib/constants";
 import { useConfigStore } from "@/stores/configStore";
@@ -218,12 +219,13 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
   // 落盘 worker 每写成功一条历史就广播 history-changed —— 本窗口 hide 而
   // 非销毁，组件树永不重挂载；没有这条监听，仪表盘会一直停留在打开时的
   // 旧快照（「统计更新不及时」的根因）
-  useTauriEvent(
-    EVENTS.HISTORY_CHANGED,
+  // 隐藏期间挂起、转可见补刷；且只在常规 Tab 消费统计数据
+  const onHistoryChanged = useVisibleRefresh(
     useCallback(() => {
       if (activeTabRef.current === "general") refreshStats();
     }, [refreshStats])
   );
+  useTauriEvent(EVENTS.HISTORY_CHANGED, onHistoryChanged);
 
   const updateDraft = useCallback(<K extends keyof AppConfig>(key: K, value: AppConfig[K]) => {
     setDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
