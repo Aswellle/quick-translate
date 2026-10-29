@@ -43,7 +43,7 @@ pub fn run() {
         eprintln!("PANIC at {}: {}", location, payload);
     }));
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         // ── 单实例保护（必须最先注册）──────────────────────────────────────
         // 两个实例会争用同一个 WebView2 用户数据目录：安装器「运行程序」
         // 勾选项启动新实例时，若旧实例仍在（更新安装、手动双击、自启重叠），
@@ -53,14 +53,17 @@ pub fn run() {
                 system::tray::show_and_focus(&wizard);
             }
         }))
-        // 原生文件/目录对话框：历史导出的保存路径选择（Rust 侧调用，
-        // 不暴露前端 invoke 面）
-        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec![]),
-        ))
+        ));
+    // 原生文件/目录对话框：历史导出的保存路径选择（Rust 侧调用，不暴露
+    // 前端 invoke 面）。插件经 rfd/muda 静态导入 TaskDialogIndirect，依赖
+    // Common-Controls v6 清单——测试可执行文件的清单由 build.rs 统一提供，
+    // 这里保持无条件注册。
+    let builder = builder.plugin(tauri_plugin_dialog::init());
+    builder
         // ── 关闭窗口时隐藏而非退出进程 ──────────────────────────────────────
         // Tauri 2 默认：最后一个窗口关闭 → 进程退出。
         // QuickTranslate 是系统托盘应用，窗口仅是辅助 UI，不应控制进程生命周期。
