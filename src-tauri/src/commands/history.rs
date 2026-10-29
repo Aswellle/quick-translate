@@ -2,11 +2,20 @@
 // 历史记录 command handlers
 // history 字段现为 Arc<HistoryRepository>（无外层 Mutex），直接调用即可
 
-use tauri::State;
+use tauri::{Emitter, State};
 
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::types::{HistoryQuery, StatsResult, TranslationRecord};
+
+/// 历史数据发生变化后通知前端窗口刷新。
+///
+/// 落盘 worker 的写入路径由 system::persistence 广播同一条事件；这里
+/// 覆盖用户直接驱动的变更（清空/删除/收藏切换）——它们不经过落盘
+/// worker，不广播的话设置仪表盘的统计会停留在旧值。
+fn notify_history_changed(app: &tauri::AppHandle) {
+    let _ = app.emit("history-changed", ());
+}
 
 /// 查询历史记录（支持全文搜索 + 分页 + starred_only 过滤）
 #[tauri::command]
@@ -32,20 +41,37 @@ pub async fn count_history(
 
 /// 清空所有历史记录
 #[tauri::command]
-pub async fn clear_history(state: State<'_, AppState>) -> Result<(), AppError> {
-    state.history.clear_all().await
+pub async fn clear_history(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), AppError> {
+    state.history.clear_all().await?;
+    notify_history_changed(&app);
+    Ok(())
 }
 
 /// 删除单条历史记录
 #[tauri::command]
-pub async fn delete_history_record(state: State<'_, AppState>, id: String) -> Result<(), AppError> {
-    state.history.delete_by_id(&id).await
+pub async fn delete_history_record(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<(), AppError> {
+    state.history.delete_by_id(&id).await?;
+    notify_history_changed(&app);
+    Ok(())
 }
 
 /// 切换收藏状态，返回新的收藏状态（true = 已收藏）
 #[tauri::command]
-pub async fn toggle_star_record(state: State<'_, AppState>, id: String) -> Result<bool, AppError> {
-    state.history.toggle_star(&id).await
+pub async fn toggle_star_record(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    id: String,
+) -> Result<bool, AppError> {
+    let starred = state.history.toggle_star(&id).await?;
+    notify_history_changed(&app);
+    Ok(starred)
 }
 
 /// 导出全部历史记录为 JSON 字符串
