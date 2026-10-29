@@ -694,8 +694,7 @@ pub async fn open_settings_window(app: AppHandle, tab: Option<String>) -> Result
 pub async fn open_onboarding_window(app: AppHandle) -> Result<(), AppError> {
     // 若向导窗口已存在，则聚焦显示
     if let Some(window) = app.get_webview_window("onboarding") {
-        let _ = window.show();
-        let _ = window.set_focus();
+        crate::system::tray::show_and_focus(&window);
         return Ok(());
     }
 
