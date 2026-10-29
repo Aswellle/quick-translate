@@ -41,8 +41,8 @@ export interface StatsResult {
   last_7_days: number;
   last_30_days: number;
   last_24h: number;
-  /** 近 7 天逐日计数，升序，末位是今天（部分）。date_ms 为本地时区当日 0 点 */
-  daily_7d: Array<{ date_ms: number; count: number; chars: number }>;
+  /** 逐日计数，升序，末位是今天（部分）；覆盖范围由查询参数决定（getStats 的 days / getStatsRange 的区间）。date_ms 为本地时区当日 0 点 */
+  daily: Array<{ date_ms: number; count: number; chars: number }>;
 }
 
 export interface AppConfig {
@@ -64,6 +64,8 @@ export interface AppConfig {
   clipboard_monitor_enabled: boolean;
   /** 应用内「减少透明效果」开关。与系统偏好媒体查询是叠加关系 */
   reduce_transparency: boolean;
+  /** 历史导出的默认保存目录；空串 = 每次导出弹原生保存对话框 */
+  export_dir: string;
 }
 
 export interface HistoryQuery {
@@ -186,8 +188,36 @@ export async function exportHistory(): Promise<string> {
   return invoke("export_history");
 }
 
-export async function getStats(): Promise<StatsResult> {
-  return invoke("get_stats");
+/**
+ * 把导出内容写入文件。
+ *
+ * 后端按 `export_dir` 配置解析路径：已设置则直接写入（同名自动加时间戳，
+ * 不覆盖），未设置则弹原生保存对话框。返回写入的完整路径（展示在成功
+ * toast 里）；`null` = 用户取消了保存对话框。
+ */
+export async function exportHistoryToFile(
+  fileName: string,
+  contents: string
+): Promise<string | null> {
+  return invoke("export_history_to_file", { fileName, contents });
+}
+
+/** 弹原生目录选择器，返回所选目录（null = 用户取消）。设置导出默认位置用 */
+export async function chooseExportDir(): Promise<string | null> {
+  return invoke("choose_export_dir");
+}
+
+/** 使用统计（days：逐日趋势天数，1..=90，缺省 7；汇总卡恒为全量口径） */
+export async function getStats(days?: number): Promise<StatsResult> {
+  return invoke("get_stats", { days: days ?? null });
+}
+
+/** 自定义区间统计（两端均含其所在本地日；区间跨度上限 90 天） */
+export async function getStatsRange(
+  startMs: number,
+  endMs: number
+): Promise<StatsResult> {
+  return invoke("get_stats_range", { startMs, endMs });
 }
 
 // ---- 系统 Commands ----

@@ -19,6 +19,7 @@
 
 use std::sync::Arc;
 
+use tauri::Emitter;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
@@ -76,15 +77,37 @@ pub struct PersistenceWriter {
 
 impl PersistenceWriter {
     pub fn spawn(
+        app: tauri::AppHandle,
         history: Arc<HistoryRepository>,
         cache: Arc<TranslationCache>,
         runtime: Arc<RuntimeStatus>,
     ) -> Self {
-        Self::with_capacity(history, cache, runtime, QUEUE_CAPACITY)
+        Self::with_capacity(app, history, cache, runtime, QUEUE_CAPACITY)
     }
 
     /// 可指定容量的构造，供测试构造「队列满」的情形。
     pub fn with_capacity(
+        app: tauri::AppHandle,
+        history: Arc<HistoryRepository>,
+        cache: Arc<TranslationCache>,
+        runtime: Arc<RuntimeStatus>,
+        capacity: usize,
+    ) -> Self {
+        Self::run(Some(app), history, cache, runtime, capacity)
+    }
+
+    /// 测试专用：没有 Tauri 应用上下文，不广播 history-changed。
+    #[cfg(test)]
+    fn spawn_without_events(
+        history: Arc<HistoryRepository>,
+        cache: Arc<TranslationCache>,
+        runtime: Arc<RuntimeStatus>,
+    ) -> Self {
+        Self::run(None, history, cache, runtime, QUEUE_CAPACITY)
+    }
+
+    fn run(
+        app: Option<tauri::AppHandle>,
         history: Arc<HistoryRepository>,
         cache: Arc<TranslationCache>,
         runtime: Arc<RuntimeStatus>,
@@ -95,7 +118,15 @@ impl PersistenceWriter {
         tauri::async_runtime::spawn(async move {
             info!("[persistence] worker 已启动");
             while let Some(job) = rx.recv().await {
-                process(&history, &cache, &runtime, job).await;
+                let history_written = process(&history, &cache, &runtime, job).await;
+                if history_written {
+                    // 历史窗口 / 设置仪表盘监听这条事件后各自刷新 ——
+                    // 这两个窗口都是 hide 而非销毁，组件树永不重挂载，
+                    // 没有这条事件它们会一直展示打开时的旧快照
+                    if let Some(app) = app.as_ref() {
+                        let _ = app.emit("history-changed", ());
+                    }
+                }
             }
             // 所有 sender 都 drop 了（进程退出路径）
             info!("[persistence] 队列已关闭，worker 退出");
@@ -146,7 +177,7 @@ async fn process(
     cache: &TranslationCache,
     runtime: &RuntimeStatus,
     job: PersistJob,
-) {
+) -> bool {
     let PersistJob {
         record,
         history_limit,
@@ -154,9 +185,11 @@ async fn process(
     } = job;
 
     let mut storage_error: Option<&'static str> = None;
+    let mut history_written = false;
 
     match history.insert(&record).await {
         Ok(()) => {
+            history_written = true;
             if let Err(e) = history.enforce_limit(history_limit).await {
                 error!(
                     event = "history_limit_failed",
@@ -171,6 +204,7 @@ async fn process(
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
             match history.insert(&record).await {
                 Ok(()) => {
+                    history_written = true;
                     info!(
                         event = "history_write_retried_ok",
                         "历史写入首次失败后重试成功: {}", first
@@ -220,6 +254,8 @@ async fn process(
         Some(code) => runtime.report_storage(ComponentState::Degraded, Some(code)),
         None => runtime.report_storage(ComponentState::Healthy, None),
     }
+
+    history_written
 }
 
 #[cfg(test)]
@@ -303,7 +339,11 @@ mod tests {
             crate::infra::database::Db::available(db.clone()),
         ));
         let runtime = test_runtime();
-        let writer = PersistenceWriter::spawn(history.clone(), cache.clone(), runtime.clone());
+        let writer = PersistenceWriter::spawn_without_events(
+            history.clone(),
+            cache.clone(),
+            runtime.clone(),
+        );
 
         assert!(writer.enqueue(job("hello")), "队列应有空位");
 
@@ -341,7 +381,11 @@ mod tests {
             crate::infra::database::Db::available(db.clone()),
         ));
         let runtime = test_runtime();
-        let writer = PersistenceWriter::spawn(history.clone(), cache.clone(), runtime.clone());
+        let writer = PersistenceWriter::spawn_without_events(
+            history.clone(),
+            cache.clone(),
+            runtime.clone(),
+        );
 
         for i in 0..10 {
             assert!(writer.enqueue(job(&format!("text-{}", i))));

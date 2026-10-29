@@ -137,8 +137,40 @@ impl HistoryRepository {
         Ok(records)
     }
 
-    /// 获取使用统计
-    pub async fn get_stats(&self) -> Result<StatsResult, AppError> {
+    /// 获取使用统计（近 `days` 天的逐日趋势，1..=90，默认 7）。
+    pub async fn get_stats(&self, days: Option<u32>) -> Result<StatsResult, AppError> {
+        let days = days.unwrap_or(7).clamp(1, STATS_MAX_DAYS);
+        let now_ms = crate::types::now_unix_ms();
+        let today = local_midnight_ms(now_ms);
+        let range_start = today - (days as i64 - 1) * MS_PER_DAY;
+        // 逐日区间要多覆盖一天才能包含「今天」（区间左闭右开）
+        self.stats_impl(range_start, today + MS_PER_DAY).await
+    }
+
+    /// 获取使用统计（自定义区间，两端都含其所在的本地日）。
+    pub async fn get_stats_range(
+        &self,
+        start_ms: i64,
+        end_ms: i64,
+    ) -> Result<StatsResult, AppError> {
+        if end_ms < start_ms {
+            return Err(AppError::ConfigError("统计区间的结束早于开始".to_string()));
+        }
+        let range_start = local_midnight_ms(start_ms);
+        let range_end = local_midnight_ms(end_ms) + MS_PER_DAY;
+        // 区间上限：92 天 ≈ 一个季度。趋势图逐日查询，无界的自定义区间
+        // 会退化成上百次 COUNT —— 截断比拖垮数据库好
+        if (range_end - range_start) / MS_PER_DAY > STATS_MAX_DAYS as i64 {
+            return Err(AppError::ConfigError(format!(
+                "统计区间过长，最多 {} 天",
+                STATS_MAX_DAYS
+            )));
+        }
+        self.stats_impl(range_start, range_end).await
+    }
+
+    /// 统计聚合本体：汇总卡为全量口径，逐日趋势覆盖 [range_start, range_end)。
+    async fn stats_impl(&self, range_start: i64, range_end: i64) -> Result<StatsResult, AppError> {
         let conn = self.conn()?;
         let conn = conn.lock().await;
 
@@ -159,9 +191,9 @@ impl HistoryRepository {
             .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
         let now_ms = crate::types::now_unix_ms();
-        let ms_7_days: i64 = 7 * 24 * 60 * 60 * 1000;
-        let ms_30_days: i64 = 30 * 24 * 60 * 60 * 1000;
-        let ms_24h: i64 = 24 * 60 * 60 * 1000;
+        let ms_7_days: i64 = 7 * MS_PER_DAY;
+        let ms_30_days: i64 = 30 * MS_PER_DAY;
+        let ms_24h: i64 = MS_PER_DAY;
 
         let last_7_days: u64 = conn
             .query_row(
@@ -190,30 +222,29 @@ impl HistoryRepository {
             .map(|n| n as u64)
             .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
-        // 近 7 天逐日计数（本地时区日界）：SQL 只按毫秒区间过滤，
-        // 日归属在 Rust 侧做 —— SQLite 的日期函数走 UTC，本地时区的
-        // 「今天」与其不一致，混用会让趋势图整体错位数小时。
-        let mut daily_7d: Vec<crate::types::DailyCount> = Vec::with_capacity(7);
-        {
-            let today_midnight = local_midnight_ms(now_ms);
-            for i in (0..7).rev() {
-                let day_start = today_midnight - i as i64 * ms_24h;
-                let day_end = day_start + ms_24h;
-                // 次数与字符量一次查询同时取回（悬浮提示需要字符明细）
-                let (count, chars): (i64, i64) = conn
-                    .query_row(
-                        "SELECT COUNT(*), COALESCE(SUM(LENGTH(source_text)), 0)
-                         FROM translation_records WHERE created_at >= ?1 AND created_at < ?2",
-                        rusqlite::params![day_start, day_end],
-                        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
-                    )
-                    .map_err(|e| AppError::DatabaseError(e.to_string()))?;
-                daily_7d.push(crate::types::DailyCount {
-                    date_ms: day_start,
-                    count: count as u64,
-                    chars: chars as u64,
-                });
-            }
+        // 逐日计数（本地时区日界）：SQL 只按毫秒区间过滤，日归属在 Rust 侧做
+        // —— SQLite 的日期函数走 UTC，本地时区的「今天」与其不一致，混用
+        // 会让趋势图整体错位数小时。
+        let mut daily: Vec<crate::types::DailyCount> =
+            Vec::with_capacity(((range_end - range_start) / MS_PER_DAY).max(0) as usize);
+        let mut day_start = range_start;
+        while day_start < range_end {
+            let day_end = day_start + MS_PER_DAY;
+            // 次数与字符量一次查询同时取回（悬浮提示需要字符明细）
+            let (count, chars): (i64, i64) = conn
+                .query_row(
+                    "SELECT COUNT(*), COALESCE(SUM(LENGTH(source_text)), 0)
+                     FROM translation_records WHERE created_at >= ?1 AND created_at < ?2",
+                    rusqlite::params![day_start, day_end],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                )
+                .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+            daily.push(crate::types::DailyCount {
+                date_ms: day_start,
+                count: count as u64,
+                chars: chars as u64,
+            });
+            day_start = day_end;
         }
 
         let mut by_provider: HashMap<String, u64> = HashMap::new();
@@ -243,7 +274,7 @@ impl HistoryRepository {
             last_7_days,
             last_30_days,
             last_24h,
-            daily_7d,
+            daily,
         })
     }
 
@@ -297,6 +328,12 @@ impl HistoryRepository {
 }
 
 // ---- 内部查询辅助函数 ----
+
+/// 一天的毫秒数（逐日趋势与统计窗口共用）
+const MS_PER_DAY: i64 = 24 * 60 * 60 * 1000;
+
+/// 逐日趋势允许的最大天数（get_stats 的 days 上限 / 自定义区间的跨度上限）
+const STATS_MAX_DAYS: u32 = 90;
 
 /// 计算给定 Unix 毫秒时刻所在「本地时区当天 0 点」的 Unix 毫秒。
 ///

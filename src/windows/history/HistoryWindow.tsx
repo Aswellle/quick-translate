@@ -7,9 +7,13 @@ import {
   countHistory,
   clearHistory,
   exportHistory,
+  exportHistoryToFile,
+  type AppError,
 } from "@/lib/commands";
+import { EVENTS } from "@/lib/constants";
 import { toast } from "@/components/ToastManager";
 import { useHistoryStore } from "@/stores/historyStore";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { formatAsMarkdown, formatAsHtml } from "@/lib/export";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SearchBar } from "./SearchBar";
@@ -73,6 +77,18 @@ export function HistoryWindow() {
     loadHistory(searchQuery, page, starredOnly);
   }, [loadHistory, searchQuery, page, starredOnly]);
 
+  // 落盘 worker 每写成功一条历史就广播 history-changed：本窗口 hide 而非
+  // 销毁，组件树永不重挂载，没有这条事件列表会一直停留在打开时的旧快照
+  // （这正是「翻译完几次再打开历史缺记录」的根因）。handler 经 ref 转发，
+  // 读最新 store 快照，不依赖 effect 闭包。
+  useTauriEvent(
+    EVENTS.HISTORY_CHANGED,
+    useCallback(() => {
+      const { searchQuery, page, starredOnly } = useHistoryStore.getState();
+      loadHistory(searchQuery, page, starredOnly);
+    }, [loadHistory])
+  );
+
   const handleSearch = useCallback(
     (query: string) => {
       if (searchTimer.current) clearTimeout(searchTimer.current);
@@ -120,34 +136,37 @@ export function HistoryWindow() {
 
       const date = new Date().toISOString().slice(0, 10);
       let content: string;
-      let mimeType: string;
       let ext: string;
 
       if (exportFormat === "json") {
         content = json;
-        mimeType = "application/json";
         ext = "json";
       } else if (exportFormat === "markdown") {
         content = formatAsMarkdown(records);
-        mimeType = "text/markdown";
         ext = "md";
       } else {
         content = formatAsHtml(records);
-        mimeType = "text/html";
         ext = "html";
       }
-      const blob = new Blob([content], { type: mimeType });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `quicktranslate-history-${date}.${ext}`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      toast("历史记录已导出", "success");
-    } catch {
-      toast("导出失败，请重试", "error");
+
+      // 走后端落盘：WebView 的 <a download> 在部分平台上并不真正写盘，
+      // 假成功 toast 比失败更误人。路径按 export_dir 配置解析（设置了就
+      // 直写，未设置弹原生保存对话框），取消返回 null。
+      const fileName = `quicktranslate-history-${date}.${ext}`;
+      const written = await exportHistoryToFile(fileName, content);
+      if (written === null) {
+        toast("已取消导出", "info");
+      } else {
+        toast(`历史记录已导出：${written}`, "success");
+      }
+    } catch (err) {
+      // Tauri invoke 错误是 { code, message }：把真实原因带给用户，
+      // 而不是一句永远一样的「请重试」
+      const detail =
+        typeof err === "object" && err !== null && "message" in err
+          ? String((err as AppError).message)
+          : String(err);
+      toast(`导出失败：${detail}`, "error");
     } finally {
       setExporting(false);
     }

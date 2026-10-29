@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <!-- 测试二进制专用：声明 Common-Controls v6。tauri_build::build() 只给
+       bin 目标嵌清单，测试可执行文件拿到的是 System32 的 comctl32 5.82，
+       静态导入 TaskDialogIndirect（rfd 消息对话框，经 tauri-plugin-dialog
+       进入链接图）会在进程启动时报 STATUS_ENTRYPOINT_NOT_FOUND。 -->
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls"
+                        version="6.0.0.0" processorArchitecture="*"
+                        publicKeyToken="6595b64144ccf1df" language="*"/>
+    </dependentAssembly>
+  </dependency>
+</assembly>

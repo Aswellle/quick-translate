@@ -4,6 +4,8 @@ export const EVENTS = {
   TRANSLATION_LOADING: "translation-loading",
   TRANSLATION_RESULT: "translation-result",
   TRANSLATION_ERROR: "translation-error",
+  /** 落盘 worker 成功写入一条历史记录后广播；历史窗口与设置仪表盘据此刷新 */
+  HISTORY_CHANGED: "history-changed",
 } as const;
 
 export const SUPPORTED_LANGUAGES = [
