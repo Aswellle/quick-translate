@@ -900,7 +900,9 @@ function TrendCard({ daily30 }: { daily30: StatsResult["daily"] }) {
         </div>
       )}
 
-      {customError ? (
+      {/* customError 只属于自定义档：一次区间选错（倒挂/超上限）不该
+          把切回 7/30 天档的图表也顶掉——那两个档位的数据源与其无关 */}
+      {mode === "custom" && customError ? (
         <p className="text-[12px] text-[var(--text-secondary)] py-6 text-center">{customError}</p>
       ) : daily.length === 0 ? (
         <p className="text-[12px] text-[var(--text-secondary)] py-6 text-center">统计数据加载中…</p>
