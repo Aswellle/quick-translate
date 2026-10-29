@@ -199,6 +199,7 @@ impl RuntimeStatus {
             translation_success_count: self.counters.translation_success.load(Ordering::Relaxed),
             translation_failure_count: self.counters.translation_failure.load(Ordering::Relaxed),
             fallback_count: 0,
+            echo_count: 0,
         }
     }
 

@@ -1060,6 +1060,7 @@ function RuntimeStatusSection({
               已运行 {formatUptime(diag.uptime_ms)} · 翻译成功 {diag.translation_success_count} 次
               {diag.translation_failure_count > 0 && `（失败 ${diag.translation_failure_count}）`}
               {diag.fallback_count > 0 && ` · 兜底切换 ${diag.fallback_count} 次`}
+              {diag.echo_count > 0 && ` · 回声拦截 ${diag.echo_count} 次`}
               {diag.clipboard_restart_count > 0 && ` · 剪贴板自愈 ${diag.clipboard_restart_count} 次`}
             </p>
           )}

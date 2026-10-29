@@ -236,6 +236,7 @@ async fn try_provider(
     text: &str,
     target_lang: &str,
     budget: &TranslationBudget,
+    echo_count: &std::sync::atomic::AtomicU64,
     errors: &mut Vec<(String, String)>,
 ) -> AttemptOutcome {
     let provider_id = entry.provider.info().id;
@@ -309,12 +310,21 @@ async fn try_provider(
                 // 入缓存 —— 缓存一旦吃进 (A → A)，此后离线回退会把原文
                 // 当译文端给用户。统一收口为 SameLanguage 语义呈现。
                 if is_echo_text(text, &result.translated_text) {
+                    echo_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     tracing::info!(
                         event = "provider_echoed_source_text",
                         provider = %provider_id,
                         "[provider] {} 返回了与原文相同的内容，按同语言处理",
                         provider_id
                     );
+                    // 与 SameLanguage 相同的链路语义：终止 fallback、按
+                    // 「无需翻译」呈现。放弃 fallback 是接受的取舍——
+                    // 回声的大头是不可译内容（URL/代码），放行 fallback
+                    // 意味着 N 次注定回声的网络调用后以报错收场，比
+                    // 直接显示原文差得多；且缓存防线要求在某处统一
+                    // 拒收 (A → A)，放行链尾会重新吃进毒化数据。误判
+                    // 频率经 echo_count 可观测，真出现可译文本被某源
+                    // 持续回声时再考虑按源降权。
                     return AttemptOutcome::SameLanguage(result.detected_source_lang);
                 }
                 tracing::info!(
@@ -409,6 +419,9 @@ pub struct TranslationEngine {
     /// 诊断计数（计划第 33 节）：一次翻译最终由**非首选**源成功 = 一次 fallback。
     /// 全原子量，热路径记账。
     fallback_count: std::sync::atomic::AtomicU64,
+    /// 诊断计数：provider 把原文原样送回被回声守卫拦下的次数。若某源
+    /// 误判率异常升高，运维面板能先于用户投诉看到。
+    echo_count: std::sync::atomic::AtomicU64,
 }
 
 impl TranslationEngine {
@@ -419,6 +432,7 @@ impl TranslationEngine {
             fallback_enabled: RwLock::new(true),
             http_client,
             fallback_count: std::sync::atomic::AtomicU64::new(0),
+            echo_count: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -426,6 +440,11 @@ impl TranslationEngine {
     pub fn fallback_count(&self) -> u64 {
         self.fallback_count
             .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// 诊断读取：启动以来回声守卫拦下的次数。
+    pub fn echo_count(&self) -> u64 {
+        self.echo_count.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub async fn register_provider(&self, provider: Box<dyn TranslationProvider>) {
@@ -479,7 +498,16 @@ impl TranslationEngine {
                 continue;
             }
 
-            match try_provider(&entry, text, target_lang, &budget, &mut errors).await {
+            match try_provider(
+                &entry,
+                text,
+                target_lang,
+                &budget,
+                &self.echo_count,
+                &mut errors,
+            )
+            .await
+            {
                 AttemptOutcome::Success(result) => {
                     // 诊断计数（计划第 33 节）：最终由非首选源成功 = 一次 fallback。
                     // 用户无感（计划第 46 节），只在本地诊断里可见。
@@ -1521,11 +1549,7 @@ line2"}}"#,
             .await
             .unwrap_err();
         assert_eq!(err.error_code(), "ALL_PROVIDERS_FAILED");
-        assert_eq!(
-            a.calls(),
-            1,
-            "放不下完整尝试时不得发起注定失败的重试"
-        );
+        assert_eq!(a.calls(), 1, "放不下完整尝试时不得发起注定失败的重试");
     }
 
     #[tokio::test]

@@ -112,6 +112,8 @@ export interface RuntimeDiagnostics {
   translation_success_count: number;
   translation_failure_count: number;
   fallback_count: number;
+  /** 回声守卫拦下「译文=原文」的次数 */
+  echo_count: number;
 }
 
 export async function getRuntimeDiagnostics(): Promise<RuntimeDiagnostics> {

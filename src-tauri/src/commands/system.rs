@@ -447,6 +447,7 @@ pub async fn get_runtime_diagnostics(
 ) -> Result<crate::runtime::lifecycle::RuntimeDiagnostics, AppError> {
     let mut d = state.runtime.diagnostics();
     d.fallback_count = state.translator.fallback_count();
+    d.echo_count = state.translator.echo_count();
     Ok(d)
 }
 
