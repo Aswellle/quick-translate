@@ -53,16 +53,21 @@ impl RequestPolicy {
         }
     }
 
-    /// 非官方兜底源：**不重试**。
+    /// 非官方兜底源（Google）。
     ///
-    /// 它用的是非公开接口，随时可能被限流；重试只会更快撞上 429。
-    /// 而它是最后一道防线，快速失败能让用户尽早看到明确结果，
-    /// 好过在一次注定失败的请求上耗掉本该留给别处的预算。
+    /// 超时与重试额度的定依据（2026-10 实测日志）：走代理的网络到 Google 的
+    /// 正常请求耗时就有 1.4~1.9s，冷启动（连接池无保温连接、TLS 全握手）
+    /// 普遍超过 2s。此前的 2s 超时 + 禁止重试让「网络明明可用」的请求被
+    /// 成批判为超时失败，三次就把唯一可用的源熔断进 10 分钟冷却 ——
+    /// 这正是「暂时无法连接翻译服务，恢复网络后会自动继续工作」误报的根因。
+    ///
+    /// 重试仍然只对 Transient 生效（`should_retry`）：429/RateLimit 走
+    /// fallback 不原地重撞，非公开接口被限流的风险不变。
     pub const fn best_effort() -> Self {
         Self {
-            attempt_timeout: Duration::from_secs(2),
-            connect_timeout: Duration::from_secs(2),
-            max_attempts: 1,
+            attempt_timeout: Duration::from_secs(4),
+            connect_timeout: Duration::from_secs(3),
+            max_attempts: 2,
             backoff_base: Duration::from_millis(200),
             max_backoff: Duration::from_secs(1),
             best_effort: true,
@@ -150,16 +155,16 @@ impl TranslationBudget {
 mod tests {
     use super::*;
 
-    /// connect_timeout 与档位一一对应：HttpClient 的两档预建客户端
-    /// （3s / 2s）靠 `best_effort` 选择，这张表里的值必须与其保持一致 ——
-    /// 否则字段就成了没人执行的死文档。
+    /// connect_timeout 与 HTTP 客户端档位一致：现在两档策略统一使用 3s
+    /// 连接超时（同一份预建客户端），这张表若再分档必须与
+    /// `HttpClient` 的实际配置保持一致 —— 否则字段就成了没人执行的死文档。
     #[test]
     fn connect_timeout_matches_the_client_tier() {
         let official = RequestPolicy::official();
         let best_effort = RequestPolicy::best_effort();
         assert_eq!(official.connect_timeout, Duration::from_secs(3));
         assert!(!official.best_effort);
-        assert_eq!(best_effort.connect_timeout, Duration::from_secs(2));
+        assert_eq!(best_effort.connect_timeout, Duration::from_secs(3));
         assert!(best_effort.best_effort);
     }
 
@@ -174,10 +179,13 @@ mod tests {
     }
 
     #[test]
-    fn best_effort_policy_never_retries() {
+    fn best_effort_policy_retries_only_transient() {
         let p = RequestPolicy::best_effort();
-        assert_eq!(p.max_attempts, 1);
+        assert_eq!(p.max_attempts, 2, "超时类瞬时失败允许一次原地重试");
         assert!(p.best_effort);
+        // 非公开接口被限流的风险不变：429 仍然不原地重试
+        assert!(!p.should_retry(ErrorClass::RateLimit));
+        assert!(p.should_retry(ErrorClass::Transient));
     }
 
     #[test]

@@ -1,28 +1,36 @@
 // src-tauri/src/infra/http_client.rs
 // reqwest 客户端单例，统一超时、UA 配置
 //
-// 计划第 13/14 节：不同 Provider 的网络策略不应该完全一样。这里预建两档
-// 客户端——官方 API（3s 连接超时）与 best_effort 兜底源（2s 连接超时）。
-// 单次尝试的请求级超时仍由引擎按 RequestPolicy 用 tokio::time::timeout 施加；
-// 客户端上的 5s timeout 只是永不越过安全上限。
-// 连接超时是 reqwest 的客户端级配置（无法按请求覆盖），因此用两档预建客户端。
+// 计划第 13/14 节：单次尝试的请求级超时由引擎按 RequestPolicy 用
+// `tokio::time::timeout` 施加；客户端上的 5s timeout 只是永不越过安全上限。
+//
+// 此前这里预建「官方 3s / best_effort 2s」两档连接超时客户端。2026-10 的
+// 实测日志证明 2s 连接超时是误报的根因：走代理的网络到 Google 冷启动
+// TLS 握手普遍超过 2s，reqwest 的 connect 超时被 `From<reqwest::Error>`
+// 归类为 Timeout 后计入熔断，三次就把可用的源锁进长冷却。两档自此合并
+// 为一档（3s 连接超时），档位差异只保留在 RequestPolicy 的重试额度上。
+//
+// 连接池保温：翻译是典型的「间歇突发」负载，默认 90s 的空闲连接回收
+// 意味着每次间隔稍久的翻译都要重新付一次 TLS 握手（恰恰是最容易超时
+// 的那一次）。tcp_keepalive + 更长的 idle 保持让后续请求复用热连接。
 
 use std::time::Duration;
 
 /// 封装 reqwest::Client，统一超时、UA 配置
 pub struct HttpClient {
-    /// 官方 API 档：3s 连接超时
     inner: reqwest::Client,
-    /// best_effort 档：2s 连接超时（慢连接的兜底源不值得占用预算）
-    fast_inner: reqwest::Client,
 }
 
 impl HttpClient {
-    fn build(connect_timeout: Duration) -> reqwest::Client {
+    fn build() -> reqwest::Client {
         reqwest::Client::builder()
             // 5s 请求超时（含连接 + 读取）——安全上限
             .timeout(Duration::from_secs(5))
-            .connect_timeout(connect_timeout)
+            .connect_timeout(Duration::from_secs(3))
+            .tcp_keepalive(Duration::from_secs(30))
+            // 默认 90s：对翻译这种「几分钟来一发」的负载太短，
+            // 每次都冷启动 TLS 正是超时误报的主要来源
+            .pool_idle_timeout(Duration::from_secs(300))
             // 设置 User-Agent，避免被 Google API 过滤
             .user_agent("Mozilla/5.0 (compatible; QuickTranslate/0.1)")
             // 使用 rustls（无需系统 OpenSSL）
@@ -33,20 +41,13 @@ impl HttpClient {
 
     pub fn new() -> Self {
         HttpClient {
-            inner: Self::build(Duration::from_secs(3)),
-            fast_inner: Self::build(Duration::from_secs(2)),
+            inner: Self::build(),
         }
     }
 
-    /// 获取内部 reqwest Client 引用（官方 API 档）
+    /// 获取内部 reqwest Client 引用
     pub fn client(&self) -> &reqwest::Client {
         &self.inner
-    }
-
-    /// best_effort 源（计划第 10 节标记）用这一档：连接更急促，
-    /// 不让一个慢连接的非官方端点吃掉 8s 总预算。
-    pub fn fast_client(&self) -> &reqwest::Client {
-        &self.fast_inner
     }
 }
 

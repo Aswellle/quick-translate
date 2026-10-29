@@ -175,6 +175,18 @@ pub(crate) fn redact_body_digest(body: &str) -> String {
     }
 }
 
+/// 「译文与原文相同」判定（回声守卫，QT-013 后续实测反馈）。
+///
+/// 空白折叠后比较：Windows 剪贴板往返与各 provider 的响应都会改写
+/// 换行/空白形态，逐字节比较会把真回声漏成正常结果。比较键不含大小写
+/// 折叠 —— 大小写变化属于真实改写（如品牌名翻译保留原形）。
+pub(crate) fn is_echo_text(source: &str, translated: &str) -> bool {
+    fn fold(s: &str) -> String {
+        s.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+    !source.trim().is_empty() && fold(source) == fold(translated)
+}
+
 /// 从疑似 JSON 的错误响应中提取白名单错误代码。
 ///
 /// 解析失败、字段缺失、值形态超出白名单（长度/字符集）一律返回 None
@@ -291,6 +303,20 @@ async fn try_provider(
         match result {
             Ok(result) => {
                 entry.lock_health().record_success(Instant::now());
+                // 回声守卫（QT-013 后续实测反馈）：provider 把原文原样送回
+                // （不可译内容、误判语言、接口异常）且语言检测没触发
+                // SameLanguage 时，这条「译文」会以成功姿态弹窗、写历史、
+                // 入缓存 —— 缓存一旦吃进 (A → A)，此后离线回退会把原文
+                // 当译文端给用户。统一收口为 SameLanguage 语义呈现。
+                if is_echo_text(text, &result.translated_text) {
+                    tracing::info!(
+                        event = "provider_echoed_source_text",
+                        provider = %provider_id,
+                        "[provider] {} 返回了与原文相同的内容，按同语言处理",
+                        provider_id
+                    );
+                    return AttemptOutcome::SameLanguage(result.detected_source_lang);
+                }
                 tracing::info!(
                     event = "provider_attempt_succeeded",
                     provider = %provider_id,
@@ -580,12 +606,18 @@ impl TranslationEngine {
     /// 只统计**可用**的源：需要凭证却没配的那些既不是健康也不是故障，
     /// 它们根本没参与调度，把它们算进来会让「配了 DeepL 但没配百度」
     /// 显示成「有问题」。
+    ///
+    /// 单源 `Degraded`（有失败但未达熔断阈值，仍在正常接单）不计入
+    /// 整体降级 —— `ProviderHealthState::Degraded` 的语义就是「功能可能
+    /// 仍可用，UI 不该据此报警」，汇总层若把它报成 Degraded，用户就会
+    /// 在网络偶发一次超时后看到「部分功能异常」挂很久。整体 Degraded
+    /// 只在**确有源被熔断**（Open/HalfOpen）时成立。
     pub async fn providers_health(&self) -> ProvidersHealth {
         let entries = self.providers.read().await;
 
         let mut total = 0usize;
-        let mut healthy = 0usize;
         let mut usable = 0usize;
+        let mut circuit_open = 0usize;
 
         for e in entries.iter() {
             let info = e.provider.info();
@@ -594,12 +626,10 @@ impl TranslationEngine {
             }
             total += 1;
             match e.lock_health().state() {
-                ProviderHealthState::Healthy => {
-                    healthy += 1;
-                    usable += 1;
+                ProviderHealthState::Healthy | ProviderHealthState::Degraded => usable += 1,
+                ProviderHealthState::Open | ProviderHealthState::HalfOpen => {
+                    circuit_open += 1;
                 }
-                ProviderHealthState::Degraded => usable += 1,
-                ProviderHealthState::Open | ProviderHealthState::HalfOpen => {}
             }
         }
 
@@ -607,7 +637,7 @@ impl TranslationEngine {
             ProvidersHealth::Unconfigured
         } else if usable == 0 {
             ProvidersHealth::Unavailable
-        } else if healthy == total {
+        } else if circuit_open == 0 {
             ProvidersHealth::Healthy
         } else {
             ProvidersHealth::Degraded
@@ -1132,6 +1162,74 @@ line2"}}"#,
         );
     }
 
+    // ── 回声守卫：译文 == 原文按同语言处理 ──────────────────────────────
+
+    #[tokio::test]
+    async fn echoed_source_text_is_treated_as_same_language() {
+        let a = MockProvider::new("deepl", vec![Outcome::Ok("hello")]);
+        let b = MockProvider::new("google", vec![Outcome::Ok("你好")]);
+        let engine = engine_with(&[a.clone(), b.clone()], "deepl", true).await;
+
+        let err = engine.translate("hello", "zh").await.unwrap_err();
+
+        assert_eq!(
+            err.error_code(),
+            "SAME_LANGUAGE",
+            "provider 回送原文时不得以成功结果弹窗/落盘"
+        );
+        assert_eq!(a.calls(), 1);
+        assert_eq!(b.calls(), 0, "与 SameLanguage 语义一致，终止 fallback 链");
+    }
+
+    #[tokio::test]
+    async fn echo_detection_folds_whitespace_but_not_case() {
+        assert!(is_echo_text("hello  world", "hello\r\nworld"));
+        assert!(is_echo_text("  hello ", "hello"));
+        assert!(
+            !is_echo_text("Hello", "hello"),
+            "大小写变化属于真实改写，不是回声"
+        );
+        assert!(!is_echo_text("hello", "hello world"));
+        // 空原文永远不算回声（防御空串巧合）
+        assert!(!is_echo_text("", "  "));
+    }
+
+    // ── 整体健康判定：仍在接单的单源失败不报警 ──────────────────────────
+
+    #[tokio::test]
+    async fn degraded_provider_without_open_circuit_keeps_overall_healthy() {
+        let a = MockProvider::new("deepl", vec![Outcome::Timeout]);
+        let engine = engine_with(&[a.clone()], "deepl", false).await;
+
+        // 1 次失败：Degraded（有失败但未达阈值，仍在接单）
+        let _ = engine.translate("hello", "zh").await;
+        assert_eq!(
+            engine.provider_health("deepl").await,
+            Some(ProviderHealthState::Degraded)
+        );
+        assert_eq!(
+            engine.providers_health().await,
+            ProvidersHealth::Healthy,
+            "功能仍可用的单源失败不该让运行时状态报「部分功能异常」"
+        );
+    }
+
+    #[tokio::test]
+    async fn open_circuit_degrades_the_overall_status() {
+        let a = MockProvider::new("deepl", vec![Outcome::Timeout]);
+        let b = MockProvider::new("google", vec![Outcome::Ok("你好")]);
+        let engine = engine_with(&[a.clone(), b.clone()], "deepl", true).await;
+
+        for _ in 0..health::FAILURE_THRESHOLD {
+            let _ = engine.translate("hello", "zh").await;
+        }
+        assert_eq!(
+            engine.providers_health().await,
+            ProvidersHealth::Degraded,
+            "确有源被熔断时整体才是 Degraded"
+        );
+    }
+
     // ── Permanent 错误：不换源，且不熔断 ─────────────────────────────────
 
     #[tokio::test]
@@ -1319,9 +1417,12 @@ line2"}}"#,
         );
     }
 
-    /// 非官方兜底源不重试（best_effort 策略）
+    /// 非官方兜底源（Google）的超时按 Transient 重试一次：
+    /// 2s 超时 + 禁止重试曾把慢速网络下的可用源成批判为失败并熔断
+    /// （2026-10 实测日志），max_attempts 提到 2 后超时类失败有一次
+    /// 热连接重试的机会；429/限流仍不重试（should_retry 白名单）。
     #[tokio::test]
-    async fn best_effort_provider_is_never_retried() {
+    async fn best_effort_provider_retries_transient_once() {
         let g = MockProvider::new("google", vec![Outcome::Timeout]);
         let engine = engine_with(&[g.clone()], "google", true).await;
 
@@ -1329,9 +1430,20 @@ line2"}}"#,
 
         assert_eq!(
             g.calls(),
-            1,
-            "Google 的 best_effort 策略是 max_attempts = 1"
+            policy_for("google").max_attempts as usize,
+            "超时类瞬时失败应原地重试一次"
         );
+    }
+
+    /// 非官方兜底源被限流时**不**原地重试（非公开接口重试只会更快撞 429）
+    #[tokio::test]
+    async fn best_effort_provider_is_never_retried_on_rate_limit() {
+        let g = MockProvider::new("google", vec![Outcome::RateLimit]);
+        let engine = engine_with(&[g.clone()], "google", true).await;
+
+        let _ = engine.translate("x", "zh").await;
+
+        assert_eq!(g.calls(), 1, "429 不得原地重试");
     }
 
     /// 认证失败不重试（重试一万次也不会好），但仍换源

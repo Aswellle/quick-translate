@@ -36,12 +36,17 @@ use super::error_class::ErrorClass;
 /// 连续多少次「计入熔断」的失败后打开熔断（计划第 9 节）
 pub const FAILURE_THRESHOLD: u32 = 3;
 
-/// 熔断冷却表（计划第 9 节）：10s → 30s → 2min，此后封顶 10min
+/// 熔断冷却表（计划第 9 节）：10s → 30s → 60s → 120s 封顶
+///
+/// 封顶从 10min 降到 2min 的依据（2026-10 实测日志）：Transient 失败的
+/// 典型形态是「网络慢一拍」的超时，探测请求本身 2s 内就能证实可达性 ——
+/// 让一个可证可达的源在 10 分钟里干等，用户看到的就是「翻译服务异常，
+/// 自动处理中」挂满屏。持久性故障（Auth/Quota）仍走 `LONG_COOLDOWN`。
 pub const COOLDOWN_SCHEDULE: [Duration; 4] = [
     Duration::from_secs(10),
     Duration::from_secs(30),
+    Duration::from_secs(60),
     Duration::from_secs(120),
-    Duration::from_secs(600),
 ];
 
 /// Auth / Quota 用的长冷却：在用户改凭证或充值之前不可能自愈，
@@ -552,9 +557,9 @@ mod tests {
         let cases = [
             (1u32, Duration::from_secs(10)),
             (2, Duration::from_secs(30)),
-            (3, Duration::from_secs(120)),
-            (4, Duration::from_secs(600)),
-            (9, Duration::from_secs(600)),
+            (3, Duration::from_secs(60)),
+            (4, Duration::from_secs(120)),
+            (9, Duration::from_secs(120)),
         ];
         for (n, expected) in cases {
             let got = cooldown_for(ErrorClass::Transient, n, &mut r);
