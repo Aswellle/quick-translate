@@ -25,9 +25,11 @@ pub struct RequestPolicy {
     /// 单次尝试的超时（含连接与读取）。
     /// 由引擎用 `tokio::time::timeout` 施加，实际值还会被剩余预算进一步压低。
     pub attempt_timeout: Duration,
-    /// 连接超时。reqwest 不支持按请求覆盖连接超时，因此这个值与
-    /// `best_effort` 一一对应（official=3s / best_effort=2s），由
-    /// `HttpClient::fast_client` 的两档预建客户端落实（计划第 13/14 节）。
+    /// 连接超时。reqwest 不支持按请求覆盖连接超时，因此这个值描述的是
+    /// 预建客户端（`HttpClient`）上的客户端级 connect_timeout —— 两档
+    /// 策略现在统一为 3s、共享同一份客户端（两档的差异只保留在重试
+    /// 额度上），此处与 `HttpClient::build` 的实际配置互为文档，
+    /// 改动任一侧必须同步另一侧。
     pub connect_timeout: Duration,
     /// 该 provider 最多尝试几次（含首次）。计划第 30 节：<= 2。
     pub max_attempts: u32,
