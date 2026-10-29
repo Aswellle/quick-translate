@@ -399,8 +399,26 @@ mod tests {
         assert!(validate_value("reduce_transparency", "true").is_ok());
         assert!(validate_value("history_limit", "200").is_ok());
         assert!(validate_value("history_limit", "50").is_ok());
+        // 导出目录：绝对路径与「清空 = 每次询问」都放行
+        assert!(
+            validate_value("export_dir", r"C:\Users\welle\Documents").is_ok(),
+            "绝对路径应放行"
+        );
+        assert!(validate_value("export_dir", "").is_ok());
         assert!(validate_value("deepl_api_key", "some-key:fx").is_ok());
         assert!(validate_value("tencent_secret_id", "AKIDxx").is_ok());
+    }
+
+    // ── export_dir 的形态约束 ───────────────────────────────────────────
+
+    #[test]
+    fn export_dir_rejects_relative_paths() {
+        // 相对路径会随进程工作目录漂移，写出的文件位置用户找不到。
+        // 绝对路径的放行用例见 known_keys_with_valid_values_pass ——
+        // 「绝对」的判定随平台（Windows 要盘符），正向用例只锁本平台形态。
+        assert!(err("export_dir", "Documents/exports").contains("非法"));
+        assert!(err("export_dir", ".").contains("非法"));
+        assert!(err("export_dir", "exports").contains("非法"));
     }
 
     // ── 未知键必须拒绝（写入面的边界）────────────────────────────────────
