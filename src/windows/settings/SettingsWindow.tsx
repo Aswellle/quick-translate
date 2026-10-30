@@ -832,12 +832,22 @@ function TrendCard({ daily30 }: { daily30: StatsResult["daily"] }) {
     }
     let cancelled = false;
     setCustomError(null);
+    // 先清掉上一份区间数据：否则新请求在途时标题已是新区间、图表仍是
+    // 旧区间的数据，短暂「文不对图」（清空后走下方加载占位）
+    setCustomDaily(null);
     getStatsRange(start, end)
       .then((r) => {
         if (!cancelled) setCustomDaily(r.daily);
       })
-      .catch(() => {
-        if (!cancelled) setCustomError("统计数据加载失败");
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        // 后端对超长区间给出的是可直接行动的提示（"最多 90 天"），
+        // 透出真实原因而不是一句通用失败
+        const detail =
+          typeof err === "object" && err !== null && "message" in err
+            ? String((err as { message?: string }).message)
+            : String(err);
+        setCustomError(detail);
       });
     return () => {
       cancelled = true;
