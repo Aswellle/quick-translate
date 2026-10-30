@@ -1,13 +1,15 @@
 // src/windows/settings/SettingsWindow.tsx
 // 设置面板 — macOS 简约明亮灵动风格
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
   getConfig,
   setConfigBatch,
   validateProvider,
   getAutostart,
   getStats,
+  getStatsRange,
+  chooseExportDir,
   openUrl,
   getProviderStatus,
   getRuntimeStatus,
@@ -19,8 +21,10 @@ import {
   type RuntimeStatusSnapshot,
   type RuntimeDiagnostics,
 } from "@/lib/commands";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
+import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
 import { toast } from "@/components/ToastManager";
-import { SUPPORTED_LANGUAGES, PROVIDERS, ERROR_MESSAGES } from "@/lib/constants";
+import { SUPPORTED_LANGUAGES, PROVIDERS, ERROR_MESSAGES, EVENTS } from "@/lib/constants";
 import { useConfigStore } from "@/stores/configStore";
 import { TrendChart, ProviderChart } from "./StatsDashboard";
 import { applyTheme } from "@/hooks/useTheme";
@@ -58,8 +62,12 @@ type TabId = "general" | "provider" | "about";
 
 export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provider" | "about" }) {
   const { setConfig } = useConfigStore();
+  // activeTab 的同步镜像：事件 handler 经 ref 转发后读的是最新值，
+  // 不必为它重订监听
+  const activeTabRef = useRef<TabId | null>(null);
   // 初始 Tab 可由 URL hash 指定（托盘「配置翻译源…」直达路径）
   const [activeTab, setActiveTab] = useState<TabId>(initialTab ?? "general");
+  activeTabRef.current = activeTab;
   const [draft, setDraft] = useState<AppConfig | null>(null);
   // 配置加载失败时置位：只弹 toast 的话，3.5 秒后用户面对的是永久的
   // 「加载中…」—— draft 恒为 null，窗口只能关掉重开
@@ -128,6 +136,17 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
     };
   }, []);
 
+  // 加载使用统计。一次拉 30 天逐日序列：趋势卡的「近7天/近30天」两个
+  // 档位共用同一份 IPC 数据（7 天档前端切片），自定义档位才再发请求。
+  // 定义在 settings-navigate 监听之前：托盘重新打开设置时也要走它。
+  const refreshStats = useCallback(() => {
+    setStatsLoading(true);
+    getStats(30)
+      .then(setStats)
+      .catch(() => setStats(null))
+      .finally(() => setStatsLoading(false));
+  }, []);
+
   // 托盘「配置翻译源…」对已打开的设置窗口发事件切换 Tab
   // （新建窗口走 URL hash，见 App.tsx 的 initialTab）
   useEffect(() => {
@@ -138,6 +157,9 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
         listen<{ tab: string }>("settings-navigate", (e) => {
           if (e.payload.tab === "provider" || e.payload.tab === "general" || e.payload.tab === "about") {
             setActiveTab(e.payload.tab);
+            // 同值 Tab 的 setActiveTab 是 React bail-out，effect 不会重跑；
+            // 显式刷一次统计，托盘重新打开设置时仪表盘才是当下数据
+            if (e.payload.tab === "general") refreshStats();
           }
         })
       )
@@ -150,7 +172,7 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
       cancelled = true;
       unlisten?.();
     };
-  }, []);
+  }, [refreshStats]);
 
   // 加载配置（可重试：loadError 置位后由错误视图的重试按钮重新触发）
   const retryLoad = useCallback(() => {
@@ -184,15 +206,21 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
       });
   }, [setConfig, loadError]);
 
-  // 加载使用统计
   useEffect(() => {
     if (activeTab !== "general") return;
-    setStatsLoading(true);
-    getStats()
-      .then(setStats)
-      .catch(() => setStats(null))
-      .finally(() => setStatsLoading(false));
-  }, [activeTab]);
+    refreshStats();
+  }, [activeTab, refreshStats]);
+
+  // 落盘 worker 每写成功一条历史就广播 history-changed —— 本窗口 hide 而
+  // 非销毁，组件树永不重挂载；没有这条监听，仪表盘会一直停留在打开时的
+  // 旧快照（「统计更新不及时」的根因）
+  // 隐藏期间挂起、转可见补刷；且只在常规 Tab 消费统计数据
+  const onHistoryChanged = useVisibleRefresh(
+    useCallback(() => {
+      if (activeTabRef.current === "general") refreshStats();
+    }, [refreshStats])
+  );
+  useTauriEvent(EVENTS.HISTORY_CHANGED, onHistoryChanged);
 
   const updateDraft = useCallback(<K extends keyof AppConfig>(key: K, value: AppConfig[K]) => {
     setDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
@@ -536,11 +564,96 @@ function GeneralTab({
           />
         </SettingsRow>
         <HistoryLimitRow value={draft.history_limit} onChange={onChange} />
+        <ExportDirRow
+          value={draft.export_dir}
+          onChange={(v) => onChange("export_dir", v)}
+        />
       </SettingsSection>
 
       {/* 运行状态（计划第 33/50 节）：消费 Runtime 层快照与诊断计数 */}
       <RuntimeStatusSection snapshot={runtimeSnapshot} diag={runtimeDiag} />
     </div>
+  );
+}
+
+// ──────────── 导出保存位置 ────────────
+
+/**
+ * 历史导出默认保存位置。选择/清除都**即时持久化**（与主题同一即时键模式，
+ * 不进「保存」草稿）——导出动作发生在历史窗口，等用户想起来去设置页点
+ * 「保存」没有意义。
+ */
+function ExportDirRow({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [busy, setBusy] = useState(false);
+
+  const choose = useCallback(async () => {
+    setBusy(true);
+    try {
+      const dir = await chooseExportDir();
+      if (dir) {
+        const previous = value;
+        onChange(dir);
+        try {
+          await setConfigBatch([["export_dir", dir]]);
+          toast("导出保存位置已更新", "success");
+        } catch (err) {
+          // 持久化失败时草稿退回原值：界面显示必须与后端持久值一致，
+          // 否则用户以为已生效，下次导出仍弹对话框
+          onChange(previous);
+          toast("设置保存位置失败：" + String(err), "error");
+        }
+      }
+    } catch (err) {
+      toast("设置保存位置失败：" + String(err), "error");
+    } finally {
+      setBusy(false);
+    }
+  }, [value, onChange]);
+
+  const clear = useCallback(async () => {
+    const previous = value;
+    onChange("");
+    try {
+      await setConfigBatch([["export_dir", ""]]);
+      toast("已恢复为每次导出时询问", "success");
+    } catch (err) {
+      onChange(previous);
+      toast("清除保存位置失败：" + String(err), "error");
+    }
+  }, [value, onChange]);
+
+  return (
+    <SettingsRow
+      label="导出保存位置"
+      hint="翻译历史导出文件的默认目录；清空后每次导出都会弹保存对话框"
+    >
+      <div className="flex items-center gap-2 min-w-0">
+        <span
+          className="text-[12px] text-[var(--text-secondary)] truncate max-w-[230px]"
+          title={value || undefined}
+        >
+          {value || "每次询问（保存对话框）"}
+        </span>
+        <button
+          type="button"
+          onClick={() => void choose()}
+          disabled={busy}
+          className="shrink-0 text-[11.5px] font-medium px-2.5 py-1 rounded-md border border-[var(--border-primary)] text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] transition-colors disabled:opacity-50"
+        >
+          选择目录…
+        </button>
+        {value && (
+          <button
+            type="button"
+            onClick={() => void clear()}
+            disabled={busy}
+            className="shrink-0 text-[11.5px] font-medium px-2.5 py-1 rounded-md text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors disabled:opacity-50"
+          >
+            清除
+          </button>
+        )}
+      </div>
+    </SettingsRow>
   );
 }
 
@@ -656,15 +769,8 @@ function Dashboard({
         </div>
       )}
 
-      {/* ── 近 7 天趋势（recharts 面积图）── */}
-      {stats && (
-        <div className="macos-card p-3.5 space-y-1">
-          <p className="text-[11.5px] font-semibold text-[var(--text-secondary)] tracking-wide">
-            近 7 天趋势
-          </p>
-          <TrendChart daily={stats.daily_7d} />
-        </div>
-      )}
+      {/* ── 趋势（7 天 / 30 天 / 自定义区间档位）── */}
+      {stats && <TrendCard daily30={stats.daily} />}
 
       {/* ── 翻译源使用分布（recharts 横向条形图）── */}
       {stats && Object.keys(stats.by_provider).length > 0 && (
@@ -679,6 +785,144 @@ function Dashboard({
           </div>
           <ProviderChart byProvider={stats.by_provider} />
         </div>
+      )}
+    </div>
+  );
+}
+
+// ──────────── 趋势卡（时间范围档位）────────────
+
+type TrendMode = "d7" | "d30" | "custom";
+
+/**
+ * 趋势卡：近 7 天 / 近 30 天 / 自定义区间三个档位。
+ *
+ * 7 天与 30 天共用一次 IPC 拉回的 30 天逐日序列（7 天档前端切片）；
+ * 自定义档位按所选日期区间向后端单独请求。此前图表写死「近 7 天」，
+ * 更长时间尺度的使用趋势无处可看。
+ */
+function TrendCard({ daily30 }: { daily30: StatsResult["daily"] }) {
+  const [mode, setMode] = useState<TrendMode>("d7");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [customDaily, setCustomDaily] = useState<StatsResult["daily"] | null>(null);
+  const [customError, setCustomError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (mode !== "custom") return;
+    // 首次进入自定义档位：默认最近 14 天，给用户一个可直接改动的起点
+    if (!from && !to) {
+      const fmt = (d: Date) =>
+        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const today = new Date();
+      const start = new Date(today);
+      start.setDate(today.getDate() - 13);
+      setFrom(fmt(start));
+      setTo(fmt(today));
+      return;
+    }
+    if (!from || !to) return;
+    const start = new Date(`${from}T00:00:00`).getTime();
+    const end = new Date(`${to}T00:00:00`).getTime();
+    if (Number.isNaN(start) || Number.isNaN(end)) return;
+    if (end < start) {
+      setCustomError("结束日期不能早于开始日期");
+      setCustomDaily(null);
+      return;
+    }
+    let cancelled = false;
+    setCustomError(null);
+    // 先清掉上一份区间数据：否则新请求在途时标题已是新区间、图表仍是
+    // 旧区间的数据，短暂「文不对图」（清空后走下方加载占位）
+    setCustomDaily(null);
+    getStatsRange(start, end)
+      .then((r) => {
+        if (!cancelled) setCustomDaily(r.daily);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        // 后端对超长区间给出的是可直接行动的提示（"最多 90 天"），
+        // 透出真实原因而不是一句通用失败
+        const detail =
+          typeof err === "object" && err !== null && "message" in err
+            ? String((err as { message?: string }).message)
+            : String(err);
+        setCustomError(detail);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, from, to]);
+
+  const daily =
+    mode === "d7" ? daily30.slice(-7) : mode === "d30" ? daily30 : customDaily ?? [];
+  const title =
+    mode === "d7" ? "近 7 天趋势" : mode === "d30" ? "近 30 天趋势" : from && to ? `${from} ~ ${to}` : "自定义区间";
+
+  return (
+    <div className="macos-card p-3.5 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[11.5px] font-semibold text-[var(--text-secondary)] tracking-wide truncate">
+          {title}
+        </p>
+        <div
+          className="inline-flex rounded-lg bg-[var(--surface-tertiary)] dark:bg-[var(--surface-secondary)] p-0.5 gap-0.5 shrink-0"
+          role="tablist"
+          aria-label="统计时间范围"
+        >
+          {(
+            [
+              ["d7", "近 7 天"],
+              ["d30", "近 30 天"],
+              ["custom", "自定义"],
+            ] as Array<[TrendMode, string]>
+          ).map(([m, label]) => (
+            <button
+              key={m}
+              role="tab"
+              aria-selected={mode === m}
+              onClick={() => setMode(m)}
+              className={[
+                "px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors duration-150",
+                mode === m
+                  ? "bg-[var(--surface-primary)] dark:bg-[var(--surface-tertiary)] text-[var(--text-primary)] shadow-sm"
+                  : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
+              ].join(" ")}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {mode === "custom" && (
+        <div className="flex items-center gap-2">
+          <input
+            type="date"
+            value={from}
+            onChange={(e) => setFrom(e.target.value)}
+            aria-label="开始日期"
+            className="input-field text-[12px] py-1"
+          />
+          <span className="text-[12px] text-[var(--text-tertiary)]">至</span>
+          <input
+            type="date"
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+            aria-label="结束日期"
+            className="input-field text-[12px] py-1"
+          />
+        </div>
+      )}
+
+      {/* customError 只属于自定义档：一次区间选错（倒挂/超上限）不该
+          把切回 7/30 天档的图表也顶掉——那两个档位的数据源与其无关 */}
+      {mode === "custom" && customError ? (
+        <p className="text-[12px] text-[var(--text-secondary)] py-6 text-center">{customError}</p>
+      ) : daily.length === 0 ? (
+        <p className="text-[12px] text-[var(--text-secondary)] py-6 text-center">统计数据加载中…</p>
+      ) : (
+        <TrendChart daily={daily} />
       )}
     </div>
   );
@@ -829,6 +1073,7 @@ function RuntimeStatusSection({
               已运行 {formatUptime(diag.uptime_ms)} · 翻译成功 {diag.translation_success_count} 次
               {diag.translation_failure_count > 0 && `（失败 ${diag.translation_failure_count}）`}
               {diag.fallback_count > 0 && ` · 兜底切换 ${diag.fallback_count} 次`}
+              {diag.echo_count > 0 && ` · 回声拦截 ${diag.echo_count} 次`}
               {diag.clipboard_restart_count > 0 && ` · 剪贴板自愈 ${diag.clipboard_restart_count} 次`}
             </p>
           )}

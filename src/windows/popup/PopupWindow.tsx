@@ -166,6 +166,29 @@ export function PopupWindow() {
   );
   useTauriEvent<TranslationErrorPayload>(EVENTS.TRANSLATION_ERROR, handleError);
 
+  // ── 错误态自动转入交互态 ─────────────────────────────────────────
+  // 错误浮窗需要用户处置，而被动浮窗收不到键盘事件（focusable(false)）
+  // —— 用户按 Esc/空格想关掉它，按键全部落进底层应用（空格在源应用里
+  // 表现为滚动或其绑定热键）。错误出现即激活窗口，下方已有的 Esc/空格
+  // 关闭 handler 随之生效。成功结果仍保持被动态不抢焦点：翻译弹窗出现
+  // 时用户往往正在原应用里继续输入，抢焦点会打断打字（Phase 8b 承诺）。
+  //
+  // inFlightRef 防重入：StrictMode 双调用或连续错误各自跑一遍 effect，
+  // activatePopup 幂等但每次都是一次 IPC；在途期间不重复发起。失败只
+  // 记日志不重试——激活失败时用户仍有点击路径可转交互态。
+  const activationInFlight = useRef(false);
+  useEffect(() => {
+    if (status !== "error") return;
+    if (activationInFlight.current) return;
+    activationInFlight.current = true;
+    activatePopup()
+      .then(() => setActivated(true))
+      .catch((err) => console.error("[PopupWindow] 错误浮窗激活失败:", err))
+      .finally(() => {
+        activationInFlight.current = false;
+      });
+  }, [status]);
+
   // ── 窗口尺寸的唯一归属：内容/几何变化后统一在此调整 ──
   // 折叠 → 固定压到标题栏高度；展开/内容变化 → 测量当前视图自然高度。
   // 不限定 result 存在：error/idle/loading 视图同样需要在展开时恢复高度。
@@ -277,9 +300,17 @@ export function PopupWindow() {
     let suppressDrag = false;
 
     const activate = () => {
-      activatePopup()
-        .then(() => setActivated(true))
-        .catch((err) => console.error("[PopupWindow] 转入交互态失败:", err));
+      // 延后到 click 事件派发之后：mouseup 里同步发起 activate_popup，
+      // 其 set_focusable 的窗口样式改写（SWP_FRAMECHANGED）与
+      // SetForegroundWindow 会恰好落在 mousedown→mouseup→click 的派发
+      // 序列中间 —— OS 层的这一下干扰会把 click 吞掉（与 C5 记录的
+      // 「拖拽模态循环吞 click」同一族竞态），红绿灯按钮于是表现为
+      // 「点了没反应、浮窗闪一下」。click 先行、激活随后，两不相扰。
+      window.setTimeout(() => {
+        activatePopup()
+          .then(() => setActivated(true))
+          .catch((err) => console.error("[PopupWindow] 转入交互态失败:", err));
+      }, 0);
     };
 
     const handleMouseDown = (e: MouseEvent) => {

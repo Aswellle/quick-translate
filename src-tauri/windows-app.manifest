@@ -1,0 +1,19 @@
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <!-- 所有可执行目标（bin / 测试）统一由链接器嵌入这份清单。
+       内容与 tauri-build 默认清单一致：声明 Common-Controls v6 依赖。
+       System32 的 comctl32 5.82 不导出 TaskDialogIndirect（rfd / muda
+       在 common-controls-v6 feature 下的静态导入），没有这份声明，
+       测试可执行文件会在进程启动时 STATUS_ENTRYPOINT_NOT_FOUND。 -->
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+</assembly>

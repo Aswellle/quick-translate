@@ -101,12 +101,14 @@ pub struct StatsResult {
     pub last_30_days: u64,
     /// 近 24 小时翻译次数（仪表盘「最近 24h」卡片）
     pub last_24h: u64,
-    /// 近 7 天逐日翻译次数，按时间升序；末位是今天（部分）。
-    /// 每日边界按本地时区计算 —— 仪表盘趋势图的横轴。
-    pub daily_7d: Vec<DailyCount>,
+    /// 逐日翻译次数，按时间升序；末位是今天（部分）。
+    /// 覆盖范围由 get_stats 的 days / get_stats_range 的区间决定
+    /// （默认与历史上的 daily_7d 相同为近 7 天）。每日边界按本地时区
+    /// 计算 —— 仪表盘趋势图的横轴。
+    pub daily: Vec<DailyCount>,
 }
 
-/// 单日翻译计数（daily_7d 的元素）
+/// 单日翻译计数（daily 的元素）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DailyCount {
     /// 当日 0 点的 Unix 毫秒（本地时区）
@@ -184,6 +186,9 @@ pub struct AppConfig {
     /// 语义是「叠加」而非「覆盖」：媒体查询命中时始终生效（那是用户的
     /// 系统级无障碍设置），本开关只是在它之外再提供一条应用内途径。
     pub reduce_transparency: bool,
+    /// 历史记录导出的默认保存目录。空串 = 每次导出弹原生保存对话框；
+    /// 非空 = 直接写入该目录（不再询问）。设置页可修改/清除。
+    pub export_dir: String,
 }
 
 impl Default for AppConfig {
@@ -205,6 +210,7 @@ impl Default for AppConfig {
             onboarding_completed: false,
             clipboard_monitor_enabled: true,
             reduce_transparency: false,
+            export_dir: String::new(),
         }
     }
 }

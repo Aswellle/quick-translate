@@ -71,8 +71,7 @@ pub fn init(app: &AppHandle) -> Result<(), AppError> {
                 // 的肌肉记忆是左键就有反应 —— 此前这里完全无操作，应用
                 // 的全部功能都要先右键才能看到
                 if let Some(app) = tray.app_handle().get_webview_window("history") {
-                    let _ = app.show();
-                    let _ = app.set_focus();
+                    super::window_util::show_and_focus(&app);
                 } else {
                     open_history_window(tray.app_handle());
                 }
@@ -396,8 +395,7 @@ pub fn open_settings_window(app: &AppHandle) {
 pub fn open_provider_settings(app: &AppHandle) {
     use tauri::Emitter;
     if let Some(window) = app.get_webview_window("settings") {
-        let _ = window.show();
-        let _ = window.set_focus();
+        super::window_util::show_and_focus(&window);
         let _ = window.emit(
             "settings-navigate",
             serde_json::json!({ "tab": "provider" }),
@@ -414,8 +412,7 @@ fn open_settings_at(app: &AppHandle, tab: Option<&str>) {
         None => "index.html#settings".to_string(),
     };
     if let Some(window) = app.get_webview_window("settings") {
-        let _ = window.show();
-        let _ = window.set_focus();
+        super::window_util::show_and_focus(&window);
         let _ = window.emit(
             "settings-navigate",
             serde_json::json!({ "tab": tab.unwrap_or("general") }),
@@ -444,8 +441,7 @@ fn open_settings_at(app: &AppHandle, tab: Option<&str>) {
 
 fn open_history_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("history") {
-        let _ = window.show();
-        let _ = window.set_focus();
+        super::window_util::show_and_focus(&window);
         return;
     }
     match WebviewWindowBuilder::new(app, "history", WebviewUrl::App("index.html#history".into()))

@@ -136,8 +136,10 @@ const CREDENTIAL_KEYS: &[&str] = &[
 /// 未知键一律拒绝：配置键清单就是写入面的边界，放行未知键等于绕过
 /// 全部类型与范围约束直接写库。
 fn validate_value(key: &str, value: &str) -> Result<(), AppError> {
-    let known = matches!(key, "provider" | "target_lang" | "theme" | "history_limit")
-        || BOOL_KEYS.contains(&key)
+    let known = matches!(
+        key,
+        "provider" | "target_lang" | "theme" | "history_limit" | "export_dir"
+    ) || BOOL_KEYS.contains(&key)
         || CREDENTIAL_KEYS.contains(&key);
     if !known {
         return Err(AppError::ConfigError(format!("未知配置键: {}", key)));
@@ -169,6 +171,14 @@ fn validate_value(key: &str, value: &str) -> Result<(), AppError> {
                 ..=crate::domain::config::HISTORY_LIMIT_MAX)
                 .contains(&parsed)
             {
+                return Err(invalid());
+            }
+        }
+        // 导出目录允许清空（空 = 每次导出弹对话框询问）；设值时必须是
+        // 绝对路径形态 —— 相对路径会随进程工作目录漂移，写出的文件位置
+        // 用户找不到
+        "export_dir" => {
+            if !value.is_empty() && !std::path::Path::new(value).is_absolute() {
                 return Err(invalid());
             }
         }
@@ -389,8 +399,40 @@ mod tests {
         assert!(validate_value("reduce_transparency", "true").is_ok());
         assert!(validate_value("history_limit", "200").is_ok());
         assert!(validate_value("history_limit", "50").is_ok());
+        // 导出目录：「清空 = 每次询问」恒放行；绝对路径的正向用例按平台
+        // 构造 —— Windows 的绝对以盘符开头，Unix 的绝对以 / 开头，
+        // 「绝对」判定本身是 std::path 的平台语义
+        assert!(validate_value("export_dir", "").is_ok());
+        {
+            let absolute = if cfg!(windows) {
+                r"C:\Users\welle\Documents".to_string()
+            } else {
+                "/home/welle/Documents".to_string()
+            };
+            assert!(
+                validate_value("export_dir", &absolute).is_ok(),
+                "绝对路径应放行: {}",
+                absolute
+            );
+            assert!(
+                std::path::Path::new(&absolute).is_absolute(),
+                "测试自身的前提：构造的样本必须是平台绝对路径"
+            );
+        }
         assert!(validate_value("deepl_api_key", "some-key:fx").is_ok());
         assert!(validate_value("tencent_secret_id", "AKIDxx").is_ok());
+    }
+
+    // ── export_dir 的形态约束 ───────────────────────────────────────────
+
+    #[test]
+    fn export_dir_rejects_relative_paths() {
+        // 相对路径会随进程工作目录漂移，写出的文件位置用户找不到。
+        // 绝对路径的放行用例见 known_keys_with_valid_values_pass ——
+        // 「绝对」的判定随平台（Windows 要盘符），正向用例只锁本平台形态。
+        assert!(err("export_dir", "Documents/exports").contains("非法"));
+        assert!(err("export_dir", ".").contains("非法"));
+        assert!(err("export_dir", "exports").contains("非法"));
     }
 
     // ── 未知键必须拒绝（写入面的边界）────────────────────────────────────

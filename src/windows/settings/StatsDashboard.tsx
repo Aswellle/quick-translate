@@ -32,8 +32,11 @@ const TICK_STYLE = { fontSize: 10.5, fill: CHART_AXIS } as const;
 
 const WEEKDAYS = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 
-function dayLabel(dateMs: number): string {
+function dayLabel(dateMs: number, compact: boolean): string {
   const d = new Date(dateMs);
+  // 30 天档的横轴放不下 30 个「周X」标签（还会跨周重复造成误读），
+  // 压缩为 M/D 短格式；7 天档维持「今天/周X」的人话标签
+  if (compact) return `${d.getMonth() + 1}/${d.getDate()}`;
   const today = new Date();
   const isToday =
     d.getFullYear() === today.getFullYear() &&
@@ -54,19 +57,20 @@ function formatChars(n: number): string {
   return String(n);
 }
 
-/** 近 7 天趋势 —— 渐变面积图 + 详细悬浮卡 */
-function TrendChart({ daily }: { daily: StatsResult["daily_7d"] }) {
+/** 趋势图 —— 渐变面积图 + 详细悬浮卡（数据范围由调用方的档位决定） */
+function TrendChart({ daily }: { daily: StatsResult["daily"] }) {
+  const compact = daily.length > 10;
   const data = useMemo(
     () =>
       daily.map((d) => ({
-        label: dayLabel(d.date_ms),
+        label: dayLabel(d.date_ms, compact),
         date_ms: d.date_ms,
         count: d.count,
         chars: d.chars,
       })),
-    [daily]
+    [daily, compact]
   );
-  const weekTotal = useMemo(() => data.reduce((s, d) => s + d.count, 0), [data]);
+  const rangeTotal = useMemo(() => data.reduce((s, d) => s + d.count, 0), [data]);
 
   return (
     <ResponsiveContainer width="100%" height={150}>
@@ -84,7 +88,8 @@ function TrendChart({ daily }: { daily: StatsResult["daily_7d"] }) {
           tick={TICK_STYLE}
           axisLine={{ stroke: CHART_GRID }}
           tickLine={false}
-          interval={0}
+          interval={compact ? "preserveStartEnd" : 0}
+          minTickGap={18}
         />
         <YAxis
           tick={TICK_STYLE}
@@ -94,7 +99,7 @@ function TrendChart({ daily }: { daily: StatsResult["daily_7d"] }) {
           width={38}
         />
         <Tooltip
-          content={<TrendTooltip weekTotal={weekTotal} />}
+          content={<TrendTooltip rangeTotal={rangeTotal} />}
           // 跟手 + 无黑框；cursor 线对齐到最近数据点，悬浮不差像素
           cursor={{ stroke: CHART_AXIS, strokeDasharray: "3 3" }}
           wrapperStyle={{ outline: "none", zIndex: 10 }}
@@ -113,15 +118,15 @@ function TrendChart({ daily }: { daily: StatsResult["daily_7d"] }) {
   );
 }
 
-/** 趋势图悬浮卡：日期 + 次数 + 字符量 + 周占比 */
-function TrendTooltip({ active, payload, weekTotal }: {
+/** 趋势图悬浮卡：日期 + 次数 + 字符量 + 区间占比 */
+function TrendTooltip({ active, payload, rangeTotal }: {
   active?: boolean;
   payload?: Array<{ payload: { label: string; date_ms: number; count: number; chars: number } }>;
-  weekTotal: number;
+  rangeTotal: number;
 }) {
   if (!active || !payload?.length) return null;
   const d = payload[0].payload;
-  const pct = weekTotal > 0 ? Math.round((d.count / weekTotal) * 100) : 0;
+  const pct = rangeTotal > 0 ? Math.round((d.count / rangeTotal) * 100) : 0;
   return (
     <div className="rounded-xl bg-[var(--surface-primary)] dark:bg-[var(--surface-secondary)] border border-[var(--border-secondary)] shadow-[var(--card-shadow)] px-3 py-2 min-w-[132px]">
       <p className="text-[11px] font-semibold text-[var(--text-primary)]">
@@ -138,7 +143,7 @@ function TrendTooltip({ active, payload, weekTotal }: {
           <span className="font-medium text-[var(--text-primary)] tabular-nums">{d.chars.toLocaleString()}</span>
         </p>
         <p className="text-[11px] text-[var(--text-tertiary)] flex justify-between gap-3 pt-0.5 border-t border-[var(--border-secondary)] mt-1">
-          <span>占本周</span>
+          <span>占当前区间</span>
           <span className="tabular-nums">{pct}%</span>
         </p>
       </div>

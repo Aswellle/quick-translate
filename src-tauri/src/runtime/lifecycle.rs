@@ -24,6 +24,8 @@ pub struct RuntimeDiagnostics {
     pub translation_success_count: u64,
     pub translation_failure_count: u64,
     pub fallback_count: u64,
+    /// 回声守卫拦下「译文=原文」的次数
+    pub echo_count: u64,
 }
 
 /// 进程级计数器本体。挂在 RuntimeStatus 上（全局唯一句柄），

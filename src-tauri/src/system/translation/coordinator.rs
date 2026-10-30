@@ -433,17 +433,30 @@ fn should_fall_back_to_cache(err: &AppError) -> bool {
 }
 
 /// 查缓存并组装成一次正常的翻译结果。
+///
+/// 回声条目过滤：缓存里可能存有历史版本写入的 `(A → A)` 条目（回声守卫
+/// 落地前的存量数据），离线回退把它们当译文端出去就是「翻译结果是原文」。
+/// 读取侧统一拒掉，存量毒化数据无需迁移即可失效。
 async fn lookup_cache(state: &AppState, request: &TranslationRequest) -> Option<TranslationResult> {
     match state.cache.get(&request.text, &request.target_lang).await {
-        Ok(Some(hit)) => Some(TranslationResult {
-            source_text: request.text.clone(),
-            translated_text: hit.translated_text,
-            detected_source_lang: hit.source_lang,
-            target_lang: request.target_lang.clone(),
-            provider: CACHE_PROVIDER.to_string(),
-            duration_ms: 0,
-            truncated: request.truncated,
-        }),
+        Ok(Some(hit)) => {
+            if crate::domain::translator::is_echo_text(&request.text, &hit.translated_text) {
+                tracing::info!(
+                    event = "cache_entry_rejected_as_echo",
+                    "[coordinator] 缓存命中了与原文相同的内容，按未命中处理"
+                );
+                return None;
+            }
+            Some(TranslationResult {
+                source_text: request.text.clone(),
+                translated_text: hit.translated_text,
+                detected_source_lang: hit.source_lang,
+                target_lang: request.target_lang.clone(),
+                provider: CACHE_PROVIDER.to_string(),
+                duration_ms: 0,
+                truncated: request.truncated,
+            })
+        }
         Ok(None) => None,
         Err(e) => {
             // 缓存读失败不该把主链路也带下水 —— 它本来只是最后一根稻草

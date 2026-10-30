@@ -175,6 +175,18 @@ pub(crate) fn redact_body_digest(body: &str) -> String {
     }
 }
 
+/// 「译文与原文相同」判定（回声守卫，QT-013 后续实测反馈）。
+///
+/// 空白折叠后比较：Windows 剪贴板往返与各 provider 的响应都会改写
+/// 换行/空白形态，逐字节比较会把真回声漏成正常结果。比较键不含大小写
+/// 折叠 —— 大小写变化属于真实改写（如品牌名翻译保留原形）。
+pub(crate) fn is_echo_text(source: &str, translated: &str) -> bool {
+    fn fold(s: &str) -> String {
+        s.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+    !source.trim().is_empty() && fold(source) == fold(translated)
+}
+
 /// 从疑似 JSON 的错误响应中提取白名单错误代码。
 ///
 /// 解析失败、字段缺失、值形态超出白名单（长度/字符集）一律返回 None
@@ -224,6 +236,7 @@ async fn try_provider(
     text: &str,
     target_lang: &str,
     budget: &TranslationBudget,
+    echo_count: &std::sync::atomic::AtomicU64,
     errors: &mut Vec<(String, String)>,
 ) -> AttemptOutcome {
     let provider_id = entry.provider.info().id;
@@ -291,6 +304,29 @@ async fn try_provider(
         match result {
             Ok(result) => {
                 entry.lock_health().record_success(Instant::now());
+                // 回声守卫（QT-013 后续实测反馈）：provider 把原文原样送回
+                // （不可译内容、误判语言、接口异常）且语言检测没触发
+                // SameLanguage 时，这条「译文」会以成功姿态弹窗、写历史、
+                // 入缓存 —— 缓存一旦吃进 (A → A)，此后离线回退会把原文
+                // 当译文端给用户。统一收口为 SameLanguage 语义呈现。
+                if is_echo_text(text, &result.translated_text) {
+                    echo_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    tracing::info!(
+                        event = "provider_echoed_source_text",
+                        provider = %provider_id,
+                        "[provider] {} 返回了与原文相同的内容，按同语言处理",
+                        provider_id
+                    );
+                    // 与 SameLanguage 相同的链路语义：终止 fallback、按
+                    // 「无需翻译」呈现。放弃 fallback 是接受的取舍——
+                    // 回声的大头是不可译内容（URL/代码），放行 fallback
+                    // 意味着 N 次注定回声的网络调用后以报错收场，比
+                    // 直接显示原文差得多；且缓存防线要求在某处统一
+                    // 拒收 (A → A)，放行链尾会重新吃进毒化数据。误判
+                    // 频率经 echo_count 可观测，真出现可译文本被某源
+                    // 持续回声时再考虑按源降权。
+                    return AttemptOutcome::SameLanguage(result.detected_source_lang);
+                }
                 tracing::info!(
                     event = "provider_attempt_succeeded",
                     provider = %provider_id,
@@ -343,8 +379,11 @@ async fn try_provider(
 
                 if attempt < policy.max_attempts && policy.should_retry(class) {
                     let backoff = policy.backoff_after(attempt);
-                    if backoff >= budget.remaining() {
-                        // 连退避都睡不起，重试没有意义 —— 省下预算给别的源
+                    // 退避之后还要装得下一次**完整**尝试（策略超时值）：
+                    // 只睡得起退避的重试会在被预算压紧的超时里再失败一次，
+                    // 白白把剩余预算从链尾的健康源手里抢走。放不下就就地
+                    // 放弃重试，把预算让给 fallback。
+                    if backoff + policy.attempt_timeout >= budget.remaining() {
                         errors.push((provider_id, e.to_string()));
                         return AttemptOutcome::Exhausted;
                     }
@@ -380,6 +419,9 @@ pub struct TranslationEngine {
     /// 诊断计数（计划第 33 节）：一次翻译最终由**非首选**源成功 = 一次 fallback。
     /// 全原子量，热路径记账。
     fallback_count: std::sync::atomic::AtomicU64,
+    /// 诊断计数：provider 把原文原样送回被回声守卫拦下的次数。若某源
+    /// 误判率异常升高，运维面板能先于用户投诉看到。
+    echo_count: std::sync::atomic::AtomicU64,
 }
 
 impl TranslationEngine {
@@ -390,6 +432,7 @@ impl TranslationEngine {
             fallback_enabled: RwLock::new(true),
             http_client,
             fallback_count: std::sync::atomic::AtomicU64::new(0),
+            echo_count: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -397,6 +440,11 @@ impl TranslationEngine {
     pub fn fallback_count(&self) -> u64 {
         self.fallback_count
             .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// 诊断读取：启动以来回声守卫拦下的次数。
+    pub fn echo_count(&self) -> u64 {
+        self.echo_count.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub async fn register_provider(&self, provider: Box<dyn TranslationProvider>) {
@@ -450,7 +498,16 @@ impl TranslationEngine {
                 continue;
             }
 
-            match try_provider(&entry, text, target_lang, &budget, &mut errors).await {
+            match try_provider(
+                &entry,
+                text,
+                target_lang,
+                &budget,
+                &self.echo_count,
+                &mut errors,
+            )
+            .await
+            {
                 AttemptOutcome::Success(result) => {
                     // 诊断计数（计划第 33 节）：最终由非首选源成功 = 一次 fallback。
                     // 用户无感（计划第 46 节），只在本地诊断里可见。
@@ -580,12 +637,18 @@ impl TranslationEngine {
     /// 只统计**可用**的源：需要凭证却没配的那些既不是健康也不是故障，
     /// 它们根本没参与调度，把它们算进来会让「配了 DeepL 但没配百度」
     /// 显示成「有问题」。
+    ///
+    /// 单源 `Degraded`（有失败但未达熔断阈值，仍在正常接单）不计入
+    /// 整体降级 —— `ProviderHealthState::Degraded` 的语义就是「功能可能
+    /// 仍可用，UI 不该据此报警」，汇总层若把它报成 Degraded，用户就会
+    /// 在网络偶发一次超时后看到「部分功能异常」挂很久。整体 Degraded
+    /// 只在**确有源被熔断**（Open/HalfOpen）时成立。
     pub async fn providers_health(&self) -> ProvidersHealth {
         let entries = self.providers.read().await;
 
         let mut total = 0usize;
-        let mut healthy = 0usize;
         let mut usable = 0usize;
+        let mut circuit_open = 0usize;
 
         for e in entries.iter() {
             let info = e.provider.info();
@@ -594,12 +657,10 @@ impl TranslationEngine {
             }
             total += 1;
             match e.lock_health().state() {
-                ProviderHealthState::Healthy => {
-                    healthy += 1;
-                    usable += 1;
+                ProviderHealthState::Healthy | ProviderHealthState::Degraded => usable += 1,
+                ProviderHealthState::Open | ProviderHealthState::HalfOpen => {
+                    circuit_open += 1;
                 }
-                ProviderHealthState::Degraded => usable += 1,
-                ProviderHealthState::Open | ProviderHealthState::HalfOpen => {}
             }
         }
 
@@ -607,7 +668,7 @@ impl TranslationEngine {
             ProvidersHealth::Unconfigured
         } else if usable == 0 {
             ProvidersHealth::Unavailable
-        } else if healthy == total {
+        } else if circuit_open == 0 {
             ProvidersHealth::Healthy
         } else {
             ProvidersHealth::Degraded
@@ -1132,6 +1193,74 @@ line2"}}"#,
         );
     }
 
+    // ── 回声守卫：译文 == 原文按同语言处理 ──────────────────────────────
+
+    #[tokio::test]
+    async fn echoed_source_text_is_treated_as_same_language() {
+        let a = MockProvider::new("deepl", vec![Outcome::Ok("hello")]);
+        let b = MockProvider::new("google", vec![Outcome::Ok("你好")]);
+        let engine = engine_with(&[a.clone(), b.clone()], "deepl", true).await;
+
+        let err = engine.translate("hello", "zh").await.unwrap_err();
+
+        assert_eq!(
+            err.error_code(),
+            "SAME_LANGUAGE",
+            "provider 回送原文时不得以成功结果弹窗/落盘"
+        );
+        assert_eq!(a.calls(), 1);
+        assert_eq!(b.calls(), 0, "与 SameLanguage 语义一致，终止 fallback 链");
+    }
+
+    #[tokio::test]
+    async fn echo_detection_folds_whitespace_but_not_case() {
+        assert!(is_echo_text("hello  world", "hello\r\nworld"));
+        assert!(is_echo_text("  hello ", "hello"));
+        assert!(
+            !is_echo_text("Hello", "hello"),
+            "大小写变化属于真实改写，不是回声"
+        );
+        assert!(!is_echo_text("hello", "hello world"));
+        // 空原文永远不算回声（防御空串巧合）
+        assert!(!is_echo_text("", "  "));
+    }
+
+    // ── 整体健康判定：仍在接单的单源失败不报警 ──────────────────────────
+
+    #[tokio::test]
+    async fn degraded_provider_without_open_circuit_keeps_overall_healthy() {
+        let a = MockProvider::new("deepl", vec![Outcome::Timeout]);
+        let engine = engine_with(&[a.clone()], "deepl", false).await;
+
+        // 1 次失败：Degraded（有失败但未达阈值，仍在接单）
+        let _ = engine.translate("hello", "zh").await;
+        assert_eq!(
+            engine.provider_health("deepl").await,
+            Some(ProviderHealthState::Degraded)
+        );
+        assert_eq!(
+            engine.providers_health().await,
+            ProvidersHealth::Healthy,
+            "功能仍可用的单源失败不该让运行时状态报「部分功能异常」"
+        );
+    }
+
+    #[tokio::test]
+    async fn open_circuit_degrades_the_overall_status() {
+        let a = MockProvider::new("deepl", vec![Outcome::Timeout]);
+        let b = MockProvider::new("google", vec![Outcome::Ok("你好")]);
+        let engine = engine_with(&[a.clone(), b.clone()], "deepl", true).await;
+
+        for _ in 0..health::FAILURE_THRESHOLD {
+            let _ = engine.translate("hello", "zh").await;
+        }
+        assert_eq!(
+            engine.providers_health().await,
+            ProvidersHealth::Degraded,
+            "确有源被熔断时整体才是 Degraded"
+        );
+    }
+
     // ── Permanent 错误：不换源，且不熔断 ─────────────────────────────────
 
     #[tokio::test]
@@ -1319,9 +1448,12 @@ line2"}}"#,
         );
     }
 
-    /// 非官方兜底源不重试（best_effort 策略）
+    /// 非官方兜底源（Google）的超时按 Transient 重试一次：
+    /// 2s 超时 + 禁止重试曾把慢速网络下的可用源成批判为失败并熔断
+    /// （2026-10 实测日志），max_attempts 提到 2 后超时类失败有一次
+    /// 热连接重试的机会；429/限流仍不重试（should_retry 白名单）。
     #[tokio::test]
-    async fn best_effort_provider_is_never_retried() {
+    async fn best_effort_provider_retries_transient_once() {
         let g = MockProvider::new("google", vec![Outcome::Timeout]);
         let engine = engine_with(&[g.clone()], "google", true).await;
 
@@ -1329,9 +1461,20 @@ line2"}}"#,
 
         assert_eq!(
             g.calls(),
-            1,
-            "Google 的 best_effort 策略是 max_attempts = 1"
+            policy_for("google").max_attempts as usize,
+            "超时类瞬时失败应原地重试一次"
         );
+    }
+
+    /// 非官方兜底源被限流时**不**原地重试（非公开接口重试只会更快撞 429）
+    #[tokio::test]
+    async fn best_effort_provider_is_never_retried_on_rate_limit() {
+        let g = MockProvider::new("google", vec![Outcome::RateLimit]);
+        let engine = engine_with(&[g.clone()], "google", true).await;
+
+        let _ = engine.translate("x", "zh").await;
+
+        assert_eq!(g.calls(), 1, "429 不得原地重试");
     }
 
     /// 认证失败不重试（重试一万次也不会好），但仍换源
@@ -1387,6 +1530,38 @@ line2"}}"#,
             start.elapsed()
         );
         assert_eq!(err.error_code(), "ALL_PROVIDERS_FAILED");
+    }
+
+    // ── 重试预算闸：退避后装不下完整尝试就不再重试 ──────────────────────
+
+    /// 反证场景：主源黑洞式超时（每次吃满策略超时）时，旧条件只检查退避
+    /// 睡不睡得起，4s 超时 + 200ms 退避的重试在数学上把 8s 预算吃满，
+    /// 链尾的健康源一个请求都得不到。新条件要求退避 + 一次完整尝试都
+    /// 装得下才重试，省下的预算留给 fallback。
+    #[tokio::test]
+    async fn retry_is_skipped_when_a_full_attempt_no_longer_fits() {
+        let a = MockProvider::new("deepl", vec![Outcome::Timeout]);
+        let engine = engine_with(&[a.clone()], "deepl", false).await;
+
+        // 预算 3s < 退避 200ms + 策略超时 3s：重试必然装不下，直接放弃
+        let err = engine
+            .translate_with_budget("x", "zh", TranslationBudget::new(Duration::from_secs(3)))
+            .await
+            .unwrap_err();
+        assert_eq!(err.error_code(), "ALL_PROVIDERS_FAILED");
+        assert_eq!(a.calls(), 1, "放不下完整尝试时不得发起注定失败的重试");
+    }
+
+    #[tokio::test]
+    async fn retry_still_happens_when_the_full_attempt_fits() {
+        let a = MockProvider::new("deepl", vec![Outcome::Timeout]);
+        let engine = engine_with(&[a.clone()], "deepl", false).await;
+
+        // 预算 5s > 退避 200ms + 策略超时 3s：重试照常
+        let _ = engine
+            .translate_with_budget("x", "zh", TranslationBudget::new(Duration::from_secs(5)))
+            .await;
+        assert_eq!(a.calls(), 2, "装得下完整尝试时重试照常进行");
     }
 
     // ── fallback 排序：健康优先（计划第 10 节）───────────────────────────

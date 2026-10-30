@@ -51,12 +51,25 @@ pub async fn hide_popup(app: AppHandle) -> Result<(), AppError> {
 /// 其他应用才关。150ms 轮询对瞬时焦点抖动天然免疫。
 #[tauri::command]
 pub async fn activate_popup(app: AppHandle) -> Result<(), AppError> {
-    let popup_watch = app.state::<crate::state::AppState>().popup_watch.clone();
-    popup_watch.enter_interactive();
-
     let Some(window) = app.get_webview_window("popup") else {
         return Ok(());
     };
+
+    // 浮窗已隐藏时整条激活链路都是无意义操作：红叉的 click 先发出
+    // hide_popup，前端 mouseup 延迟排期的 activatePopup 才到期——不早退
+    // 的话，隐藏窗口会被 set_focusable(true) 改成可激活、set_focus 打向
+    // 一个看不见的窗口，看守也以交互态重新武装。激活只为「可见的浮窗」
+    // 服务，其余一律早退。
+    if !window.is_visible().unwrap_or(false) {
+        tracing::info!(
+            event = "popup_activate_skipped_hidden",
+            "[popup] 浮窗已隐藏，跳过激活"
+        );
+        return Ok(());
+    }
+
+    let popup_watch = app.state::<crate::state::AppState>().popup_watch.clone();
+    popup_watch.enter_interactive();
 
     // 顺手记住当前位置：用户点浮窗往往伴随拖动，把「此刻窗口在哪」固化
     // 下来，下次翻译直接回到这里，而不是被光标锚点冲掉
@@ -434,6 +447,7 @@ pub async fn get_runtime_diagnostics(
 ) -> Result<crate::runtime::lifecycle::RuntimeDiagnostics, AppError> {
     let mut d = state.runtime.diagnostics();
     d.fallback_count = state.translator.fallback_count();
+    d.echo_count = state.translator.echo_count();
     Ok(d)
 }
 
@@ -694,8 +708,7 @@ pub async fn open_settings_window(app: AppHandle, tab: Option<String>) -> Result
 pub async fn open_onboarding_window(app: AppHandle) -> Result<(), AppError> {
     // 若向导窗口已存在，则聚焦显示
     if let Some(window) = app.get_webview_window("onboarding") {
-        let _ = window.show();
-        let _ = window.set_focus();
+        crate::system::window_util::show_and_focus(&window);
         return Ok(());
     }
 

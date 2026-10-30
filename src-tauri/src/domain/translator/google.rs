@@ -121,7 +121,7 @@ impl GoogleProvider {
 
         let response = self
             .http_client
-            .fast_client()
+            .client()
             .get(GOOGLE_TRANSLATE_URL)
             .header("User-Agent", ua)
             .query(&[
@@ -184,8 +184,9 @@ impl TranslationProvider for GoogleProvider {
         // 此前本函数内置一轮最多 3 次的重试循环，而引擎在 Phase 5 也开始按
         // RequestPolicy 重试 —— 两者相乘会让一次 Google 请求实际打出 6 次
         // HTTP 调用，轻易吃掉整次翻译的时间预算。重试策略现在只有一个归属地：
-        // 引擎的 RequestPolicy（Google 的 best_effort 策略 max_attempts = 1，
-        // 即不重试）。
+        // 引擎的 RequestPolicy（best_effort 策略 max_attempts = 2，但
+        // `should_retry` 只对 Transient 类生效 —— 429/限流仍然立刻换源，
+        // 非公开接口被限流的风险不变）。
         let (translated_text, detected_lang, duration_ms) = self.do_request(text, tl).await?;
 
         // 检查源语言与目标语言是否相同
