@@ -591,16 +591,24 @@ function ExportDirRow({ value, onChange }: { value: string; onChange: (v: string
     try {
       const dir = await chooseExportDir();
       if (dir) {
+        const previous = value;
         onChange(dir);
-        await setConfigBatch([["export_dir", dir]]);
-        toast("导出保存位置已更新", "success");
+        try {
+          await setConfigBatch([["export_dir", dir]]);
+          toast("导出保存位置已更新", "success");
+        } catch (err) {
+          // 持久化失败时草稿退回原值：界面显示必须与后端持久值一致，
+          // 否则用户以为已生效，下次导出仍弹对话框
+          onChange(previous);
+          toast("设置保存位置失败：" + String(err), "error");
+        }
       }
     } catch (err) {
       toast("设置保存位置失败：" + String(err), "error");
     } finally {
       setBusy(false);
     }
-  }, [onChange]);
+  }, [value, onChange]);
 
   const clear = useCallback(async () => {
     const previous = value;
