@@ -136,6 +136,17 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
     };
   }, []);
 
+  // 加载使用统计。一次拉 30 天逐日序列：趋势卡的「近7天/近30天」两个
+  // 档位共用同一份 IPC 数据（7 天档前端切片），自定义档位才再发请求。
+  // 定义在 settings-navigate 监听之前：托盘重新打开设置时也要走它。
+  const refreshStats = useCallback(() => {
+    setStatsLoading(true);
+    getStats(30)
+      .then(setStats)
+      .catch(() => setStats(null))
+      .finally(() => setStatsLoading(false));
+  }, []);
+
   // 托盘「配置翻译源…」对已打开的设置窗口发事件切换 Tab
   // （新建窗口走 URL hash，见 App.tsx 的 initialTab）
   useEffect(() => {
@@ -148,13 +159,7 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
             setActiveTab(e.payload.tab);
             // 同值 Tab 的 setActiveTab 是 React bail-out，effect 不会重跑；
             // 显式刷一次统计，托盘重新打开设置时仪表盘才是当下数据
-            if (e.payload.tab === "general") {
-              setStatsLoading(true);
-              getStats(30)
-                .then(setStats)
-                .catch(() => setStats(null))
-                .finally(() => setStatsLoading(false));
-            }
+            if (e.payload.tab === "general") refreshStats();
           }
         })
       )
@@ -167,7 +172,7 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
       cancelled = true;
       unlisten?.();
     };
-  }, []);
+  }, [refreshStats]);
 
   // 加载配置（可重试：loadError 置位后由错误视图的重试按钮重新触发）
   const retryLoad = useCallback(() => {
@@ -200,16 +205,6 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
         setLoadError(String(e));
       });
   }, [setConfig, loadError]);
-
-  // 加载使用统计。一次拉 30 天逐日序列：趋势卡的「近7天/近30天」两个
-  // 档位共用同一份 IPC 数据（7 天档前端切片），自定义档位才再发请求。
-  const refreshStats = useCallback(() => {
-    setStatsLoading(true);
-    getStats(30)
-      .then(setStats)
-      .catch(() => setStats(null))
-      .finally(() => setStatsLoading(false));
-  }, []);
 
   useEffect(() => {
     if (activeTab !== "general") return;
