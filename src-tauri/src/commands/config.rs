@@ -399,12 +399,26 @@ mod tests {
         assert!(validate_value("reduce_transparency", "true").is_ok());
         assert!(validate_value("history_limit", "200").is_ok());
         assert!(validate_value("history_limit", "50").is_ok());
-        // 导出目录：绝对路径与「清空 = 每次询问」都放行
-        assert!(
-            validate_value("export_dir", r"C:\Users\welle\Documents").is_ok(),
-            "绝对路径应放行"
-        );
+        // 导出目录：「清空 = 每次询问」恒放行；绝对路径的正向用例按平台
+        // 构造 —— Windows 的绝对以盘符开头，Unix 的绝对以 / 开头，
+        // 「绝对」判定本身是 std::path 的平台语义
         assert!(validate_value("export_dir", "").is_ok());
+        {
+            let absolute = if cfg!(windows) {
+                r"C:\Users\welle\Documents".to_string()
+            } else {
+                "/home/welle/Documents".to_string()
+            };
+            assert!(
+                validate_value("export_dir", &absolute).is_ok(),
+                "绝对路径应放行: {}",
+                absolute
+            );
+            assert!(
+                std::path::Path::new(&absolute).is_absolute(),
+                "测试自身的前提：构造的样本必须是平台绝对路径"
+            );
+        }
         assert!(validate_value("deepl_api_key", "some-key:fx").is_ok());
         assert!(validate_value("tencent_secret_id", "AKIDxx").is_ok());
     }
