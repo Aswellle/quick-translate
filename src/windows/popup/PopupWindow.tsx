@@ -172,11 +172,21 @@ export function PopupWindow() {
   // 表现为滚动或其绑定热键）。错误出现即激活窗口，下方已有的 Esc/空格
   // 关闭 handler 随之生效。成功结果仍保持被动态不抢焦点：翻译弹窗出现
   // 时用户往往正在原应用里继续输入，抢焦点会打断打字（Phase 8b 承诺）。
+  //
+  // inFlightRef 防重入：StrictMode 双调用或连续错误各自跑一遍 effect，
+  // activatePopup 幂等但每次都是一次 IPC；在途期间不重复发起。失败只
+  // 记日志不重试——激活失败时用户仍有点击路径可转交互态。
+  const activationInFlight = useRef(false);
   useEffect(() => {
     if (status !== "error") return;
+    if (activationInFlight.current) return;
+    activationInFlight.current = true;
     activatePopup()
       .then(() => setActivated(true))
-      .catch((err) => console.error("[PopupWindow] 错误浮窗激活失败:", err));
+      .catch((err) => console.error("[PopupWindow] 错误浮窗激活失败:", err))
+      .finally(() => {
+        activationInFlight.current = false;
+      });
   }, [status]);
 
   // ── 窗口尺寸的唯一归属：内容/几何变化后统一在此调整 ──
