@@ -1,5 +1,12 @@
 // src/windows/settings/SettingsWindow.tsx
 // 设置面板 — macOS 简约明亮灵动风格
+//
+// 配置模型（2026-10-30 重构）：**即时生效**。
+// 每一项配置在状态变化时独立持久化并触发后端副作用 —— 开关在切换瞬间
+// 生效，下拉在选中新值时生效，输入框在编辑光标离开时生效；就近的
+// 「已生效」提示与底部状态栏/toast 双通道反馈。底部不再有统一的
+// 「保存」按钮：一个面板两种心智模型（一半即时、一半等保存）会让用户
+// 无法预判改动何时生效，关窗即丢的困惑正是由此而来。
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
@@ -35,29 +42,6 @@ const CREDENTIAL_KEYS = PROVIDERS
   .filter((p) => p.requiresApiKey)
   .flatMap((p) => p.credentialFields.map((f) => f.key));
 
-// dirty 判定涉及的键：非凭证配置键（凭证输入框从空白开始，语义是
-// 「输入新值覆盖」，不构成「未保存的更改」）；theme 即时持久化，同样排除
-const DIRTY_KEYS: Array<keyof AppConfig> = [
-  "target_lang",
-  "provider",
-  "auto_start",
-  "history_limit",
-  "fallback_enabled",
-  "clipboard_monitor_enabled",
-  "reduce_transparency",
-];
-
-/** 把 draft 压成 dirty 键的快照串（供 useMemo 浅比较） */
-function dirtyBaseline(cfg: AppConfig): string {
-  return DIRTY_KEYS.map((k) => `${String(k)}=${String((cfg as unknown as Record<string, unknown>)[k])}`).join("|");
-}
-
-/** draft 是否与基准有差异 */
-function snapshotDirtyKeys(cfg: AppConfig, baseline: string): boolean {
-  if (!baseline) return false;
-  return dirtyBaseline(cfg) !== baseline;
-}
-
 type TabId = "general" | "provider" | "about";
 
 export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provider" | "about" }) {
@@ -72,8 +56,9 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
   // 配置加载失败时置位：只弹 toast 的话，3.5 秒后用户面对的是永久的
   // 「加载中…」—— draft 恒为 null，窗口只能关掉重开
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  // 底部状态栏：最近一次配置生效动作的结果（"idle" 无话可说）
   const [saveStatus, setSaveStatus] = useState<"idle" | "ok" | "err">("idle");
+  const [saveStatusText, setSaveStatusText] = useState<string>("");
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, boolean | null>>({});
   const [stats, setStats] = useState<StatsResult | null>(null);
@@ -88,15 +73,6 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
   // 诊断计数不主动广播，随状态变化时一并刷新。
   const [runtimeSnapshot, setRuntimeSnapshot] = useState<RuntimeStatusSnapshot | null>(null);
   const [runtimeDiag, setRuntimeDiag] = useState<RuntimeDiagnostics | null>(null);
-
-  // 未保存更改追踪：draft 与「已保存基准」的浅比较（仅非凭证键）。
-  // 主题已改为即时持久化，不参与 dirty 判定 —— 否则刚切完主题保存栏
-  // 会永远挂着「未保存」徽章。
-  const [savedBaseline, setSavedBaseline] = useState<string>("");
-  const dirty = useMemo(() => {
-    if (!draft) return false;
-    return snapshotDirtyKeys(draft, savedBaseline);
-  }, [draft, savedBaseline]);
 
   useEffect(() => {
     let cancelled = false;
@@ -198,7 +174,6 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
         const mergedCfg = cleaned as unknown as AppConfig;
         setConfig(mergedCfg);
         setDraft(mergedCfg);
-        setSavedBaseline(dirtyBaseline(mergedCfg));
       })
       .catch((e) => {
         toast("加载配置失败：" + String(e), "error");
@@ -222,105 +197,113 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
   );
   useTauriEvent(EVENTS.HISTORY_CHANGED, onHistoryChanged);
 
-  const updateDraft = useCallback(<K extends keyof AppConfig>(key: K, value: AppConfig[K]) => {
-    setDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
-    // 凭证字段的测试结果随输入失效：否则「验证失败」徽章在用户改完
-    // 密钥后仍然挂着，指向一个已不存在的凭证状态（Onboarding 会重置，
-    // 设置页此前不会 —— 两个入口对同一操作行为不一致）
-    if (key === "theme") return;
-    setTestResults((prev) => {
-      const providerId = PROVIDERS.find((p) =>
-        p.credentialFields.some((f) => f.key === key)
-      )?.id;
-      if (!providerId || !(providerId in prev)) return prev;
-      const next = { ...prev };
-      delete next[providerId];
-      return next;
-    });
-  }, []);
+  /** 各配置项生效后的用户可读名称（状态栏/toast 文案用） */
+  const CONFIG_LABELS: Record<string, string> = {
+    target_lang: "目标语言",
+    provider: "默认翻译源",
+    theme: "界面主题",
+    auto_start: "开机自启动",
+    history_limit: "历史记录上限",
+    fallback_enabled: "自动 Fallback",
+    clipboard_monitor_enabled: "剪贴板监控",
+    reduce_transparency: "减少透明效果",
+    export_dir: "导出保存位置",
+  };
 
-  // 剪贴板监控开关走与其他行一致的草稿模型：设置页此前一半字段即时
-  // 持久化、一半字段等「保存」，两种心智模型并存会让用户无法预判
-  // 「改动何时生效」（关窗不保存后行为回退正是典型的困惑来源）
-  const handleClipboardToggle = useCallback(
-    (enabled: boolean) => {
-      updateDraft("clipboard_monitor_enabled", enabled);
+  /** 凭证字段在加载时已被清空；这里还原哪些键属于凭证（即时生效模型下
+      同样走单键持久化，只是不做 toast——测试连接按钮的反馈已足够） */
+  const isCredentialKey = (key: string) =>
+    (CREDENTIAL_KEYS as string[]).includes(key);
+
+  /**
+   * 即时生效的统一入口：本地草稿更新 + 单键持久化 + 后端副作用。
+   *
+   * 失败回滚草稿（界面显示必须与后端持久值一致）；成功按 `feedback`
+   * 决定反馈形态——`"inline"` 在状态栏记一笔（开关行已在按钮就近显示
+   * 「已生效」，不重复 toast），`"toast"` 底部弹 toast（下拉/失焦类），
+   * `null` 静默（凭证字段）。
+   */
+  const applyConfig = useCallback(
+    async <K extends keyof AppConfig>(
+      key: K,
+      value: AppConfig[K],
+      feedback: "inline" | "toast" | null
+    ) => {
+      const previous = draftRef.current
+        ? ((draftRef.current as unknown as Record<string, unknown>)[key as string])
+        : undefined;
+      setDraft((prev) => (prev ? { ...prev, [key]: value } : prev));
+      // 凭证字段的测试结果随输入失效：否则「验证失败」徽章在用户改完
+      // 密钥后仍然挂着，指向一个已不存在的凭证状态
+      setTestResults((prev) => {
+        const providerId = PROVIDERS.find((p) =>
+          p.credentialFields.some((f) => f.key === key)
+        )?.id;
+        if (!providerId || !(providerId in prev)) return prev;
+        const next = { ...prev };
+        delete next[providerId];
+        return next;
+      });
+      try {
+        await setConfigBatch([[key as string, String(value)]]);
+        // 主题即时广播（其余键的后端副作用在 set_config 管线内已处理）
+        if (key === "theme") applyTheme(value as AppConfig["theme"]);
+        if (feedback === "toast") {
+          toast(`${CONFIG_LABELS[key as string] ?? String(key)}已生效`, "success");
+        } else if (feedback === "inline") {
+          setSaveStatus("ok");
+          setSaveStatusText(
+            `${CONFIG_LABELS[key as string] ?? String(key)}${String(value) === "true" ? "已开启" : String(value) === "false" ? "已关闭" : "已生效"}`
+          );
+        }
+      } catch (err) {
+        // 持久化失败：草稿退回原值，界面与后端保持一致
+        setDraft((prev) =>
+          prev ? { ...prev, [key]: previous as AppConfig[K] } : prev
+        );
+        setSaveStatus("err");
+        setSaveStatusText(
+          `${CONFIG_LABELS[key as string] ?? String(key)}生效失败：已还原`
+        );
+        toast(
+          `${CONFIG_LABELS[key as string] ?? String(key)}生效失败，已还原原值`,
+          "error"
+        );
+        console.error("[SettingsWindow] 配置生效失败:", key, err);
+      }
     },
-    [updateDraft]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
   );
 
-  // 保存
-  const handleSave = useCallback(async () => {
-    if (!draft) return;
-    setSaving(true);
-    setSaveStatus("idle");
-    try {
-      // 非凭证字段：始终包含
-      const updates: [string, string][] = [
-        ["target_lang",               draft.target_lang],
-        ["provider",                  draft.provider],
-        ["auto_start",                String(draft.auto_start)],
-        ["history_limit",             String(draft.history_limit)],
-        ["theme",                     draft.theme],
-        ["fallback_enabled",          String(draft.fallback_enabled)],
-        ["clipboard_monitor_enabled", String(draft.clipboard_monitor_enabled)],
-        ["reduce_transparency",       String(draft.reduce_transparency)],
-      ];
-      // 凭证字段：仅在用户本次实际输入了新值时才包含，防止 masked 占位符写回破坏原有凭证
-      for (const key of CREDENTIAL_KEYS) {
-        const newVal = ((draft as unknown) as Record<string, string>)[key]?.trim();
-        if (newVal) updates.push([key, newVal]);
-      }
-      await setConfigBatch(updates);
-      setConfig(draft);
-      applyTheme(draft.theme);
-      setSavedBaseline(dirtyBaseline(draft));
-      setSaveStatus("ok");
-      toast("设置已保存", "success");
-      setTimeout(() => setSaveStatus("idle"), 2500);
-    } catch (err: unknown) {
-      setSaveStatus("err");
-      // 计划第 52 节：错误码 ≠ 用户文案。后端 AppError 序列化为 {code, message}，
-      // 优先查 ERROR_MESSAGES 映射表，查不到才退回原始 message。
-      const e = err as { code?: string; message?: string };
-      const msg =
-        (e?.code && ERROR_MESSAGES[e.code]) ||
-        e?.message ||
-        (err instanceof Error ? err.message : String(err));
-      toast("保存失败：" + msg, "error");
-    } finally {
-      setSaving(false);
-    }
-  }, [draft, setConfig]);
+  // draft 的同步镜像：applyConfig 的回滚分支要读「改动前」的值
+  const draftRef = useRef<AppConfig | null>(null);
+  draftRef.current = draft;
 
-  // Ctrl+S / Cmd+S 触发保存：桌面应用的保存肌肉记忆。只在非「关于」Tab
-  // 时拦截（关于页没有草稿，让浏览器默认行为或系统层处理）
-  useEffect(() => {
-    if (activeTab === "about") return;
-    const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
-        e.preventDefault();
-        if (!saving) void handleSave();
-      }
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [activeTab, saving, handleSave]);
+  // 兼容旧 prop 名：子组件仍以 onChange 命名回调
+  const updateDraft = useCallback(
+    <K extends keyof AppConfig>(key: K, value: AppConfig[K]) => {
+      void applyConfig(key, value, isCredentialKey(key as string) ? null : "toast");
+    },
+    [applyConfig]
+  );
+
+  // 开关行的即时生效回调：反馈形态为 inline（按钮就近显示「已生效」，
+  // 状态栏同步记一笔），不重复弹 toast
+  const handleClipboardToggle = useCallback(
+    (enabled: boolean) => {
+      void applyConfig("clipboard_monitor_enabled", enabled, "inline");
+    },
+    [applyConfig]
+  );
 
   // 测试翻译源
   const handleTest = useCallback(async (providerId: string) => {
     setTestingId(providerId);
     setTestResults((prev) => ({ ...prev, [providerId]: null }));
     try {
-      // 测试前只保存该 provider 中用户本次实际填入的凭证（非空）
-      // 不发送空值，否则会清除后端已保存的凭证
-      const providerMeta = PROVIDERS.find((p) => p.id === providerId);
-      if (providerMeta && draft) {
-        const credUpdates: [string, string][] = providerMeta.credentialFields
-          .filter(f => !!((draft as unknown as Record<string, string>)[f.key]?.trim()))
-          .map(f => [f.key, (draft as unknown as Record<string, string>)[f.key]]);
-        if (credUpdates.length > 0) await setConfigBatch(credUpdates);
-      }
+      // 凭证已在输入框 blur 时逐字段持久化（见 CredentialField），
+      // 这里直接发起验证
       const ok = await validateProvider(providerId);
       setTestResults((prev) => ({ ...prev, [providerId]: ok }));
       if (!ok) toast(`${PROVIDERS.find((p) => p.id === providerId)?.name} 凭证无效`, "warning");
@@ -331,7 +314,7 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
     } finally {
       setTestingId(null);
     }
-  }, [draft]);
+  }, []);
 
   if (loadError) {
     return (
@@ -404,7 +387,7 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
       {/* ── 内容区（Tab 切换 150ms 淡入，消除硬切感）── */}
       <div key={activeTab} className="flex-1 overflow-y-auto px-6 py-5 animate-fade-in">
         {activeTab === "general" && (
-          <GeneralTab draft={draft} onChange={updateDraft} onClipboardToggle={handleClipboardToggle} stats={stats} statsLoading={statsLoading} runtimeSnapshot={runtimeSnapshot} runtimeDiag={runtimeDiag} providerStatus={providerStatus} onNavigate={setActiveTab} />
+          <GeneralTab draft={draft} onChange={updateDraft} applyConfig={(key, value, feedback) => void applyConfig(key, value, feedback)} onClipboardToggle={handleClipboardToggle} stats={stats} statsLoading={statsLoading} runtimeSnapshot={runtimeSnapshot} runtimeDiag={runtimeDiag} providerStatus={providerStatus} onNavigate={setActiveTab} />
         )}
         {activeTab === "provider" && (
           <ProviderTab
@@ -420,42 +403,42 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
         {activeTab === "about" && <AboutTab />}
       </div>
 
-      {/* ── 底部保存栏 ── */}
-      {/* 「关于」页无草稿配置，不显示保存栏 */}
-      {activeTab !== "about" && (
-        <div className="px-6 py-3.5 bg-[var(--surface-primary)] dark:bg-[var(--surface-secondary)] border-t border-[var(--border-secondary)] flex items-center justify-end gap-3">
-          {/* 未保存提示：改了配置却看不到任何「待保存」迹象，是草稿模型
-              最大的心智成本 —— 徽章 + 按钮=主色双通道提示 */}
-          {saveStatus === "idle" && dirty && (
-            <span className="text-[11.5px] font-medium text-amber-600 dark:text-amber-500 bg-amber-50 dark:bg-amber-950/25 px-2 py-0.5 rounded-full animate-fade-in">
-              有未保存的更改
-            </span>
-          )}
-          {saveStatus === "ok" && (
-            <span className="text-[12px] text-green-500 flex items-center gap-1">
-              <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none">
-                <path d="M3 8.5l3.5 3.5 6.5-7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-              已保存
-            </span>
-          )}
-          {saveStatus === "err" && (
-            <span className="text-[12px] text-red-500">保存失败</span>
-          )}
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className={[
-              "px-4 py-1.5 rounded-lg text-[12.5px] font-medium transition-all active:scale-95 disabled:opacity-40",
-              dirty && saveStatus === "idle"
-                ? "bg-[var(--system-blue)] text-white shadow-sm hover:brightness-110"
-                : "bg-[var(--system-blue)]/80 text-white hover:brightness-105",
-            ].join(" ")}
+      {/* ── 底部状态栏（原「保存栏」重构而来）──
+          配置模型已改为逐项即时生效，统一的保存按钮没有存在意义；
+          这条底栏保留为内容容器：常态展示最近一次生效动作的结果
+          （哪一项、开了还是关了），失败时展示失败项与已还原的事实。
+          空闲时显示应用身份，让底栏不显得像一块无意义的水泥。 */}
+      <div className="px-6 py-2 bg-[var(--surface-primary)] dark:bg-[var(--surface-secondary)] border-t border-[var(--border-secondary)] flex items-center justify-between gap-3 min-h-[36px]">
+        {saveStatus === "idle" ? (
+          <p className="text-[11.5px] text-[var(--text-tertiary)] truncate">
+            配置更改即时生效
+          </p>
+        ) : saveStatus === "ok" ? (
+          <p
+            key={saveStatusText + "-ok"}
+            className="text-[11.5px] font-medium text-green-600 dark:text-green-500 flex items-center gap-1 animate-fade-in truncate"
           >
-            {saving ? "保存中…" : "保存"}
-          </button>
-        </div>
-      )}
+            <svg className="w-3 h-3 shrink-0" viewBox="0 0 16 16" fill="none">
+              <path d="M3 8.5l3.5 3.5 6.5-7" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            {saveStatusText}
+          </p>
+        ) : (
+          <p
+            key={saveStatusText + "-err"}
+            className="text-[11.5px] font-medium text-red-500 flex items-center gap-1 animate-fade-in truncate"
+          >
+            <svg className="w-3 h-3 shrink-0" viewBox="0 0 16 16" fill="none">
+              <circle cx="8" cy="8" r="6" stroke="currentColor" strokeWidth="1.5" />
+              <path d="M8 5v3.5M8 10.5v.01" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+            {saveStatusText}
+          </p>
+        )}
+        <p className="text-[11px] text-[var(--text-tertiary)] shrink-0">
+          QuickTranslate
+        </p>
+      </div>
     </div>
   );
 }
@@ -465,6 +448,7 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
 function GeneralTab({
   draft,
   onChange,
+  applyConfig,
   onClipboardToggle,
   stats,
   statsLoading,
@@ -475,6 +459,12 @@ function GeneralTab({
 }: {
   draft: AppConfig;
   onChange: <K extends keyof AppConfig>(key: K, value: AppConfig[K]) => void;
+  /** 即时生效入口： GeneralTab 内的控件（历史上限等）直接走它 */
+  applyConfig: <K extends keyof AppConfig>(
+    key: K,
+    value: AppConfig[K],
+    feedback: "inline" | "toast" | null
+  ) => void;
   onClipboardToggle: (enabled: boolean) => void;
   stats: StatsResult | null;
   statsLoading: boolean;
@@ -509,6 +499,7 @@ function GeneralTab({
             value={draft.target_lang}
             onChange={(e) => onChange("target_lang", e.target.value as AppConfig["target_lang"])}
             className="input-field w-40"
+            // 即时生效：选中新值即持久化（updateDraft → applyConfig toast）
           >
             {SUPPORTED_LANGUAGES.map((l) => (
               <option key={l.code} value={l.code}>
@@ -521,19 +512,9 @@ function GeneralTab({
           <select
             id="setting-theme"
             value={draft.theme}
-            onChange={(e) => {
-              const v = e.target.value as AppConfig["theme"];
-              onChange("theme", v);
-              // 主题即时持久化 + 广播：历史/浮窗等其它窗口依赖
-              // theme-changed 广播刷新，等「保存」按钮意味着用户切完主题
-              // 别的窗口纹丝不动（实机 2026-10-20 验证的历史面板 bug）。
-              // 主题是安全键（无凭证、无破坏性），即时生效符合直觉。
-              applyTheme(v);
-              setConfigBatch([["theme", v]]).catch((err) => {
-                console.error("[SettingsWindow] 主题即时保存失败:", err);
-                toast("主题保存失败：" + String(err), "error");
-              });
-            }}
+            // 主题即时持久化 + 广播：历史/浮窗等其它窗口依赖
+            // theme-changed 广播刷新（applyConfig 内对 theme 键补发 applyTheme）。
+            onChange={(e) => onChange("theme", e.target.value as AppConfig["theme"])}
             className="input-field w-32"
           >
             <option value="system">跟随系统</option>
@@ -543,30 +524,37 @@ function GeneralTab({
         </SettingsRow>
       </SettingsSection>
 
-      {/* 行为 */}
+      {/* 行为 —— 全部即时生效：开关切换即持久化+触发后端副作用，
+          「已生效」提示就近显示在按钮旁；下拉选值即生效并弹 toast；
+          数值输入在编辑光标离开输入框时生效 */}
       <SettingsSection label="行为">
-        <SettingsRow label="开机自启动">
-          <Toggle value={draft.auto_start} onChange={(v) => onChange("auto_start", v)} />
-        </SettingsRow>
-        <SettingsRow label="剪贴板监控" hint="选中文本并复制后自动弹出翻译">
-          <Toggle value={draft.clipboard_monitor_enabled} onChange={onClipboardToggle} />
-        </SettingsRow>
-        <SettingsRow label="自动 Fallback" hint="主翻译源失败时自动切换备用">
-          <Toggle value={draft.fallback_enabled} onChange={(v) => onChange("fallback_enabled", v)} />
-        </SettingsRow>
-        <SettingsRow
+        <ToggleRow
+          label="开机自启动"
+          value={draft.auto_start}
+          onApply={(v) => void applyConfig("auto_start", v, "inline")}
+        />
+        <ToggleRow
+          label="剪贴板监控"
+          hint="选中文本并复制后自动弹出翻译"
+          value={draft.clipboard_monitor_enabled}
+          onApply={onClipboardToggle}
+        />
+        <ToggleRow
+          label="自动 Fallback"
+          hint="主翻译源失败时自动切换备用"
+          value={draft.fallback_enabled}
+          onApply={(v) => void applyConfig("fallback_enabled", v, "inline")}
+        />
+        <ToggleRow
           label="减少透明效果"
           hint="浮窗改用接近不透明的底色，并撤掉系统原生玻璃材质。系统级「降低透明度」偏好始终优先，此项用于系统偏好无法被读取的平台（如 macOS）"
-        >
-          <Toggle
-            value={draft.reduce_transparency}
-            onChange={(v) => onChange("reduce_transparency", v)}
-          />
-        </SettingsRow>
-        <HistoryLimitRow value={draft.history_limit} onChange={onChange} />
+          value={draft.reduce_transparency}
+          onApply={(v) => void applyConfig("reduce_transparency", v, "inline")}
+        />
+        <HistoryLimitRow value={draft.history_limit} onApply={(v) => void applyConfig("history_limit", v, "toast")} />
         <ExportDirRow
           value={draft.export_dir}
-          onChange={(v) => onChange("export_dir", v)}
+          onChange={(v) => void applyConfig("export_dir", v, "toast")}
         />
       </SettingsSection>
 
@@ -933,31 +921,51 @@ function TrendCard({ daily30 }: { daily30: StatsResult["daily"] }) {
 /**
  * 历史记录上限行：越界输入会被钳制，但静默改值会让用户疑惑「我填的
  * 5000 怎么变成了 1000」—— 钳制发生时给出一行说明。
+ * 即时生效：编辑光标离开输入框（blur）且值确实变化时才提交，
+ * 输入过程中不触发任何持久化。
  */
 function HistoryLimitRow({
   value,
-  onChange,
+  onApply,
 }: {
   value: number;
-  onChange: <K extends keyof AppConfig>(key: K, value: AppConfig[K]) => void;
+  onApply: (v: number) => void;
 }) {
   const [clamped, setClamped] = useState(false);
+  // blur 提交的对照基准：只在本轮输入与持久值不同时才发请求
+  const [editValue, setEditValue] = useState<string | null>(null);
+
+  const display = editValue ?? String(value);
 
   return (
-    <SettingsRow label="历史记录上限" htmlFor="setting-history-limit" hint={clamped ? "超出 50–1000 范围，已自动调整" : "50–1000 条"}>
+    <SettingsRow
+      label="历史记录上限"
+      htmlFor="setting-history-limit"
+      hint={clamped ? "超出 50–1000 范围，已自动调整" : "50–1000 条"}
+    >
       <input
         id="setting-history-limit"
         type="number"
         min={50}
         max={1000}
-        value={value}
+        value={display}
         onChange={(e) => {
-          const raw = e.target.value;
           // 清空或非法输入回退默认 200；越界值钳制到有效区间
+          const raw = e.target.value;
           const n = parseInt(raw) || 200;
           const clampedValue = Math.min(1000, Math.max(50, n));
           setClamped(n !== clampedValue);
-          onChange("history_limit", clampedValue);
+          setEditValue(String(clampedValue));
+        }}
+        onBlur={() => {
+          if (editValue !== null && editValue !== String(value)) {
+            onApply(parseInt(editValue) || 200);
+          }
+          setEditValue(null);
+        }}
+        onKeyDown={(e) => {
+          // Enter 等价于离开输入框
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
         }}
         className="input-field w-24 text-center"
       />
@@ -1259,6 +1267,59 @@ const STATE_TONE_CLASS: Record<string, string> = {
   muted: "text-[var(--text-secondary)]",
 };
 
+/**
+ * 单个凭证字段：输入纯本地、blur 时提交。
+ *
+ * 不逐键持久化：凭证是长随机串，每键一次 IPC + 一次 AES 加密写库纯属
+ * 浪费，且中途的半截密钥会触发后端用不完整凭证重建 provider 实例。
+ * 留空失焦不提交 —— 「留空 = 保持已配置值不变」的语义由后端掩码过滤
+ * 与本组件共同保证。
+ */
+function CredentialField({
+  field,
+  value,
+  configured,
+  onCommit,
+}: {
+  field: (typeof PROVIDERS)[number]["credentialFields"][number];
+  value: string;
+  configured: boolean;
+  onCommit: (v: string) => void;
+}) {
+  const [editValue, setEditValue] = useState<string | null>(null);
+
+  return (
+    <div>
+      <label className="text-[12px] font-medium text-[var(--text-secondary)] mb-1 block">
+        {field.label}
+      </label>
+      <input
+        type={field.type}
+        value={editValue ?? ""}
+        onChange={(e) => setEditValue(e.target.value)}
+        onBlur={() => {
+          if (editValue !== null) {
+            const trimmed = editValue.trim();
+            if (trimmed) onCommit(trimmed);
+            setEditValue(null);
+          }
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+        }}
+        placeholder={
+          configured
+            ? "已配置（留空保持不变，输入新值覆盖）"
+            : field.placeholder
+        }
+        className="input-field w-full font-mono text-xs"
+        autoComplete="off"
+        spellCheck={false}
+      />
+    </div>
+  );
+}
+
 function ProviderCard({
   provider,
   draft,
@@ -1369,26 +1430,17 @@ function ProviderCard({
             </div>
           )}
 
-          {/* 凭证输入 */}
+          {/* 凭证输入 —— 即时生效模型下的凭证字段：输入过程纯本地，
+              编辑光标离开输入框（blur）时才静默持久化该字段并触发
+              后端重建 provider 实例；留空失焦不提交（留空 = 保持不变） */}
           {provider.credentialFields.map((field) => (
-            <div key={field.key}>
-              <label className="text-[12px] font-medium text-[var(--text-secondary)] mb-1 block">
-                {field.label}
-              </label>
-              <input
-                type={field.type}
-                value={((draft as unknown) as Record<string, string>)[field.key] ?? ""}
-                onChange={(e) => onChange(field.key as keyof AppConfig, e.target.value as AppConfig[keyof AppConfig])}
-                placeholder={
-                  maskedCredentials[field.key]
-                    ? "已配置（留空保持不变，输入新值覆盖）"
-                    : field.placeholder
-                }
-                className="input-field w-full font-mono text-xs"
-                autoComplete="off"
-                spellCheck={false}
-              />
-            </div>
+            <CredentialField
+              key={field.key}
+              field={field}
+              value={((draft as unknown) as Record<string, string>)[field.key] ?? ""}
+              configured={!!maskedCredentials[field.key]}
+              onCommit={(v) => onChange(field.key as keyof AppConfig, v as AppConfig[keyof AppConfig])}
+            />
           ))}
 
           {/* 测试按钮 */}
@@ -1474,11 +1526,82 @@ function SettingsRow({
   );
 }
 
+/**
+ * 开关行：Toggle + 就近的生效状态提示。
+ *
+ * 状态提示紧贴按钮右侧的空白区域：11.5px / medium / 语义色
+ * （成功绿、失败红）。此前「已保存」只出现在底部保存栏——用户盯着
+ * 开关看时视线要跨过整屏去找结果。busy 期间开关禁用防连点。
+ */
+export function ToggleRow({
+  label,
+  hint,
+  value,
+  onApply,
+}: {
+  label: string;
+  hint?: string;
+  value: boolean;
+  onApply: (v: boolean) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<null | { ok: boolean; text: string }>(null);
+  // 显示自己最近一次的结果：连续切换时新结果覆盖旧结果
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const apply = useCallback(
+    (v: boolean) => {
+      if (busy) return;
+      setBusy(true);
+      if (timerRef.current) clearTimeout(timerRef.current);
+      setStatus({ ok: true, text: v ? "已开启" : "已关闭" });
+      try {
+        onApply(v);
+        // 状态提示驻留 2.5s 后淡出（下一次切换会立即覆盖）
+        timerRef.current = setTimeout(() => setStatus(null), 2500);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, onApply]
+  );
+
+  return (
+    <SettingsRow label={label} hint={hint}>
+      <div className="flex items-center gap-2.5">
+        {status && (
+          <span
+            role="status"
+            className={[
+              "text-[11.5px] font-medium animate-fade-in",
+              status.ok
+                ? "text-green-600 dark:text-green-500"
+                : "text-red-500",
+            ].join(" ")}
+          >
+            {status.text}
+          </span>
+        )}
+        <Toggle value={value} onChange={apply} busy={busy} />
+      </div>
+    </SettingsRow>
+  );
+}
+
 // macOS 风格的 Toggle 开关
-function Toggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
+function Toggle({
+  value,
+  onChange,
+  busy = false,
+}: {
+  value: boolean;
+  onChange: (v: boolean) => void;
+  busy?: boolean;
+}) {
   return (
     <button
       onClick={() => onChange(!value)}
+      disabled={busy}
       role="switch"
       aria-checked={value}
       className={[

@@ -746,6 +746,13 @@ select.input-field {
 }
 .animate-fade-in { animation: fadeInSoft 150ms ease-out both; }
 
+/* 列表后台刷新进度条：细线往复扫过，替代整屏骨架屏切换的撕裂感 */
+@keyframes refreshBar {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+.animate-refresh-bar { animation: refreshBar 900ms ease-in-out infinite; }
+
 /* 引导向导：步骤切换（fade + 上浮，略带弹性） */
 @keyframes stepIn {
   from { opacity: 0; transform: translateY(14px) scale(0.99); }
