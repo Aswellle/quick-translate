@@ -71,7 +71,7 @@ pub fn init(app: &AppHandle) -> Result<(), AppError> {
                 // 的肌肉记忆是左键就有反应 —— 此前这里完全无操作，应用
                 // 的全部功能都要先右键才能看到
                 if let Some(app) = tray.app_handle().get_webview_window("history") {
-                    show_and_focus(&app);
+                    super::window_util::show_and_focus(&app);
                 } else {
                     open_history_window(tray.app_handle());
                 }
@@ -392,24 +392,10 @@ pub fn open_settings_window(app: &AppHandle) {
 /// 窗口已存在时发 `settings-navigate` 事件让前端切 Tab；不存在时通过
 /// URL hash（`#settings/provider`）携带初始 Tab —— 新建窗口的 webview
 /// 是异步加载的，事件会跑在订阅之前，hash 是唯一可靠的传递方式。
-/// 把一个已存在的窗口带到前台。
-///
-/// 只 `show()` + `set_focus()` 对**最小化**的窗口是双重空操作：wry 的
-/// show 是 `SW_SHOW`（不还原最小化），tao 的 set_focus 显式跳过最小化
-/// 窗口。用户最小化过设置/历史窗口后，托盘点「配置翻译源…」就会表现成
-/// 「点了没反应」。先 unminimize 再 show/focus 才是完整语义。
-pub(crate) fn show_and_focus(window: &tauri::WebviewWindow) {
-    if window.is_minimized().unwrap_or(false) {
-        let _ = window.unminimize();
-    }
-    let _ = window.show();
-    let _ = window.set_focus();
-}
-
 pub fn open_provider_settings(app: &AppHandle) {
     use tauri::Emitter;
     if let Some(window) = app.get_webview_window("settings") {
-        show_and_focus(&window);
+        super::window_util::show_and_focus(&window);
         let _ = window.emit(
             "settings-navigate",
             serde_json::json!({ "tab": "provider" }),
@@ -426,7 +412,7 @@ fn open_settings_at(app: &AppHandle, tab: Option<&str>) {
         None => "index.html#settings".to_string(),
     };
     if let Some(window) = app.get_webview_window("settings") {
-        show_and_focus(&window);
+        super::window_util::show_and_focus(&window);
         let _ = window.emit(
             "settings-navigate",
             serde_json::json!({ "tab": tab.unwrap_or("general") }),
@@ -455,7 +441,7 @@ fn open_settings_at(app: &AppHandle, tab: Option<&str>) {
 
 fn open_history_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("history") {
-        show_and_focus(&window);
+        super::window_util::show_and_focus(&window);
         return;
     }
     match WebviewWindowBuilder::new(app, "history", WebviewUrl::App("index.html#history".into()))

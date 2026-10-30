@@ -50,7 +50,7 @@ pub fn run() {
         // 向导/浮窗等窗口创建会偶发失败。第二个实例在此回调后自动退出。
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(wizard) = app.get_webview_window("onboarding") {
-                system::tray::show_and_focus(&wizard);
+                system::window_util::show_and_focus(&wizard);
             }
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
