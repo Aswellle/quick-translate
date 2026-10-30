@@ -8,6 +8,7 @@ import {
   clearHistory,
   exportHistory,
   exportHistoryToFile,
+  getConfig,
   type AppError,
 } from "@/lib/commands";
 import { EVENTS } from "@/lib/constants";
@@ -19,6 +20,7 @@ import { formatAsMarkdown, formatAsHtml } from "@/lib/export";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SearchBar } from "./SearchBar";
 import { HistoryList } from "./HistoryList";
+import { ExportDialog } from "./ExportDialog";
 
 export function HistoryWindow() {
   const {
@@ -42,6 +44,10 @@ export function HistoryWindow() {
   const [confirmClear, setConfirmClear] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportFormat, setExportFormat] = useState<"json" | "markdown" | "html">("markdown");
+  // 导出确认对话框：点「导出」先开框，确认后才落盘
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  // export_dir 配置快照：打开对话框时拉一次，供去向说明展示
+  const [exportDestination, setExportDestination] = useState<string>("");
 
   const loadHistory = useCallback(
     async (query: string, pageNum: number, onlyStarred: boolean) => {
@@ -121,7 +127,30 @@ export function HistoryWindow() {
     setConfirmClear(false);
   }, []);
 
+  // 「导出」按钮：先拉 export_dir 快照并打开确认对话框
+  const handleExportRequest = useCallback(() => {
+    getConfig()
+      .then((cfg) => {
+        setExportDestination(
+          cfg.export_dir
+            ? `直接写入 ${cfg.export_dir}（同名文件自动加时间戳，不覆盖）`
+            : "弹出系统保存对话框，由你选择位置与文件名"
+        );
+        setExportDialogOpen(true);
+      })
+      .catch(() => {
+        // 拉不到配置也允许导出：去向说明降级为默认描述
+        setExportDestination("按当前设置解析（未设置则弹保存对话框）");
+        setExportDialogOpen(true);
+      });
+  }, []);
+
+  const handleExportCancel = useCallback(() => {
+    setExportDialogOpen(false);
+  }, []);
+
   const handleExport = useCallback(async () => {
+    setExportDialogOpen(false);
     setExporting(true);
     try {
       const json = await exportHistory();
@@ -217,7 +246,7 @@ export function HistoryWindow() {
             ))}
           </div>
           <button
-            onClick={handleExport}
+            onClick={handleExportRequest}
             disabled={exporting || total === 0}
             className={[
               "flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-lg border transition-all",
@@ -284,14 +313,27 @@ export function HistoryWindow() {
         </button>
       </div>
 
-      {/* ── 历史列表 ── */}
-      <div className="flex-1 overflow-hidden">
-        {isLoading ? (
-          <LoadingPlaceholder />
-        ) : records.length === 0 ? (
-          <EmptyState hasSearch={!!searchQuery} starredOnly={starredOnly} />
+      {/* ── 历史列表 ──
+          骨架屏只在「首屏且尚无任何数据」时出现：切换收藏/搜索/翻页时
+          旧列表保持原位、isLoading 只压暗禁用分页按钮，数据到达后原位
+          替换 —— 此前每次刷新都整屏卸载旧列表换骨架屏，闪一帧空态或
+          骨架再弹回列表，视觉上是一种僵硬的撕裂。 */}
+      <div className="flex-1 overflow-hidden relative">
+        {records.length === 0 ? (
+          isLoading ? (
+            <LoadingPlaceholder />
+          ) : (
+            <EmptyState hasSearch={!!searchQuery} starredOnly={starredOnly} />
+          )
         ) : (
-          <HistoryList records={records} searchQuery={searchQuery} />
+          <>
+            <HistoryList records={records} searchQuery={searchQuery} />
+            {isLoading && (
+              <div className="absolute inset-x-0 bottom-0 h-0.5 overflow-hidden pointer-events-none">
+                <div className="h-full w-1/3 bg-[var(--system-blue)] animate-refresh-bar" />
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -344,6 +386,21 @@ export function HistoryWindow() {
           confirmLabel="确认清空"
           onConfirm={handleClearConfirm}
           onCancel={handleClearCancel}
+        />
+      )}
+
+      {/* ── 导出确认浮层：格式说明 + 条数 + 去向 ── */}
+      {exportDialogOpen && !exporting && (
+        <ExportDialog
+          format={exportFormat}
+          onFormatChange={setExportFormat}
+          count={total}
+          destination={exportDestination}
+          fileName={`quicktranslate-history-${new Date().toISOString().slice(0, 10)}.${
+            exportFormat === "markdown" ? "md" : exportFormat
+          }`}
+          onConfirm={() => void handleExport()}
+          onCancel={handleExportCancel}
         />
       )}
     </div>
