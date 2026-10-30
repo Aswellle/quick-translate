@@ -558,13 +558,21 @@ mod tests {
             .get_stats_range(now, now - MS_PER_DAY)
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("结束早于开始"), "倒挂区间应被拒绝: {}", err);
+        assert!(
+            err.to_string().contains("结束早于开始"),
+            "倒挂区间应被拒绝: {}",
+            err
+        );
 
         let err = repo
             .get_stats_range(now - 91 * MS_PER_DAY, now)
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("90"), "超过 90 天的区间应被拒绝: {}", err);
+        assert!(
+            err.to_string().contains("90"),
+            "超过 90 天的区间应被拒绝: {}",
+            err
+        );
     }
 
     #[tokio::test]

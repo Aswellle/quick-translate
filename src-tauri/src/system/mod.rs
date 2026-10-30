@@ -5,8 +5,8 @@ pub mod popup_watch;
 pub mod translation;
 pub mod translation_flow;
 pub mod tray;
-pub mod window_util;
 pub mod updater;
+pub mod window_util;
 
 /// WebView2 附加浏览器参数（所有窗口统一使用）。
 ///
