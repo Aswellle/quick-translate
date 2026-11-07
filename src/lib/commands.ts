@@ -194,6 +194,16 @@ export async function clearHistory(): Promise<void> {
   return invoke("clear_history");
 }
 
+/**
+ * 清空翻译缓存，返回删除的条数。
+ *
+ * 与「清空历史」互相独立 —— 缓存条目含原文与译文，用户必须能单独
+ * 清除它而不动历史记录。
+ */
+export async function clearTranslationCache(): Promise<number> {
+  return invoke("clear_translation_cache");
+}
+
 export async function deleteHistoryRecord(id: string): Promise<void> {
   return invoke("delete_history_record", { id });
 }

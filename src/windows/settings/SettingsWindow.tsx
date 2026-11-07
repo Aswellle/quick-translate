@@ -17,6 +17,7 @@ import {
   getStats,
   getStatsRange,
   chooseExportDir,
+  clearTranslationCache,
   openUrl,
   getProviderStatus,
   getRuntimeStatus,
@@ -28,6 +29,7 @@ import {
   type RuntimeStatusSnapshot,
   type RuntimeDiagnostics,
 } from "@/lib/commands";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
 import { toast } from "@/components/ToastManager";
@@ -299,8 +301,7 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
   );
 
   // 测试翻译源
-  const handleTest = useCallback(async (providerId: string) => {
-    setTestingId(providerId);
+  const handleTest = useCallback(async (providerId: string) => {    setTestingId(providerId);
     setTestResults((prev) => ({ ...prev, [providerId]: null }));
     try {
       // 凭证已在输入框 blur 时逐字段持久化（见 CredentialField），
@@ -474,6 +475,22 @@ function GeneralTab({
   providerStatus: Record<string, ProviderStatus>;
   onNavigate: (tab: TabId) => void;
 }) {
+  // ── 清空翻译缓存（历史与缓存独立管理，计划 3.3）──────────────────────
+  const [confirmClearCache, setConfirmClearCache] = useState(false);
+  const [clearingCache, setClearingCache] = useState(false);
+  const handleClearCacheConfirm = useCallback(async () => {
+    setConfirmClearCache(false);
+    setClearingCache(true);
+    try {
+      const deleted = await clearTranslationCache();
+      toast(deleted > 0 ? `已清除 ${deleted} 条缓存` : "缓存本来就是空的", "success");
+    } catch {
+      toast("清空缓存失败，请重试", "error");
+    } finally {
+      setClearingCache(false);
+    }
+  }, []);
+
   return (
     <div className="space-y-4">
       {/* ── 顶部仪表盘：先回答「现在怎么样」，再让用户去调参数 ──
@@ -563,7 +580,19 @@ function GeneralTab({
           value={draft.export_dir}
           onChange={(v) => void applyConfig("export_dir", v, "toast")}
         />
+        <ClearCacheRow onClear={() => setConfirmClearCache(true)} busy={clearingCache} />
       </SettingsSection>
+
+      {/* 清空缓存确认（计划 3.3：用户数据清理必须二次确认并说明影响范围） */}
+      {confirmClearCache && (
+        <ConfirmDialog
+          title="清空翻译缓存？"
+          description="将删除全部离线翻译缓存（含原文与译文），历史记录不受影响。断网时已译内容将无法再从缓存回退显示。"
+          confirmLabel="确认清空"
+          onConfirm={handleClearCacheConfirm}
+          onCancel={() => setConfirmClearCache(false)}
+        />
+      )}
 
       {/* 运行状态（计划第 33/50 节）：消费 Runtime 层快照与诊断计数 */}
       <RuntimeStatusSection snapshot={runtimeSnapshot} diag={runtimeDiag} />
@@ -1502,13 +1531,34 @@ function SettingsSection({ label, children }: { label: string; children: React.R
   );
 }
 
+/**
+ * 清空翻译缓存操作行：确认对话框的触发入口。
+ * 执行与反馈在父组件（handleClearCacheConfirm），本行只负责发起。
+ */
+function ClearCacheRow({ onClear, busy }: { onClear: () => void; busy: boolean }) {
+  return (
+    <SettingsRow
+      label="清空翻译缓存"
+      hint="删除全部离线缓存（含原文与译文）；历史记录不受影响"
+    >
+      <button
+        type="button"
+        onClick={onClear}
+        disabled={busy}
+        className="px-3 py-1.5 rounded-lg text-[12px] font-medium border border-[var(--border-secondary)] text-[var(--text-primary)] hover:bg-[var(--surface-secondary)] transition-colors active:scale-95 disabled:opacity-50 disabled:pointer-events-none"
+      >
+        清空
+      </button>
+    </SettingsRow>
+  );
+}
+
 function SettingsRow({
   label,
   hint,
   htmlFor,
   children,
-}: {
-  label: string;
+}: {  label: string;
   hint?: string;
   /** 传入时 label 渲染为 <label htmlFor>，控件可被标签点击聚焦、屏幕
       阅读器可正确关联 —— 纯开关行（Toggle 自带 role=switch）无需传入 */

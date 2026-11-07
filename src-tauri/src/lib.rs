@@ -338,6 +338,7 @@ pub fn run() {
             commands::history::query_history,
             commands::history::count_history,
             commands::history::clear_history,
+            commands::history::clear_translation_cache,
             commands::history::delete_history_record,
             commands::history::toggle_star_record,
             commands::history::export_history,

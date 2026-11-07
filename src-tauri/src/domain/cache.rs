@@ -224,6 +224,21 @@ impl TranslationCache {
         Ok(())
     }
 
+    /// 清空全部缓存条目，返回删除的条数（供前端反馈「清除了 N 条」）。
+    ///
+    /// 隐私语义（计划 3.3）：缓存条目含原文与译文，属于本地敏感数据，
+    /// 用户必须能单独清掉它而不动历史。存储不可用 → 无可清，按 0 处理。
+    pub async fn clear_and_count(&self) -> Result<i64, AppError> {
+        let Some(conn) = self.conn() else {
+            return Ok(0);
+        };
+        let conn = conn.lock().await;
+        let deleted = conn
+            .execute("DELETE FROM translation_cache", [])
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+        Ok(deleted as i64)
+    }
+
     /// 测试用：当前条目数
     #[cfg(test)]
     pub async fn len(&self) -> i64 {
@@ -295,6 +310,22 @@ mod tests {
         let hit = c.get("hello", "zh").await.unwrap().expect("应命中");
         assert_eq!(hit.translated_text, "你好");
         assert_eq!(hit.provider, "deepl");
+    }
+
+    /// 清空只删缓存：条目归零、计数如实返回，且之后再写仍正常（表未被破坏）。
+    #[tokio::test]
+    async fn clear_and_count_empties_only_the_cache() {
+        let c = fast();
+        put(&c, "hello", "zh", "你好", "deepl").await;
+        put(&c, "world", "zh", "世界", "deepl").await;
+
+        assert_eq!(c.clear_and_count().await.unwrap(), 2);
+        assert_eq!(c.len().await, 0, "清空后条目必须归零");
+        assert_eq!(c.clear_and_count().await.unwrap(), 0, "重复清空返回 0");
+
+        // 表仍然可用：清空后的写入/读取照常
+        put(&c, "hello", "zh", "你好", "deepl").await;
+        assert!(c.get("hello", "zh").await.unwrap().is_some());
     }
 
     #[tokio::test]
