@@ -4,22 +4,24 @@
 - Branch: main
 - Base commit: b64b04e（Merge pull request #80）
 - App version: 0.9.0
-- Current task: Task 09 手动翻译入口第一小步（完成：来源类型贯通）；剩余为手动翻译 UI 入口
+- Current task: Task 09 手动翻译入口（完成）；下一步 Task 10 术语表或缓存开关（待定）
 - Working tree: 干净
 - 执行依据: docs/QUICK_TRANSLATE_AI_AGENT_DEVELOPMENT_PLAN.md（2026-11-07 修订）
 - 测试清单: docs/TEST_INVENTORY.md
 
 ## Completed
 
-### 2026-11-07 — Task 09 统一手动翻译入口（第一小步：来源类型贯通）
-- 核验结论：`translate_text` 命令已存在（设置面板测试翻译用）——走同一翻译引擎（fallback/熔断/8s 预算一致）、同一落盘管道（有界队列 + 单 worker），验收「手动与剪贴板走同一核心业务」「不改变剪贴板监控开关」「Fallback 行为一致」已满足。
-- 改动（schema v7）：
-  - `translation_records` 新增 `source` 列（"clipboard" | "manual"），v7 迁移为既有行统一回填 clipboard（v7 之前唯一入口是剪贴板监控）。
-  - `translate_text` 写入 manual；coordinator 剪贴板路径（含敏感覆盖重译）写入 clipboard。
-  - 前端 `TranslationRecord.source` 类型同步（字面量联合类型）。
-- Tests: `cargo test --lib` → 368 passed（+2：v6→v7 升级回填断言、insert/query 来源往返契约）；v1→最新升级测试补来源默认值断言；clippy/fmt PASS；tsc PASS；vitest 64/64
-- Commit: 7930da0
-- 剩余（下一轮）：手动翻译 UI 入口——计划建议「浮窗或主窗口可输入/粘贴文本、选择源/目标语言」。候选方案：A. 托盘菜单「手动翻译…」开独立小窗（不打扰被动浮窗，符合现有窗口管理）；B. 历史窗口顶部加输入区；C. 浮窗输入模式（与被动交互模型冲突大）。倾向 A，待实施时定。另：手动路径暂无全部失败时的缓存回退（coordinator 有），统一时补。
+### 2026-11-07 — Task 09 统一手动翻译入口（完成）
+- 第一小步（7930da0，schema v7）：`translation_records.source` 列（clipboard/manual），既有行回填 clipboard；translate_text 写 manual、coordinator 写 clipboard；前端类型同步。+2 Rust 测试（v6→v7 升级回填、来源往返契约）。
+- 第二小步（1b00ab3，UI 入口）：
+  - 托盘菜单「手动翻译…」→ 独立小窗（440×480，hide 不销毁，输入与结果保留）。
+  - `translate_text` 命令即手动翻译核心：同一引擎（fallback/熔断/8s 预算一致）、同一落盘管道；不触碰剪贴板监控开关。
+  - 窗口内：目标语言下拉（默认配置值）、字符计数、Ctrl+Enter 提交；**超上限 5000 字符禁用按钮并明确提示**（计划「不无反馈截断」；后端截断兜底，truncated → 「超出部分未翻译」）；错误按契约文案展示；缓存命中标「本地缓存」。
+  - popup 若在显示，由 popup_watch 前台轮询自然关闭，无需特判。
+- Tests: vitest 70/70（+6：调用契约、空文本不请求、超限禁用、truncated 提示、错误契约、缓存标识）；tsc/build PASS；cargo fmt/clippy PASS（Rust 侧为窗口创建与菜单项，无可单测逻辑）
+- Commit: 7930da0 / 1b00ab3
+- 验收对照：同一核心业务 ✅；不改剪贴板开关 ✅；历史可识别来源 ✅；Fallback 一致 ✅；超长文本明确提示 ✅。**唯一偏差**：手动路径不走 coordinator（引擎直调），全部失败时无缓存回退（coordinator 有）——行为统一项，见剩余。
+- 剩余：手动路径的缓存回退统一（全部 Provider 失败时查 TranslationCache，返回 provider="cache"，与 coordinator 语义一致）；实施时注意命令层测试基建（State mock 无先例，倾向抽纯 helper 放 domain 层测）。
 
 ### 2026-11-07 — Task 08 Provider 管理中心（第一轮：可独立验证项）
 - 核验结论（已具备，无改动）：
@@ -128,5 +130,5 @@
   - Required manual test: 显式 opt-in 的真实凭证测试
 
 ## Next task
-- Task 09 剩余：手动翻译 UI 入口（候选方案 A：托盘菜单「手动翻译…」开独立小窗，复用 translate_text 命令 + source=manual 已就绪）；实施时补手动路径的缓存回退统一（全部 Provider 失败时查 TranslationCache，与 coordinator 行为一致）。
-- 阻塞项：Task 08 剩余（供应商目录分类/AI 类目）待要求 19 解禁；缓存开关文案待确认。
+- Task 09 收尾：手动路径缓存回退统一（全部 Provider 失败时查 TranslationCache，与 coordinator 语义一致；抽纯 helper 放 domain 层以便测试）。
+- 阻塞项：Task 08 剩余（供应商目录分类/AI 类目）待要求 19 解禁；缓存开关文案待确认；Task 10 术语表为中期项，可启动最小功能（原文术语/目标译法/可选说明，纯本地）。

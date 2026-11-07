@@ -18,7 +18,7 @@
 
 CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 3 平台、clippy 与单测 × Windows/macOS、release 构建验证 × 双平台。CI 不依赖真实 Provider 凭证。
 
-> 进展更新：Task 04（+33）、Task 06（+19）、Task 09 来源类型（+2）后 Rust 单测现为 **368 passed**；Task 05/07/08 后前端为 **64 / 12 文件**（+27）。
+> 进展更新：Task 04（+33）、Task 06（+19）、Task 09 来源类型（+2）后 Rust 单测现为 **368 passed**；Task 05/07/08/09 后前端为 **70 / 13 文件**（+33）。
 
 ## Mock 注入能力（现状确认）
 
