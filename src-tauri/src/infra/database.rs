@@ -286,6 +286,7 @@ pub fn run_migrations(conn: &Connection) -> Result<(), AppError> {
         (5, migrate_v5),
         (6, migrate_v6),
         (7, migrate_v7),
+        (8, migrate_v8),
     ];
 
     for &(version, migration_fn) in migrations {
@@ -525,6 +526,31 @@ fn migrate_v7(tx: &Transaction) -> Result<(), AppError> {
     .map_err(|e| AppError::DatabaseError(format!("Schema v7 迁移失败: {}", e)))
 }
 
+/// 术语表建表语句（schema v8）。
+///
+/// 导出给 `domain::glossary` 的测试共用，保证测试表结构与线上一致。
+/// `source_term` 唯一索引按 NOCASE 建：同一原文的大小写变体视为重复 ——
+/// 两条 "Apple" 译法不同时无法决定用哪条，导入/新增阶段就应当拒绝。
+pub(crate) const GLOSSARY_TABLE_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS glossary_entries (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_term    TEXT NOT NULL,
+    target_term    TEXT NOT NULL,
+    note           TEXT NOT NULL DEFAULT '',
+    case_sensitive INTEGER NOT NULL DEFAULT 0,
+    created_at     INTEGER NOT NULL,
+    updated_at     INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_glossary_source_nocase
+    ON glossary_entries(source_term COLLATE NOCASE);
+"#;
+
+/// v8：新增本地术语表（计划 Task 10）。
+fn migrate_v8(tx: &Transaction) -> Result<(), AppError> {
+    tx.execute_batch(GLOSSARY_TABLE_SQL)
+        .map_err(|e| AppError::DatabaseError(format!("Schema v8 迁移失败: {}", e)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -655,7 +681,7 @@ mod tests {
 
         // 升级到最新
         run_migrations(&conn).unwrap();
-        assert_eq!(current_schema_version(&conn), 7, "应停在最新版本");
+        assert_eq!(current_schema_version(&conn), 8, "应停在最新版本");
 
         // 旧记录必须原样保留，且新列有可用默认值
         let (text, provider, starred, source): (String, String, i64, String) = conn
@@ -713,7 +739,7 @@ mod tests {
             current_schema_version(&conn),
             "版本号连续且无重复记账"
         );
-        assert_eq!(rows, 7);
+        assert_eq!(rows, 8);
     }
 
     /// v6 → v7 专项：既有行全部补上来源类型默认值（v7 之前唯一的
@@ -759,7 +785,7 @@ mod tests {
         .unwrap();
 
         run_migrations(&conn).unwrap();
-        assert_eq!(current_schema_version(&conn), 7);
+        assert_eq!(current_schema_version(&conn), 8);
 
         let source: String = conn
             .query_row(

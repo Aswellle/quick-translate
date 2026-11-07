@@ -49,6 +49,9 @@ pub struct AppState {
     /// 全局快捷键注册状态与动作分发（计划 Task 11）。
     /// 注册失败只记录状态，不影响应用启动。
     pub hotkeys: Arc<crate::system::hotkeys::HotkeyManager>,
+    /// 本地术语表（计划 Task 10）：数据管理在此，是否真正应用于翻译
+    /// 取决于 Provider 原生 glossary 能力。
+    pub glossary: Arc<crate::domain::glossary::GlossaryRepository>,
 }
 
 impl AppState {

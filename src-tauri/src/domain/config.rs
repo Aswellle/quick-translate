@@ -28,7 +28,8 @@ struct KeyDescriptor {
 ///
 /// 布尔/整数键（auto_start / history_limit / fallback_enabled /
 /// onboarding_completed / clipboard_monitor_enabled /
-/// sensitive_filter_enabled / reduce_transparency / cache_enabled）
+/// sensitive_filter_enabled / reduce_transparency / cache_enabled /
+/// glossary_enabled）
 /// 的解析各自带类型转换与钳制逻辑，留在 match 里，表只收字符串直存类键。
 const KEY_DESCRIPTORS: &[KeyDescriptor] = &[
     KeyDescriptor {
@@ -222,6 +223,7 @@ impl ConfigService {
             "sensitive_filter_enabled" => Some(self.cache.sensitive_filter_enabled.to_string()),
             "reduce_transparency" => Some(self.cache.reduce_transparency.to_string()),
             "cache_enabled" => Some(self.cache.cache_enabled.to_string()),
+            "glossary_enabled" => Some(self.cache.glossary_enabled.to_string()),
             _ => None,
         }
     }
@@ -315,6 +317,7 @@ impl ConfigService {
             "sensitive_filter_enabled" => self.cache.sensitive_filter_enabled = value == "true",
             "reduce_transparency" => self.cache.reduce_transparency = value == "true",
             "cache_enabled" => self.cache.cache_enabled = value == "true",
+            "glossary_enabled" => self.cache.glossary_enabled = value == "true",
             _ => {}
         }
     }
@@ -416,6 +419,9 @@ fn load_config_from_db(conn: &Connection) -> Result<AppConfig, AppError> {
             }
             "cache_enabled" => {
                 config.cache_enabled = decode(&raw) == "true";
+            }
+            "glossary_enabled" => {
+                config.glossary_enabled = decode(&raw) == "true";
             }
             _ => {}
         }
@@ -623,6 +629,30 @@ mod tests {
             !reloaded.cache_enabled,
             "重启后必须仍为 false —— 漏掉 load 分支会静默回到 true"
         );
+    }
+
+    /// glossary_enabled 同样走三条路径，默认开启（无条目时开启等于空操作）。
+    #[test]
+    fn glossary_enabled_roundtrips_through_all_three_paths() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let db = test_db();
+        let mut svc = fresh_service(db);
+
+        assert_eq!(svc.get("glossary_enabled").as_deref(), Some("true"));
+
+        rt.block_on(async {
+            svc.set("glossary_enabled", "false").await.unwrap();
+        });
+        assert_eq!(svc.get("glossary_enabled").as_deref(), Some("false"));
+
+        let shared = svc.db.try_conn().unwrap();
+        let conn = shared.blocking_lock();
+        let reloaded = load_config_from_db(&conn).unwrap();
+        drop(conn);
+        assert!(!reloaded.glossary_enabled);
     }
 }
 

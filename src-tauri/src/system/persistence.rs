@@ -332,7 +332,7 @@ mod tests {
         let version: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 7, "全新库应跑到最新迁移版本");
+        assert_eq!(version, 8, "全新库应跑到最新迁移版本");
 
         let cache_table: i64 = conn
             .query_row(

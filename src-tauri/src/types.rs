@@ -223,6 +223,12 @@ pub struct AppConfig {
     pub hotkey_translate_clipboard: String,
     pub hotkey_open_manual: String,
     pub hotkey_toggle_monitor: String,
+    /// 术语表总开关（计划 Task 10）。
+    ///
+    /// 关闭时术语条目不参与任何翻译请求与缓存键；条目本身保留。
+    /// 只有支持原生 glossary 的 Provider 会真正生效（当前为 DeepL），
+    /// 其余 Provider 在设置页如实标记为不支持。
+    pub glossary_enabled: bool,
 }
 
 impl Default for AppConfig {
@@ -250,6 +256,7 @@ impl Default for AppConfig {
             hotkey_translate_clipboard: "CmdOrControl+Alt+T".to_string(),
             hotkey_open_manual: "CmdOrControl+Alt+M".to_string(),
             hotkey_toggle_monitor: "CmdOrControl+Alt+P".to_string(),
+            glossary_enabled: true,
         }
     }
 }

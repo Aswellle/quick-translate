@@ -269,6 +269,7 @@ pub fn run() {
             let popup_watch = system::popup_watch::PopupWatch::start(app_handle.clone());
 
             let hotkeys = Arc::new(system::hotkeys::HotkeyManager::new());
+            let glossary = Arc::new(domain::glossary::GlossaryRepository::new(db.clone()));
 
             let app_state = AppState {
                 translator,
@@ -282,6 +283,7 @@ pub fn run() {
                 coordinator: Arc::new(system::translation::TranslationCoordinator::new()),
                 clipboard_monitor: monitor,
                 hotkeys: hotkeys.clone(),
+                glossary,
             };
             app.manage(app_state);
 
@@ -385,6 +387,15 @@ pub fn run() {
             commands::system::set_clipboard_monitor_enabled,
             commands::system::get_popup_geometry,
             commands::system::get_hotkey_status,
+            commands::glossary::list_glossary_entries,
+            commands::glossary::create_glossary_entry,
+            commands::glossary::update_glossary_entry,
+            commands::glossary::delete_glossary_entry,
+            commands::glossary::clear_glossary,
+            commands::glossary::import_glossary_json,
+            commands::glossary::import_glossary_csv,
+            commands::glossary::export_glossary_json,
+            commands::glossary::export_glossary_csv,
             commands::system::get_runtime_status,
             commands::system::get_runtime_diagnostics,
         ])

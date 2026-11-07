@@ -116,6 +116,7 @@ const BOOL_KEYS: &[&str] = &[
     "sensitive_filter_enabled",
     "reduce_transparency",
     "cache_enabled",
+    "glossary_enabled",
 ];
 
 /// 界面主题的合法取值
