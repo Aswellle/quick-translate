@@ -32,8 +32,8 @@ impl HistoryRepository {
         conn.execute(
             r#"INSERT INTO translation_records
                (id, source_text, translated_text, source_lang, target_lang,
-                provider, created_at, duration_ms, is_starred)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"#,
+                provider, created_at, duration_ms, is_starred, source)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"#,
             rusqlite::params![
                 record.id,
                 record.source_text,
@@ -44,6 +44,7 @@ impl HistoryRepository {
                 record.created_at,
                 record.duration_ms,
                 record.is_starred as i64,
+                record.source,
             ],
         )
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
@@ -123,7 +124,7 @@ impl HistoryRepository {
         let mut stmt = conn
             .prepare(
                 r#"SELECT id, source_text, translated_text, source_lang, target_lang,
-                          provider, created_at, duration_ms, is_starred
+                          provider, created_at, duration_ms, is_starred, source
                    FROM translation_records
                    ORDER BY created_at DESC, rowid DESC"#,
             )
@@ -360,14 +361,14 @@ fn query_all(
 ) -> Result<Vec<TranslationRecord>, AppError> {
     let sql = if starred_only {
         r#"SELECT id, source_text, translated_text, source_lang, target_lang,
-                  provider, created_at, duration_ms, is_starred
+                  provider, created_at, duration_ms, is_starred, source
            FROM translation_records
            WHERE is_starred = 1
            ORDER BY created_at DESC, rowid DESC
            LIMIT ?1 OFFSET ?2"#
     } else {
         r#"SELECT id, source_text, translated_text, source_lang, target_lang,
-                  provider, created_at, duration_ms, is_starred
+                  provider, created_at, duration_ms, is_starred, source
            FROM translation_records
            ORDER BY created_at DESC, rowid DESC
            LIMIT ?1 OFFSET ?2"#
@@ -403,7 +404,7 @@ fn query_like(
 
     let sql = if starred_only {
         r#"SELECT id, source_text, translated_text, source_lang, target_lang,
-                  provider, created_at, duration_ms, is_starred
+                  provider, created_at, duration_ms, is_starred, source
            FROM translation_records
            WHERE is_starred = 1
              AND (source_text LIKE ?1 ESCAPE '\' OR translated_text LIKE ?1 ESCAPE '\')
@@ -411,7 +412,7 @@ fn query_like(
            LIMIT ?2 OFFSET ?3"#
     } else {
         r#"SELECT id, source_text, translated_text, source_lang, target_lang,
-                  provider, created_at, duration_ms, is_starred
+                  provider, created_at, duration_ms, is_starred, source
            FROM translation_records
            WHERE source_text LIKE ?1 ESCAPE '\' OR translated_text LIKE ?1 ESCAPE '\'
            ORDER BY created_at DESC, rowid DESC
@@ -486,6 +487,7 @@ fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TranslationRecord> {
         created_at: row.get(6)?,
         duration_ms: row.get(7)?,
         is_starred: row.get::<_, i64>(8).map(|v| v != 0)?,
+        source: row.get(9)?,
     })
 }
 
@@ -514,6 +516,7 @@ mod tests {
             created_at,
             duration_ms: Some(100),
             is_starred: false,
+            source: crate::types::RECORD_SOURCE_CLIPBOARD.to_string(),
         }
     }
 
@@ -641,6 +644,46 @@ mod tests {
         let repo = repo();
         let err = repo.toggle_star("no-such-id").await.unwrap_err();
         assert_eq!(err.error_code(), "DATABASE_ERROR");
+    }
+
+    /// 计划 Task 09：手动输入与剪贴板自动触发可区分 —— 来源类型必须
+    /// 往返落库，查询契约（map_row）拿到的是真实来源而不是默认值。
+    #[tokio::test]
+    async fn source_field_roundtrips_through_insert_and_query() {
+        let repo = repo();
+
+        let mut manual = record_at(1_700_000_000_000);
+        manual.source_text = "typed by user".to_string();
+        manual.source = crate::types::RECORD_SOURCE_MANUAL.to_string();
+        repo.insert(&manual).await.unwrap();
+
+        let clipboard = record_at(1_700_000_000_001); // 辅助默认即 clipboard
+        repo.insert(&clipboard).await.unwrap();
+
+        let rows = repo
+            .query(&HistoryQuery {
+                limit: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(rows.len(), 2);
+        let by_text = |text: &str| {
+            rows.iter()
+                .find(|r| r.source_text == text)
+                .unwrap_or_else(|| panic!("缺少 source_text={} 的行", text))
+        };
+        assert_eq!(
+            by_text("typed by user").source,
+            "manual",
+            "手动路径写入的记录必须标为 manual"
+        );
+        assert_eq!(
+            by_text("hello").source,
+            "clipboard",
+            "剪贴板路径写入的记录必须标为 clipboard"
+        );
     }
 
     #[tokio::test]
@@ -860,8 +903,8 @@ mod tests {
                 .prepare(
                     "INSERT INTO translation_records
                      (id, source_text, translated_text, source_lang, target_lang,
-                      provider, created_at, duration_ms, is_starred)
-                     VALUES (?1, ?2, ?3, 'en', 'zh', 'google', ?4, 10, 0)",
+                      provider, created_at, duration_ms, is_starred, source)
+                     VALUES (?1, ?2, ?3, 'en', 'zh', 'google', ?4, 10, 0, 'clipboard')",
                 )
                 .unwrap();
             for i in 0..n {

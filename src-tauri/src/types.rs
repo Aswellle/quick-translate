@@ -40,6 +40,11 @@ pub struct ProviderStatus {
     pub last_error_class: Option<String>,
 }
 
+/// 历史记录来源（计划 Task 09：手动输入与剪贴板自动触发可区分，
+/// 但走同一翻译核心与落盘管道）。
+pub const RECORD_SOURCE_CLIPBOARD: &str = "clipboard";
+pub const RECORD_SOURCE_MANUAL: &str = "manual";
+
 /// 历史记录条目（DB → 前端）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranslationRecord {
@@ -52,11 +57,19 @@ pub struct TranslationRecord {
     pub created_at: i64, // Unix ms
     pub duration_ms: Option<i64>,
     pub is_starred: bool,
+    /// 请求来源："clipboard"（自动触发）| "manual"（用户手动发起）。
+    /// v7 之前的历史行由迁移统一置为 clipboard。
+    pub source: String,
 }
 
 impl TranslationRecord {
     /// 从翻译结果构造历史记录
-    pub fn from_result(result: &TranslationResult, source_text: &str, target_lang: &str) -> Self {
+    pub fn from_result(
+        result: &TranslationResult,
+        source_text: &str,
+        target_lang: &str,
+        source: &str,
+    ) -> Self {
         TranslationRecord {
             id: uuid::Uuid::new_v4().to_string(),
             source_text: source_text.to_string(),
@@ -67,6 +80,7 @@ impl TranslationRecord {
             created_at: now_unix_ms(),
             duration_ms: Some(result.duration_ms as i64),
             is_starred: false,
+            source: source.to_string(),
         }
     }
 }

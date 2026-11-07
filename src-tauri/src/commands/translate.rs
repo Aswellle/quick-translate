@@ -73,7 +73,12 @@ pub async fn translate_text(
     // 历史记录存截断后的原文：与实际翻译内容一致（超长输入是先截断再送翻译
     // 的），HISTORY_LIMIT_MAX 对入库字节数也因此真正有效 —— 存截断前全文
     // 的话，一次粘贴几 MB 文本就绕过了保留上限。与缓存条目同源。
-    let record = TranslationRecord::from_result(&result, &text_to_translate, &target);
+    let record = TranslationRecord::from_result(
+        &result,
+        &text_to_translate,
+        &target,
+        crate::types::RECORD_SOURCE_MANUAL,
+    );
     let job = crate::system::persistence::PersistJob {
         history_limit: state
             .config

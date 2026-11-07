@@ -312,6 +312,7 @@ mod tests {
                 created_at: crate::types::now_unix_ms(),
                 duration_ms: Some(1),
                 is_starred: false,
+                source: crate::types::RECORD_SOURCE_CLIPBOARD.to_string(),
             },
             history_limit: 200,
             cache_entry: OwnedCacheEntry {
@@ -331,7 +332,7 @@ mod tests {
         let version: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 6, "全新库应跑到最新迁移版本");
+        assert_eq!(version, 7, "全新库应跑到最新迁移版本");
 
         let cache_table: i64 = conn
             .query_row(
@@ -341,6 +342,15 @@ mod tests {
             )
             .unwrap();
         assert_eq!(cache_table, 1, "v6 应建出 translation_cache 表");
+
+        let source_column: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('translation_records') WHERE name='source'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(source_column, 1, "v7 应建出 source 列");
     }
 
     #[tokio::test]

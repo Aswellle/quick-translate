@@ -32,6 +32,8 @@ export interface TranslationRecord {
   created_at: number;
   duration_ms: number | null;
   is_starred: boolean;
+  /** 请求来源："clipboard"（自动触发）| "manual"（手动发起）；v7 前的历史统一为 clipboard */
+  source: "clipboard" | "manual";
 }
 
 export interface StatsResult {

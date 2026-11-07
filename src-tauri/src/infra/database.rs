@@ -285,6 +285,7 @@ pub fn run_migrations(conn: &Connection) -> Result<(), AppError> {
         (4, migrate_v4),
         (5, migrate_v5),
         (6, migrate_v6),
+        (7, migrate_v7),
     ];
 
     for &(version, migration_fn) in migrations {
@@ -512,6 +513,18 @@ fn migrate_v6(tx: &Transaction) -> Result<(), AppError> {
         .map_err(|e| AppError::DatabaseError(format!("Schema v6 迁移失败: {}", e)))
 }
 
+/// v7：历史记录来源类型（计划 Task 09）。
+///
+/// 手动输入与剪贴板自动触发共用同一翻译核心，但历史必须能区分来源。
+/// 既有行全部来自剪贴板监控（v7 之前没有别的入口），统一置为 clipboard。
+fn migrate_v7(tx: &Transaction) -> Result<(), AppError> {
+    tx.execute_batch(
+        "ALTER TABLE translation_records
+             ADD COLUMN source TEXT NOT NULL DEFAULT 'clipboard';",
+    )
+    .map_err(|e| AppError::DatabaseError(format!("Schema v7 迁移失败: {}", e)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -642,20 +655,21 @@ mod tests {
 
         // 升级到最新
         run_migrations(&conn).unwrap();
-        assert_eq!(current_schema_version(&conn), 6, "应停在最新版本");
+        assert_eq!(current_schema_version(&conn), 7, "应停在最新版本");
 
         // 旧记录必须原样保留，且新列有可用默认值
-        let (text, provider, starred): (String, String, i64) = conn
+        let (text, provider, starred, source): (String, String, i64, String) = conn
             .query_row(
-                "SELECT translated_text, provider, is_starred
+                "SELECT translated_text, provider, is_starred, source
                  FROM translation_records WHERE id = 'legacy-1'",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .expect("v1 记录必须存活到升级之后");
         assert_eq!(text, "你好");
         assert_eq!(provider, "google");
         assert_eq!(starred, 0, "is_starred 默认 0");
+        assert_eq!(source, "clipboard", "v7 前的历史行全部来自剪贴板监控");
 
         // v6 的缓存表必须可用
         conn.execute(
@@ -699,6 +713,61 @@ mod tests {
             current_schema_version(&conn),
             "版本号连续且无重复记账"
         );
-        assert_eq!(rows, 6);
+        assert_eq!(rows, 7);
+    }
+
+    /// v6 → v7 专项：既有行全部补上来源类型默认值（v7 之前唯一的
+    /// 翻译入口是剪贴板监控），v7 起新写入携带真实来源。
+    #[test]
+    fn upgrading_from_v6_backfills_clipboard_source() {
+        // 直接构造一个「只跑过 v1..v6」的库
+        let conn = Connection::open_in_memory().unwrap();
+        // run_migrations 的 bootstrap 步骤：版本账本表先建
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY NOT NULL,
+                applied_at INTEGER NOT NULL
+             );",
+        )
+        .unwrap();
+        {
+            let tx = conn.unchecked_transaction().unwrap();
+            migrate_v1(&tx).unwrap();
+            migrate_v2(&tx).unwrap();
+            migrate_v3(&tx).unwrap();
+            migrate_v4(&tx).unwrap();
+            migrate_v5(&tx).unwrap();
+            migrate_v6(&tx).unwrap();
+            for v in 1..=6 {
+                tx.execute(
+                    "INSERT INTO schema_version (version, applied_at) VALUES (?1, 1)",
+                    rusqlite::params![v],
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+        }
+
+        // v6 时代的记录（无 source 列）
+        conn.execute(
+            "INSERT INTO translation_records
+             (id, source_text, translated_text, source_lang, target_lang,
+              provider, created_at, duration_ms, is_starred)
+             VALUES ('v6-row', 'hello', '你好', 'en', 'zh', 'google', 1700000000000, 100, 0)",
+            [],
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+        assert_eq!(current_schema_version(&conn), 7);
+
+        let source: String = conn
+            .query_row(
+                "SELECT source FROM translation_records WHERE id = 'v6-row'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("v6 记录必须存活");
+        assert_eq!(source, "clipboard", "既有行统一回填 clipboard 来源");
     }
 }

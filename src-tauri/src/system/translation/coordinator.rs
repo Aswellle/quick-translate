@@ -603,7 +603,12 @@ async fn persist_success(
     let history_limit = state.config.read().await.cache_history_limit();
 
     let job = PersistJob {
-        record: TranslationRecord::from_result(result, &request.text, &request.target_lang),
+        record: TranslationRecord::from_result(
+            result,
+            &request.text,
+            &request.target_lang,
+            crate::types::RECORD_SOURCE_CLIPBOARD,
+        ),
         history_limit,
         cache_entry: OwnedCacheEntry {
             source_text: request.text.clone(),
