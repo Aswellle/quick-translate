@@ -4,12 +4,30 @@
 - Branch: main
 - Base commit: b64b04e（Merge pull request #80）
 - App version: 0.9.0
-- Current task: Task 02 翻译请求生命周期与竞态测试（完成）
+- Current task: Task 04 剪贴板隐私防护（完成）；下一步 Task 06 数据层测试补强
 - Working tree: 干净
 - 执行依据: docs/QUICK_TRANSLATE_AI_AGENT_DEVELOPMENT_PLAN.md（2026-11-07 修订）
 - 测试清单: docs/TEST_INVENTORY.md
 
 ## Completed
+
+### 2026-11-07 — Task 04 剪贴板隐私防护与过滤引擎
+- Changes:
+  - 新增 `domain/clipboard_filter.rs`：12 条高置信度规则（PEM 私钥、JWT、AWS Key ID、GitHub/Slack/Stripe/Google/OpenAI/Anthropic 令牌、腾讯云 SecretId、HTTP Authorization 头、DeepL 免费版密钥）。纯函数、零依赖（字节级扫描，未引入 regex）、零 I/O。
+  - 负例策略：普通散文、代码片段、裸 UUID、`sk_test_`、短令牌、嵌入长词的中段命中一律放行；规则各有正反例测试，含「词边界」与「多行日志」场景。
+  - 翻译入口前置拦截：`coordinator::execute_at_position` 在 supersede/建窗/启动任务**之前**调用 `filter_gate`；命中即 toast 解释（不含原文）+ 日志只记规则码与长度。
+  - 手动覆盖：`translate_filtered_text` 命令，只能消费 coordinator 暂存的最近一条被拦内容（取走即清、新复制即失效），前端由 toast 上的「仍然翻译」按钮触发。
+  - 配置：`sensitive_filter_enabled`（默认开启）贯通 4 条路径（descriptor 表外的三处手写分支 + 命令层 BOOL_KEYS），并有往返测试。
+  - 诊断：`clipboard_filtered_count` 计数（纯记账，不含原文）。
+- Files: domain/clipboard_filter.rs（新增）、system/translation/coordinator.rs、domain/config.rs、commands/config.rs、commands/translate.rs、types.rs、runtime/{status,lifecycle}.rs、system/updater.rs、lib.rs、src/lib/commands.ts、src/components/{Toast,ToastManager}.tsx、src/windows/settings/SettingsWindow.tsx
+- Tests: `cargo test --lib` → 347 passed（+33）；clippy `--lib -D warnings` PASS；fmt PASS；`npx tsc --noEmit` PASS；`npm test` 37/37 PASS；`npm run build` PASS
+- Result: 过滤发生在任何网络请求之前（结构保证：早退路径上无 I/O）；普通文本不误拦。
+- Commit: 2f0049d / bec7a0f / cee1d25 / 469fc86
+- 未做（按计划明确要求）: 应用排除列表 —— 当前剪贴板 API 在两平台都无法可靠获得来源进程，标为平台能力待评估，待产品决策。
+
+### 2026-11-07 — Task 03 Provider 错误契约与 Fallback 完整性（核验，无代码改动）
+- 核验结论：错误分类表（9 测试）、熔断状态机（13）、429 Retry-After 边界、fallback 关闭时不调用备用源、凭证更新重置熔断（含 `updating_credentials_resets_a_stuck_circuit`）、手动验证不污染熔断、`last_error_class` 暴露到 `ProviderStatus` —— 全部已有实现与测试对应。
+- 唯一补充空间（诊断面板展示最近成功/失败时间）属于设置页展示增强，非契约缺口，留待 Task 08。
 
 ### 2026-11-07 — Task 02 翻译请求生命周期与竞态测试
 - Changes: 新增引擎级取消语义测试 `aborted_task_never_continues_the_fallback_chain`（domain/translator/mod.rs）。用 `Outcome::Slow(Duration::MAX)` 把任务钉在主源首次尝试中，abort 后断言 A 不被重试、B（fallback 源）零调用。补齐「取消请求不会继续发起 Fallback」这条验收的结构性证明；其余验收项（迟到结果丢弃、安装拒绝、窗锁串行、commit_popup_show 协议）已有 14 个 coordinator 测试覆盖。前端 useTauriEvent 的注册竞态防护与自动解绑经核读确认无缺陷。

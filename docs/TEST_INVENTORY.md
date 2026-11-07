@@ -7,7 +7,7 @@
 
 | 门禁 | 命令 | 基线结果 |
 |---|---|---|
-| Rust 单测 | `cargo test --manifest-path src-tauri/Cargo.toml --lib` | 314 passed / 0 failed |
+| Rust 单测 | `cargo test --manifest-path src-tauri/Cargo.toml --lib` | 347 passed / 0 failed |
 | Rust 格式 | `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` | PASS |
 | Rust lint | `cargo clippy --manifest-path src-tauri/Cargo.toml --lib -- -D warnings` | PASS |
 
@@ -35,13 +35,14 @@ CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 
 | `domain/translator/health.rs` | 13 | 状态机流转、冷却阶梯（含长冷却）、半开单探测、Retry-After 边界 | 并发探测互斥已有；无待办 |
 | `domain/translator/error_class.rs` | 9 | 错误分类表 | 无待办 |
 | `domain/translator/policy.rs` | 10 | 请求策略、8s 预算、剩余预算校验 | 无待办 |
-| `system/translation/coordinator.rs` | 14 | 代际闸门、迟到结果丢弃、install 拒绝并中止、窗锁串行、commit_popup_show 全协议、缓存回退判定 | 无待办（取消跨 fallback 切换由 translator 的 `aborted_task_never_continues_the_fallback_chain` 锁定，d3b3f97） |
+| `system/translation/coordinator.rs` | 21 | 代际闸门、迟到结果丢弃、install 拒绝并中止、窗锁串行、commit_popup_show 全协议、缓存回退判定、过滤门控开关语义、拦截内容暂存生命周期 | 无待办（取消跨 fallback 切换由 translator 的 `aborted_task_never_continues_the_fallback_chain` 锁定，d3b3f97） |
 
 ### 剪贴板链路
 
 | 模块 | 数量 | 已覆盖 | 缺口 |
 |---|---|---|---|
-| `system/clipboard/worker.rs` | 19 | 去重、latest-wins、序列号语义、空/短文本、暂停恢复、吸收语义、关闭不重触发 | **敏感内容过滤（缺失，Task 04）**；应用排除（缺失，Task 04，平台能力待评估） |
+| `system/clipboard/worker.rs` | 19 | 去重、latest-wins、序列号语义、空/短文本、暂停恢复、吸收语义、关闭不重触发 | 无待办（应用排除属平台能力待评估，见下文） |
+| `domain/clipboard_filter.rs` | 25 | 12 类高置信度规则的逐条正反例、词边界、多行日志、规则优先级、解释文案不含原文 | 真实世界凭据样本的人工抽样复核（无法自动化） |
 | `system/clipboard/controller.rs` | 12 | 暂停/恢复、在途请求管理 | 无待办 |
 | `system/clipboard/supervisor.rs` | — | 连续失败退避、非自旋 | 无待办 |
 
@@ -81,7 +82,7 @@ CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 
 
 ## 已识别缺口汇总（映射后续任务）
 
-1. **敏感内容过滤引擎整体缺失** → Task 04（优先级最高的功能缺口：过滤必须发生在任何网络请求之前）
+1. ~~敏感内容过滤引擎整体缺失~~ → 已由 Task 04 完成（`domain/clipboard_filter.rs` + 入口门控 + 手动覆盖）。应用排除列表仍缺：当前剪贴板 API 无法可靠获得来源进程，需产品决策。
 2. `history.rs` 查询/收藏/清空/FIFO 直测缺失 → Task 06
 3. `database.rs` 迁移升级路径无测试 → Task 06（任何新 schema 变更的前置条件）
 4. 应用排除列表缺失（依赖平台来源进程能力，需先评估） → Task 04
