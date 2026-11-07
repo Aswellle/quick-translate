@@ -4,12 +4,26 @@
 - Branch: main
 - Base commit: b64b04e（Merge pull request #80）
 - App version: 0.9.0
-- Current task: Task 07 浮窗交互核验（完成）；下一步 Task 08 Provider 管理中心
+- Current task: Task 08 Provider 管理中心第一轮（完成）；剩余项依赖 AI 解禁或产品决策
 - Working tree: 干净
 - 执行依据: docs/QUICK_TRANSLATE_AI_AGENT_DEVELOPMENT_PLAN.md（2026-11-07 修订）
 - 测试清单: docs/TEST_INVENTORY.md
 
 ## Completed
+
+### 2026-11-07 — Task 08 Provider 管理中心（第一轮：可独立验证项）
+- 核验结论（已具备，无改动）：
+  - 实施 2「连接测试不污染熔断」：`validate_credentials` 不走熔断计数，专项测试锁定（translator/mod.rs「计划第 29 节」，Task 03 已核验）。
+  - 实施 3「Key 获取入口」：四个配置型 Provider 均有 setupUrl（腾讯云 CAM / DeepL Pro API / 百度翻译开放平台 / 有道智云），设置页与引导页渲染；open_url 有白名单校验（commands/system.rs 测试）。
+  - 实施 5「替换凭证重置健康」：`updating_credentials_resets_a_stuck_circuit`（Task 03 已核验）。
+  - 实施 7「不在前端硬编码服务商错误解析」：ErrorView 只按 `error_code()` 契约分类，不解析上游原始错误（本轮 ErrorView 测试顺带锁定「契约文案优先于原始 message」）。
+- 改动：
+  - **状态词表抽出 + 测试锁定**（实施 1）：`providerStateLabel`/`STATE_TONE_CLASS` 移入 `lib/providerState.ts`；契约测试覆盖「未配置优先于健康状态（二者不混淆）」、open/degraded 按错误类别细分四词、same_language 成功不映射为错误词。
+  - **密钥显示/隐藏切换**（实施 4）：CredentialField 对 password 型字段加眼睛按钮（aria-label + aria-pressed）；mousedown preventDefault 不抢焦点——blur 即提交语义下，抢焦点会把半截密钥当完整凭证持久化。+5 组件测试（含「输入半截密钥切换显示不触发提交」）。
+- 未做（依赖外部条件）：实施 8/9 与供应商目录分类依赖自定义/AI Provider 能力（要求 19 暂缓）；「恢复默认配置」功能尚不存在，做时须遵守不清凭证/历史。
+- Files: src/lib/providerState.ts（新增）、src/lib/__tests__/providerState.test.ts（新增）、src/windows/settings/{SettingsWindow.tsx,__tests__/CredentialField.test.tsx}
+- Tests: vitest 64/64（+11）；tsc PASS；build PASS
+- Commit: ee17782 / 647ba95
 
 ### 2026-11-07 — Task 07 浮窗交互与可访问性（核验 + 补测试）
 - 核验结论（计划 §7 实施项 1–6 与全部验收项，现状已具备，无需改代码）：
@@ -104,4 +118,4 @@
   - Required manual test: 显式 opt-in 的真实凭证测试
 
 ## Next task
-- Task 08：Provider 配置体验与供应商管理中心（计划 §8）——信息架构重构较大（供应商目录分类、配置状态与健康状态区分、自定义兼容接口）。注意：AI 模型供应商接入被要求 19 暂缓，目录分类中「AI 模型」类目待解禁；SSRF 校验（自定义 endpoint）为前置安全项。建议先做 §8 中的非 AI 部分：配置状态与健康状态的 UI 区分、连接测试不污染熔断统计（核验 validate_provider 路径已满足）。缓存禁用/启用开关仍待维护者确认文案。
+- Task 08 剩余项被两处外部条件阻塞：供应商目录分类/自定义兼容接口/「AI 模型」类目依赖要求 19 解禁；恢复默认配置的产品语义待确认。可选推进：Task 09（统一手动翻译入口，纯传统翻译链路，无 AI 依赖）、Task 10（术语表）或缓存开关（待文案确认）。
