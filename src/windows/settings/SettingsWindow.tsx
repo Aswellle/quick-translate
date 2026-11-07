@@ -597,7 +597,7 @@ function GeneralTab({
         />
         <ToggleRow
           label="剪贴板监控"
-          hint="选中文本并复制后自动弹出翻译"
+          hint="复制后自动弹出翻译。开启即表示应用持续读取本机剪贴板：内容仅在本机判定与展示，发起翻译时发送给所选服务商，疑似凭证先经本地拦截（见下一项）"
           value={draft.clipboard_monitor_enabled}
           onApply={onClipboardToggle}
         />
