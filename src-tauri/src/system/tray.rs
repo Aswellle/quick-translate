@@ -7,6 +7,7 @@ use tauri::{
     AppHandle, Manager, WebviewUrl, WebviewWindowBuilder,
 };
 
+use crate::commands::config::emit_config_changed;
 use crate::error::AppError;
 use crate::runtime::{ComponentState, RuntimeHealth, RuntimeStatusSnapshot};
 use crate::state::AppState;
@@ -495,6 +496,8 @@ fn switch_provider(app: AppHandle, provider_id: String) {
         }
         tracing::info!("已切换翻译源: {}", provider_id);
         refresh_menu(&app_for_menu).await;
+        // 设置窗口 hide 而非销毁，广播后它的草稿才能跟上托盘的修改
+        emit_config_changed(&app_for_menu, &state.config.read().await.get_all());
     });
 }
 
@@ -516,6 +519,7 @@ fn switch_target_lang(app: AppHandle, lang_code: String) {
         }
         tracing::info!("已切换目标语言: {}", lang_code);
         refresh_menu(&app_for_menu).await;
+        emit_config_changed(&app_for_menu, &state.config.read().await.get_all());
     });
 }
 
@@ -562,6 +566,7 @@ fn toggle_clipboard_monitor(app: AppHandle) {
         }
 
         refresh_menu(&app_for_menu).await;
+        emit_config_changed(&app_for_menu, &state.config.read().await.get_all());
     });
 }
 

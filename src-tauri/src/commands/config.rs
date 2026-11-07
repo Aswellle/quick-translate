@@ -98,6 +98,10 @@ async fn set_config_batch_inner(
         )));
     }
 
+    // 持久化与副作用全部落地后广播一次（载荷读取与 get_config 相同的
+    // 掩码视图，凭证不会明文出现在事件里）
+    emit_config_changed(app, &state.config.read().await.get_all());
+
     Ok(())
 }
 
@@ -314,6 +318,17 @@ async fn handle_side_effect(
         _ => {}
     }
     Ok(())
+}
+
+/// 广播配置变更事件：载荷是脱敏后的完整 `AppConfig`（与 get_config 同构）。
+///
+/// 为什么必须有：设置窗口 hide 而非销毁，草稿只在挂载时加载一次；
+/// 托盘切换翻译源/目标语言、开关剪贴板监控这些**绕过命令管线的直写
+/// 路径**不广播的话，设置页重开后显示的还是打开时的旧值。
+/// 载荷直接用 `AppConfig`，前端按字段合并即可，不必在事件里重复一套
+/// 「哪些键是布尔」的类型映射。
+pub(crate) fn emit_config_changed(app: &AppHandle, cfg: &AppConfig) {
+    let _ = app.emit("config-changed", cfg);
 }
 
 /// 广播「减少透明效果」开关变更。
