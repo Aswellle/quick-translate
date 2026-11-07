@@ -144,7 +144,14 @@ const CREDENTIAL_KEYS: &[&str] = &[
 fn validate_value(key: &str, value: &str) -> Result<(), AppError> {
     let known = matches!(
         key,
-        "provider" | "target_lang" | "theme" | "history_limit" | "export_dir"
+        "provider"
+            | "target_lang"
+            | "theme"
+            | "history_limit"
+            | "export_dir"
+            | "hotkey_translate_clipboard"
+            | "hotkey_open_manual"
+            | "hotkey_toggle_monitor"
     ) || BOOL_KEYS.contains(&key)
         || CREDENTIAL_KEYS.contains(&key);
     if !known {
@@ -190,6 +197,13 @@ fn validate_value(key: &str, value: &str) -> Result<(), AppError> {
         }
         // provider 的存在性由管线内依赖引擎的校验负责；这里保证非空
         "provider" if value.trim().is_empty() => return Err(invalid()),
+        // 加速键语法由注册时裁决（错误可定位到具体冲突），这里只挡
+        // 明显异常的长度，避免把任意大字符串写进配置
+        "hotkey_translate_clipboard" | "hotkey_open_manual" | "hotkey_toggle_monitor" => {
+            if value.chars().count() > 100 {
+                return Err(invalid());
+            }
+        }
         k if CREDENTIAL_KEYS.contains(&k) && value.trim().is_empty() => return Err(invalid()),
         _ => {}
     }
@@ -306,12 +320,7 @@ async fn handle_side_effect(
             emit_theme_changed(app, value);
         }
         "clipboard_monitor_enabled" => {
-            if value == "true" {
-                state.clipboard_monitor.resume();
-            } else {
-                state.clipboard_monitor.suspend();
-            }
-            tray::refresh_menu(app).await;
+            apply_clipboard_monitor_switch(app, state.inner(), value == "true").await;
         }
         "reduce_transparency" => {
             emit_reduce_transparency_changed(app, value);
@@ -321,9 +330,36 @@ async fn handle_side_effect(
         "cache_enabled" => {
             state.cache.set_enabled(value == "true");
         }
-        _ => {}
+        _ => {
+            // 全局快捷键：持久化后重新注册。失败会作为副作用错误上报
+            // （设置页显示真实冲突原因，旧快捷键保持可用）。
+            if let Some(action) = crate::system::hotkeys::action_for_config_key(key) {
+                state
+                    .hotkeys
+                    .apply(app, action, value)
+                    .map_err(|e| AppError::ConfigError(format!("快捷键未生效: {}", e)))?;
+            }
+        }
     }
     Ok(())
+}
+
+/// 剪贴板监控开关的实际生效动作（设置管线与全局快捷键共用）。
+///
+/// 只做「活体实例 + 托盘菜单状态」这一步；持久化与 config-changed
+/// 广播由调用方负责 —— 两条调用路径的持久化语义不同（命令管线在
+/// 副作用之前落库，快捷键动作自己先写库）。
+pub(crate) async fn apply_clipboard_monitor_switch(
+    app: &AppHandle,
+    state: &AppState,
+    enabled: bool,
+) {
+    if enabled {
+        state.clipboard_monitor.resume();
+    } else {
+        state.clipboard_monitor.suspend();
+    }
+    tray::refresh_menu(app).await;
 }
 
 /// 广播配置变更事件：载荷是脱敏后的完整 `AppConfig`（与 get_config 同构）。

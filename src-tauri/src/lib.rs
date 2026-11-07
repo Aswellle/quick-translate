@@ -63,6 +63,10 @@ pub fn run() {
     // Common-Controls v6 清单——测试可执行文件的清单由 build.rs 统一提供，
     // 这里保持无条件注册。
     let builder = builder.plugin(tauri_plugin_dialog::init());
+    // 全局快捷键（计划 Task 11）：Rust 侧注册与分发，前端只编辑加速键并
+    // 读取注册状态。具体注册在 setup 中按配置执行 —— 单个快捷键被占用
+    // 只记录状态，不影响应用启动。
+    let builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
     builder
         // ── 关闭窗口时隐藏而非退出进程 ──────────────────────────────────────
         // Tauri 2 默认：最后一个窗口关闭 → 进程退出。
@@ -264,6 +268,8 @@ pub fn run() {
             // 一条常驻线程，未显示浮窗时不动作。
             let popup_watch = system::popup_watch::PopupWatch::start(app_handle.clone());
 
+            let hotkeys = Arc::new(system::hotkeys::HotkeyManager::new());
+
             let app_state = AppState {
                 translator,
                 config: config.clone(),
@@ -275,8 +281,16 @@ pub fn run() {
                 http_client,
                 coordinator: Arc::new(system::translation::TranslationCoordinator::new()),
                 clipboard_monitor: monitor,
+                hotkeys: hotkeys.clone(),
             };
             app.manage(app_state);
+
+            // 全局快捷键按持久化配置注册：单个注册失败（被其他应用占用、
+            // 语法非法）只写状态与日志，绝不影响启动（计划 Task 11）。
+            {
+                let cfg = config.blocking_read().get_all();
+                hotkeys.register_from_config(&app_handle, &cfg);
+            }
 
             // 托盘初始化失败同样是 Recoverable（计划第 26 节）：
             // 托盘是入口之一，但翻译、剪贴板、浮窗不依赖它。log + 继续启动，
@@ -370,6 +384,7 @@ pub fn run() {
             commands::system::open_settings_window,
             commands::system::set_clipboard_monitor_enabled,
             commands::system::get_popup_geometry,
+            commands::system::get_hotkey_status,
             commands::system::get_runtime_status,
             commands::system::get_runtime_diagnostics,
         ])

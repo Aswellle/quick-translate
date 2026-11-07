@@ -56,6 +56,24 @@ const KEY_DESCRIPTORS: &[KeyDescriptor] = &[
         set_string: Some(|c, v| c.export_dir = v),
     },
     KeyDescriptor {
+        key: "hotkey_translate_clipboard",
+        encrypted: false,
+        get_credential: None,
+        set_string: Some(|c, v| c.hotkey_translate_clipboard = v),
+    },
+    KeyDescriptor {
+        key: "hotkey_open_manual",
+        encrypted: false,
+        get_credential: None,
+        set_string: Some(|c, v| c.hotkey_open_manual = v),
+    },
+    KeyDescriptor {
+        key: "hotkey_toggle_monitor",
+        encrypted: false,
+        get_credential: None,
+        set_string: Some(|c, v| c.hotkey_toggle_monitor = v),
+    },
+    KeyDescriptor {
         key: "deepl_api_key",
         encrypted: true,
         get_credential: Some(|c| &c.deepl_api_key),
@@ -777,6 +795,9 @@ fn read_field_for_test(config: &AppConfig, key: &str) -> String {
         "provider" => config.provider.clone(),
         "theme" => config.theme.clone(),
         "export_dir" => config.export_dir.clone(),
+        "hotkey_translate_clipboard" => config.hotkey_translate_clipboard.clone(),
+        "hotkey_open_manual" => config.hotkey_open_manual.clone(),
+        "hotkey_toggle_monitor" => config.hotkey_toggle_monitor.clone(),
         _ => String::new(),
     }
 }

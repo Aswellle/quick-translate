@@ -451,7 +451,7 @@ fn open_settings_at(app: &AppHandle, tab: Option<&str>) {
 /// 打开手动翻译小窗（计划 Task 09）。独立窗口而非复用 popup：popup 的
 /// 被动交互模型（无焦点、失焦即关）与文本输入天然冲突。窗口随关闭
 /// 隐藏而非销毁，上次的输入与结果保留 —— 连续翻译几段内容时不用重打。
-fn open_manual_translate_window(app: &AppHandle) {
+pub(crate) fn open_manual_translate_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("manual") {
         super::window_util::show_and_focus(&window);
         return;

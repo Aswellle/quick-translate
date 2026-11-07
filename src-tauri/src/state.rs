@@ -46,6 +46,9 @@ pub struct AppState {
     /// 因此旧结果可以覆盖新结果。详见 system::translation::coordinator。
     pub coordinator: Arc<TranslationCoordinator>,
     pub clipboard_monitor: Arc<MonitorController>,
+    /// 全局快捷键注册状态与动作分发（计划 Task 11）。
+    /// 注册失败只记录状态，不影响应用启动。
+    pub hotkeys: Arc<crate::system::hotkeys::HotkeyManager>,
 }
 
 impl AppState {

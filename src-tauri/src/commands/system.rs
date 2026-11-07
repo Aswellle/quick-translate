@@ -27,6 +27,17 @@ pub async fn copy_to_clipboard(app: AppHandle, text: String) -> Result<(), AppEr
     result
 }
 
+/// 读取全局快捷键注册状态（设置页「快捷键」分组）。
+///
+/// 返回每个动作的配置值、当前真正注册成功的值、最近一次失败原因 ——
+/// 界面如实显示「已保存但未生效」的冲突，而不是假设注册一定成功。
+#[tauri::command]
+pub async fn get_hotkey_status(
+    state: tauri::State<'_, crate::state::AppState>,
+) -> Result<Vec<crate::system::hotkeys::HotkeyStatus>, AppError> {
+    Ok(state.hotkeys.snapshot())
+}
+
 /// 隐藏翻译浮窗，并重置剪贴板监控的 last_text
 ///
 /// 与看守线程共用同一条关闭路径（`hide_popup_now`）—— 那条路径里的每一步

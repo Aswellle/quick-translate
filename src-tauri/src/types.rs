@@ -215,6 +215,14 @@ pub struct AppConfig {
     /// 设为开关而不是只提供「清空」：不想在磁盘上留存译文副本的用户，
     /// 需要一个持续生效的选项，而不是每次翻译后手动清一次。
     pub cache_enabled: bool,
+    /// 全局快捷键的加速键（空串 = 禁用该动作）。
+    ///
+    /// 语法由 tauri-plugin-global-shortcut 解析（如 "CmdOrControl+Alt+T"）。
+    /// 这里只存字符串：合法性由注册结果裁决，注册失败会在设置页显示
+    /// 真实原因且不影响应用启动。
+    pub hotkey_translate_clipboard: String,
+    pub hotkey_open_manual: String,
+    pub hotkey_toggle_monitor: String,
 }
 
 impl Default for AppConfig {
@@ -239,6 +247,9 @@ impl Default for AppConfig {
             reduce_transparency: false,
             export_dir: String::new(),
             cache_enabled: true,
+            hotkey_translate_clipboard: "CmdOrControl+Alt+T".to_string(),
+            hotkey_open_manual: "CmdOrControl+Alt+M".to_string(),
+            hotkey_toggle_monitor: "CmdOrControl+Alt+P".to_string(),
         }
     }
 }
