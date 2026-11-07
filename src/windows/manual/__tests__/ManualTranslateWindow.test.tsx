@@ -34,6 +34,18 @@ function setInput(container: HTMLElement, value: string) {
   });
 }
 
+/** 按出现顺序选下拉框（0 = 源语言，1 = 目标语言）。
+ *  jsdom 下用 id 选择器在本环境不可靠，tag + 序号更稳。 */
+function setSelect(container: HTMLElement, index: number, value: string) {
+  const selects = container.querySelectorAll("select");
+  const select = selects[index] as HTMLSelectElement | undefined;
+  expect(select, `第 ${index} 个 select 必须存在`).toBeTruthy();
+  act(() => {
+    select!.value = value;
+    select!.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+}
+
 function submitButton(container: HTMLElement): HTMLButtonElement {
   const btn = Array.from(container.querySelectorAll("button")).find((b) =>
     /翻译$|翻译中/.test(b.textContent ?? "")
@@ -76,9 +88,28 @@ describe("ManualTranslateWindow", () => {
     });
 
     expect(mockedTranslate).toHaveBeenCalledTimes(1);
-    expect(mockedTranslate).toHaveBeenCalledWith("hello", "zh");
+    expect(mockedTranslate).toHaveBeenCalledWith("hello", "zh", undefined);
     expect(container.textContent).toContain("你好");
     expect(container.textContent).toContain("DeepL");
+  });
+
+  it("选择显式源语言后随翻译请求下发", async () => {
+    mockedTranslate.mockResolvedValue({
+      source_text: "hello",
+      translated_text: "你好",
+      detected_source_lang: "en",
+      target_lang: "zh",
+      provider: "deepl",
+      duration_ms: 10,
+      truncated: false,
+    });
+    render();
+    setSelect(container, 0, "en");
+    setInput(container, "hello");
+    await act(async () => {
+      submitButton(container).click();
+    });
+    expect(mockedTranslate).toHaveBeenCalledWith("hello", "zh", "en");
   });
 
   it("空文本不发起请求", async () => {

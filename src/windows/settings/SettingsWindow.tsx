@@ -48,10 +48,18 @@ import { useConfigStore } from "@/stores/configStore";
 import { TrendChart, ProviderChart } from "./StatsDashboard";
 import { applyTheme } from "@/hooks/useTheme";
 import { AboutTab } from "./AboutTab";
+import { GlossaryTab } from "./GlossaryTab";
+import { SettingsRow, ToggleRow } from "./SettingsControls";
+// 既有测试从 SettingsWindow 导入 ToggleRow，保持出口不变
+export { ToggleRow } from "./SettingsControls";
 
-type TabId = "general" | "provider" | "about";
+type TabId = "general" | "provider" | "glossary" | "about";
 
-export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provider" | "about" }) {
+export function SettingsWindow({
+  initialTab,
+}: {
+  initialTab?: "general" | "provider" | "glossary" | "about";
+}) {
   const { setConfig } = useConfigStore();
   // activeTab 的同步镜像：事件 handler 经 ref 转发后读的是最新值，
   // 不必为它重订监听
@@ -153,7 +161,12 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
     import("@tauri-apps/api/event")
       .then(({ listen }) =>
         listen<{ tab: string }>("settings-navigate", (e) => {
-          if (e.payload.tab === "provider" || e.payload.tab === "general" || e.payload.tab === "about") {
+          if (
+            e.payload.tab === "provider" ||
+            e.payload.tab === "general" ||
+            e.payload.tab === "glossary" ||
+            e.payload.tab === "about"
+          ) {
             setActiveTab(e.payload.tab);
             // 同值 Tab 的 setActiveTab 是 React bail-out，effect 不会重跑；
             // 显式刷一次统计，托盘重新打开设置时仪表盘才是当下数据
@@ -449,7 +462,7 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
           role="tablist"
           aria-label="设置分组"
         >
-          {(["general", "provider", "about"] as TabId[]).map((tab) => (
+          {(["general", "provider", "glossary", "about"] as TabId[]).map((tab) => (
             <button
               key={tab}
               role="tab"
@@ -462,7 +475,13 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
                   : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
               ].join(" ")}
             >
-              {tab === "general" ? "常规" : tab === "provider" ? "翻译源" : "关于"}
+              {tab === "general"
+                ? "常规"
+                : tab === "provider"
+                  ? "翻译源"
+                  : tab === "glossary"
+                    ? "术语表"
+                    : "关于"}
             </button>
           ))}
         </div>
@@ -495,6 +514,12 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
             testResults={testResults}
             providerStatus={providerStatus}
             maskedCredentials={maskedCredentials}
+          />
+        )}
+        {activeTab === "glossary" && (
+          <GlossaryTab
+            draft={draft}
+            applyConfig={(key, value, feedback) => void applyConfig(key, value, feedback)}
           />
         )}
         {activeTab === "about" && <AboutTab />}
@@ -1772,134 +1797,3 @@ function ClearCacheRow({ onClear, busy }: { onClear: () => void; busy: boolean }
   );
 }
 
-function SettingsRow({
-  label,
-  hint,
-  htmlFor,
-  children,
-}: {  label: string;
-  hint?: string;
-  /** 传入时 label 渲染为 <label htmlFor>，控件可被标签点击聚焦、屏幕
-      阅读器可正确关联 —— 纯开关行（Toggle 自带 role=switch）无需传入 */
-  htmlFor?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="px-4 py-3 flex items-center justify-between gap-4">
-      <div className="flex-1 min-w-0">
-        {htmlFor ? (
-          <label
-            htmlFor={htmlFor}
-            className="text-[13px] font-medium text-[var(--text-primary)] block cursor-pointer"
-          >
-            {label}
-          </label>
-        ) : (
-          <p className="text-[13px] font-medium text-[var(--text-primary)]">{label}</p>
-        )}
-        {hint && <p className="text-[12px] text-[var(--text-secondary)] mt-0.5 leading-snug">{hint}</p>}
-      </div>
-      <div className="shrink-0">{children}</div>
-    </div>
-  );
-}
-
-/**
- * 开关行：Toggle + 就近的生效状态提示。
- *
- * 状态提示紧贴按钮右侧的空白区域：11.5px / medium / 语义色
- * （成功绿、失败红）。此前「已保存」只出现在底部保存栏——用户盯着
- * 开关看时视线要跨过整屏去找结果。busy 期间开关禁用防连点。
- */
-export function ToggleRow({
-  label,
-  hint,
-  value,
-  onApply,
-}: {
-  label: string;
-  hint?: string;
-  value: boolean;
-  onApply: (v: boolean) => void;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState<null | { ok: boolean; text: string }>(null);
-  // 显示自己最近一次的结果：连续切换时新结果覆盖旧结果
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const apply = useCallback(
-    (v: boolean) => {
-      if (busy) return;
-      setBusy(true);
-      if (timerRef.current) clearTimeout(timerRef.current);
-      setStatus({ ok: true, text: v ? "已开启" : "已关闭" });
-      try {
-        onApply(v);
-        // 状态提示驻留 2.5s 后淡出（下一次切换会立即覆盖）
-        timerRef.current = setTimeout(() => setStatus(null), 2500);
-      } finally {
-        setBusy(false);
-      }
-    },
-    [busy, onApply]
-  );
-
-  return (
-    <SettingsRow label={label} hint={hint}>
-      <div className="flex items-center gap-2.5">
-        {status && (
-          <span
-            role="status"
-            className={[
-              "text-[11.5px] font-medium animate-fade-in",
-              status.ok
-                ? "text-green-600 dark:text-green-500"
-                : "text-red-500",
-            ].join(" ")}
-          >
-            {status.text}
-          </span>
-        )}
-        <Toggle value={value} onChange={apply} busy={busy} />
-      </div>
-    </SettingsRow>
-  );
-}
-
-// macOS 风格的 Toggle 开关
-function Toggle({
-  value,
-  onChange,
-  busy = false,
-}: {
-  value: boolean;
-  onChange: (v: boolean) => void;
-  busy?: boolean;
-}) {
-  return (
-    <button
-      onClick={() => onChange(!value)}
-      disabled={busy}
-      role="switch"
-      aria-checked={value}
-      className={[
-        "relative w-9 h-5 rounded-full transition-colors duration-200",
-        value ? "bg-[var(--system-blue)]" : "bg-[var(--surface-tertiary)]",
-      ].join(" ")}
-      style={{
-        boxShadow: value
-          ? "0 0 0 0 rgba(0, 122, 255, 0)"
-          : "inset 0 0 0 1px rgba(0,0,0,0.08)",
-      }}
-    >
-      <span
-        className={[
-          "absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full",
-          "transition-transform duration-200",
-          "shadow-[0_1px_3px_rgba(0,0,0,0.2)]",
-          value ? "translate-x-4" : "translate-x-0",
-        ].join(" ")}
-      />
-    </button>
-  );
-}

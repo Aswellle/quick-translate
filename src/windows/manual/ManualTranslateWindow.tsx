@@ -23,6 +23,8 @@ export const MANUAL_MAX_CHARS = 5000;
 export function ManualTranslateWindow() {
   const config = useConfigStore((s) => s.config);
   const [text, setText] = useState("");
+  // 显式源语言是 DeepL 术语表生效的前提（自动检测路径不应用术语表）
+  const [sourceLang, setSourceLang] = useState<string>("auto");
   const [targetLang, setTargetLang] = useState<string>(config?.target_lang ?? "zh");
   const [result, setResult] = useState<TranslationResult | null>(null);
   const [busy, setBusy] = useState(false);
@@ -37,7 +39,11 @@ export function ManualTranslateWindow() {
     setBusy(true);
     setError(null);
     try {
-      const r = await translateText(text.trim(), targetLang);
+      const r = await translateText(
+        text.trim(),
+        targetLang,
+        sourceLang === "auto" ? undefined : sourceLang
+      );
       setResult(r);
     } catch (err) {
       // 错误码契约（AppError::error_code ↔ ERROR_MESSAGES）：展示层
@@ -50,20 +56,36 @@ export function ManualTranslateWindow() {
     } finally {
       setBusy(false);
     }
-  }, [text, targetLang, overLimit, busy]);
+  }, [text, targetLang, sourceLang, overLimit, busy]);
 
   return (
     <div className="flex flex-col h-full bg-[var(--surface-primary)] text-[var(--text-primary)]">
-      {/* ── 控制行：目标语言 + 字符计数 ── */}
-      <div className="px-4 pt-3 pb-2 flex items-center gap-3 shrink-0">
+      {/* ── 控制行：源语言 + 目标语言 + 字符计数 ── */}
+      <div className="px-4 pt-3 pb-1 flex items-center gap-2 shrink-0">
+        <label className="text-[12px] text-[var(--text-secondary)] shrink-0" htmlFor="manual-source-lang">
+          源语言
+        </label>
+        <select
+          id="manual-source-lang"
+          value={sourceLang}
+          onChange={(e) => setSourceLang(e.target.value)}
+          className="input-field text-xs py-1.5 flex-1 min-w-0"
+        >
+          <option value="auto">自动检测</option>
+          {SUPPORTED_LANGUAGES.map((lang) => (
+            <option key={lang.code} value={lang.code}>
+              {lang.name}
+            </option>
+          ))}
+        </select>
         <label className="text-[12px] text-[var(--text-secondary)] shrink-0" htmlFor="manual-target-lang">
-          目标语言
+          目标
         </label>
         <select
           id="manual-target-lang"
           value={targetLang}
           onChange={(e) => setTargetLang(e.target.value)}
-          className="input-field text-xs py-1.5 flex-1"
+          className="input-field text-xs py-1.5 flex-1 min-w-0"
         >
           {SUPPORTED_LANGUAGES.map((lang) => (
             <option key={lang.code} value={lang.code}>
@@ -71,9 +93,11 @@ export function ManualTranslateWindow() {
             </option>
           ))}
         </select>
+      </div>
+      <div className="px-4 pb-1 flex justify-end shrink-0">
         <span
           className={[
-            "text-[11px] tabular-nums shrink-0",
+            "text-[11px] tabular-nums",
             overLimit ? "text-red-500 font-medium" : "text-[var(--text-tertiary)]",
           ].join(" ")}
         >

@@ -201,11 +201,14 @@ export async function setConfigBatch(
  * 手动触发翻译（计划 Task 09）：与剪贴板路径共用同一翻译引擎、
  * 同一落盘管道；历史记录来源标为 manual。结果直接返回，不经事件。
  */
+/** 手动翻译（计划 Task 09/10）。
+ *  `sourceLang` 省略 = 自动检测；显式源语言是 DeepL 术语表生效的前提。 */
 export async function translateText(
   text: string,
-  targetLang?: string
+  targetLang?: string,
+  sourceLang?: string
 ): Promise<TranslationResult> {
-  return invoke("translate_text", { text, targetLang });
+  return invoke("translate_text", { text, targetLang, sourceLang });
 }
 
 // ---- 历史 Commands ----
@@ -381,6 +384,91 @@ export async function getAppVersion(): Promise<string> {
 /** 各动作的快捷键注册状态（配置值 / 实际生效值 / 失败原因） */
 export async function getHotkeyStatus(): Promise<HotkeyStatus[]> {
   return invoke("get_hotkey_status");
+}
+
+// ---- 术语表（按语言对管理，计划 Task 10） ----
+
+export interface GlossaryEntry {
+  id: number;
+  source_lang: string;
+  target_lang: string;
+  source_term: string;
+  target_term: string;
+  note: string;
+  case_sensitive: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface GlossaryEntryInput {
+  source_lang: string;
+  target_lang: string;
+  source_term: string;
+  target_term: string;
+  note?: string;
+  case_sensitive?: boolean;
+}
+
+export async function listGlossaryEntries(
+  sourceLang: string,
+  targetLang: string
+): Promise<GlossaryEntry[]> {
+  return invoke("list_glossary_entries", { sourceLang, targetLang });
+}
+
+export async function createGlossaryEntry(
+  input: GlossaryEntryInput
+): Promise<GlossaryEntry> {
+  return invoke("create_glossary_entry", { input });
+}
+
+export async function updateGlossaryEntry(
+  id: number,
+  input: GlossaryEntryInput
+): Promise<GlossaryEntry> {
+  return invoke("update_glossary_entry", { id, input });
+}
+
+export async function deleteGlossaryEntry(id: number): Promise<boolean> {
+  return invoke("delete_glossary_entry", { id });
+}
+
+export async function clearGlossary(
+  sourceLang: string,
+  targetLang: string
+): Promise<number> {
+  return invoke("clear_glossary", { sourceLang, targetLang });
+}
+
+/** 导入 JSON/CSV：替换当前语言对的条目（整批校验通过才落库） */
+export async function importGlossaryJson(
+  sourceLang: string,
+  targetLang: string,
+  content: string
+): Promise<number> {
+  return invoke("import_glossary_json", { sourceLang, targetLang, content });
+}
+
+export async function importGlossaryCsv(
+  sourceLang: string,
+  targetLang: string,
+  content: string
+): Promise<number> {
+  return invoke("import_glossary_csv", { sourceLang, targetLang, content });
+}
+
+export async function exportGlossaryJson(
+  sourceLang: string,
+  targetLang: string
+): Promise<string> {
+  return invoke("export_glossary_json", { sourceLang, targetLang });
+}
+
+export async function exportGlossaryCsv(
+  sourceLang: string,
+  targetLang: string
+): Promise<string> {
+  return invoke("export_glossary_csv", { sourceLang, targetLang });
 }
 
 // ---- 系统浏览器打开链接 ----
