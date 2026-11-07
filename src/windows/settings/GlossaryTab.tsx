@@ -342,6 +342,10 @@ export function GlossaryTab({
               </div>
             </div>
             {formError && <p className="text-[11px] text-red-500">{formError}</p>}
+            <p className="text-[10.5px] text-[var(--text-tertiary)] leading-relaxed">
+              「区分大小写」随术语保存并参与导出；DeepL 当前按其自身的术语匹配规则处理大小写，
+              该选项不会改变服务商行为。
+            </p>
           </div>
 
           {/* 条目列表 */}
