@@ -4,12 +4,22 @@
 - Branch: main
 - Base commit: b64b04e（Merge pull request #80）
 - App version: 0.9.0
-- Current task: Task 08 Provider 管理中心第一轮（完成）；剩余项依赖 AI 解禁或产品决策
+- Current task: Task 09 手动翻译入口第一小步（完成：来源类型贯通）；剩余为手动翻译 UI 入口
 - Working tree: 干净
 - 执行依据: docs/QUICK_TRANSLATE_AI_AGENT_DEVELOPMENT_PLAN.md（2026-11-07 修订）
 - 测试清单: docs/TEST_INVENTORY.md
 
 ## Completed
+
+### 2026-11-07 — Task 09 统一手动翻译入口（第一小步：来源类型贯通）
+- 核验结论：`translate_text` 命令已存在（设置面板测试翻译用）——走同一翻译引擎（fallback/熔断/8s 预算一致）、同一落盘管道（有界队列 + 单 worker），验收「手动与剪贴板走同一核心业务」「不改变剪贴板监控开关」「Fallback 行为一致」已满足。
+- 改动（schema v7）：
+  - `translation_records` 新增 `source` 列（"clipboard" | "manual"），v7 迁移为既有行统一回填 clipboard（v7 之前唯一入口是剪贴板监控）。
+  - `translate_text` 写入 manual；coordinator 剪贴板路径（含敏感覆盖重译）写入 clipboard。
+  - 前端 `TranslationRecord.source` 类型同步（字面量联合类型）。
+- Tests: `cargo test --lib` → 368 passed（+2：v6→v7 升级回填断言、insert/query 来源往返契约）；v1→最新升级测试补来源默认值断言；clippy/fmt PASS；tsc PASS；vitest 64/64
+- Commit: 7930da0
+- 剩余（下一轮）：手动翻译 UI 入口——计划建议「浮窗或主窗口可输入/粘贴文本、选择源/目标语言」。候选方案：A. 托盘菜单「手动翻译…」开独立小窗（不打扰被动浮窗，符合现有窗口管理）；B. 历史窗口顶部加输入区；C. 浮窗输入模式（与被动交互模型冲突大）。倾向 A，待实施时定。另：手动路径暂无全部失败时的缓存回退（coordinator 有），统一时补。
 
 ### 2026-11-07 — Task 08 Provider 管理中心（第一轮：可独立验证项）
 - 核验结论（已具备，无改动）：
@@ -118,4 +128,5 @@
   - Required manual test: 显式 opt-in 的真实凭证测试
 
 ## Next task
-- Task 08 剩余项被两处外部条件阻塞：供应商目录分类/自定义兼容接口/「AI 模型」类目依赖要求 19 解禁；恢复默认配置的产品语义待确认。可选推进：Task 09（统一手动翻译入口，纯传统翻译链路，无 AI 依赖）、Task 10（术语表）或缓存开关（待文案确认）。
+- Task 09 剩余：手动翻译 UI 入口（候选方案 A：托盘菜单「手动翻译…」开独立小窗，复用 translate_text 命令 + source=manual 已就绪）；实施时补手动路径的缓存回退统一（全部 Provider 失败时查 TranslationCache，与 coordinator 行为一致）。
+- 阻塞项：Task 08 剩余（供应商目录分类/AI 类目）待要求 19 解禁；缓存开关文案待确认。
