@@ -4,7 +4,7 @@
 - Branch: main
 - Base commit: b64b04e（Merge pull request #80）
 - App version: 0.9.0
-- Current task: Task 09 手动翻译入口（完成）；下一步 Task 10 术语表或缓存开关（待定）
+- Current task: Task 09 手动翻译入口（含缓存回退统一，完成）；下一步 Task 10 术语表或缓存开关（待定）
 - Working tree: 干净
 - 执行依据: docs/QUICK_TRANSLATE_AI_AGENT_DEVELOPMENT_PLAN.md（2026-11-07 修订）
 - 测试清单: docs/TEST_INVENTORY.md
@@ -20,8 +20,14 @@
   - popup 若在显示，由 popup_watch 前台轮询自然关闭，无需特判。
 - Tests: vitest 70/70（+6：调用契约、空文本不请求、超限禁用、truncated 提示、错误契约、缓存标识）；tsc/build PASS；cargo fmt/clippy PASS（Rust 侧为窗口创建与菜单项，无可单测逻辑）
 - Commit: 7930da0 / 1b00ab3
-- 验收对照：同一核心业务 ✅；不改剪贴板开关 ✅；历史可识别来源 ✅；Fallback 一致 ✅；超长文本明确提示 ✅。**唯一偏差**：手动路径不走 coordinator（引擎直调），全部失败时无缓存回退（coordinator 有）——行为统一项，见剩余。
-- 剩余：手动路径的缓存回退统一（全部 Provider 失败时查 TranslationCache，返回 provider="cache"，与 coordinator 语义一致）；实施时注意命令层测试基建（State mock 无先例，倾向抽纯 helper 放 domain 层测）。
+- 验收对照：同一核心业务 ✅；不改剪贴板开关 ✅；历史可识别来源 ✅；Fallback 一致 ✅；超长文本明确提示 ✅。**行为统一已补**：手动路径的缓存回退（见下条）。
+- 第三小步（51fa5f4 / 2cb3457，缓存回退统一）：
+  - `should_fall_back_to_cache` / `lookup_cached_result` / `CACHE_PROVIDER` 从 coordinator 私有实现上移到 `domain/cache.rs`，剪贴板路径与手动路径共用；coordinator 改为调用共享版。
+  - `translate_text` 全部翻译源失败（AllProvidersFailed）时查 TranslationCache，命中返回 provider="cache"（前端「本地缓存」），未命中返回原始错误；缓存结果不再入落盘队列（条目来自上一次翻译，重复入队只会多一条重复历史）。
+  - 顺带对齐：翻译源健康上报从「仅成功时」移到 outcome 分支之前（与 coordinator 时机一致），失败时也上报。
+  - +4 Rust 测试（结果组装/truncated 透传/回声条目拒收/未命中）。命令层接线本身无单测（State mock 无先例），以接线代码审读兜底，如实记录。
+- Tests: cargo test --lib 372 passed（+4）；fmt/clippy PASS；vitest 70/70；tsc/build PASS
+- Commit: 7930da0 / 1b00ab3 / 51fa5f4 / 2cb3457
 
 ### 2026-11-07 — Task 08 Provider 管理中心（第一轮：可独立验证项）
 - 核验结论（已具备，无改动）：
@@ -130,5 +136,5 @@
   - Required manual test: 显式 opt-in 的真实凭证测试
 
 ## Next task
-- Task 09 收尾：手动路径缓存回退统一（全部 Provider 失败时查 TranslationCache，与 coordinator 语义一致；抽纯 helper 放 domain 层以便测试）。
-- 阻塞项：Task 08 剩余（供应商目录分类/AI 类目）待要求 19 解禁；缓存开关文案待确认；Task 10 术语表为中期项，可启动最小功能（原文术语/目标译法/可选说明，纯本地）。
+- Task 10 术语表（中期项，可启动最小功能：原文术语/目标译法/可选说明，纯本地）或缓存禁用开关（文案待确认）。
+- 阻塞项：Task 08 剩余（供应商目录分类/AI 类目）待要求 19 解禁；缓存开关文案待确认。
