@@ -9,8 +9,9 @@
 //     命中缓存   → 立刻显示，并标明来自本地缓存
 //     未命中     → 明确告知暂时连不上，等网络恢复后自动继续
 //
-// 只在所有翻译源都用不了时才查缓存（见 coordinator），因此在线时结果永远
-// 是新鲜的 —— 缓存不会让用户看到过期译文。
+// 只在所有翻译源都用不了时才查缓存（见下方 `should_fall_back_to_cache`，
+// coordinator 的剪贴板路径与 translate_text 的手动路径共用），因此在线时
+// 结果永远是新鲜的 —— 缓存不会让用户看到过期译文。
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -248,6 +249,66 @@ impl TranslationCache {
             row.get(0)
         })
         .unwrap()
+    }
+}
+
+// ── 离线回退（计划第 15 节；coordinator 与手动翻译路径共用）─────────────
+
+/// 缓存来源的 provider 标识。
+///
+/// 前端 `PROVIDER_LABELS` 里对应「本地缓存」。复用 provider 字段而不是给
+/// `TranslationResult` 加一个 `from_cache` 标志：既有的 SameLanguage 路径
+/// 已经在用非翻译商取值（"none"），说明这个字段本就是「来源」而非
+/// 「翻译商」，加字段会连带改动前端类型与所有展示组件。
+pub const CACHE_PROVIDER: &str = "cache";
+
+/// 是否该回退到本地缓存。
+///
+/// 只在「所有翻译源都用不了」时回退 —— 那才是离线信号的形状。Permanent
+/// 不回退：换谁都一样，缓存里也不会有更对的东西；SameLanguage 根本不是
+/// 失败。这两种情况把真实原因告诉用户，比递一个来源不明的旧译文有用。
+pub fn should_fall_back_to_cache(err: &AppError) -> bool {
+    matches!(err, AppError::AllProvidersFailed { .. })
+}
+
+/// 查缓存并组装成一次正常的翻译结果。
+///
+/// 回声条目过滤：缓存里可能存有回声守卫落地前的存量 `(A → A)` 条目，
+/// 离线回退把它们当译文端出去就是「翻译结果是原文」。读取侧统一拒掉，
+/// 存量数据无需迁移即失效。
+///
+/// 缓存读失败返回 None（记 warn）：缓存是最后一根稻草，不该把主链路
+/// 带下水 —— 回退路径上没有别的兜底了。
+pub async fn lookup_cached_result(
+    cache: &TranslationCache,
+    text: &str,
+    target_lang: &str,
+    truncated: bool,
+) -> Option<crate::types::TranslationResult> {
+    match cache.get(text, target_lang).await {
+        Ok(Some(hit)) => {
+            if crate::domain::translator::is_echo_text(text, &hit.translated_text) {
+                tracing::info!(
+                    event = "cache_entry_rejected_as_echo",
+                    "[cache] 缓存命中了与原文相同的内容，按未命中处理"
+                );
+                return None;
+            }
+            Some(crate::types::TranslationResult {
+                source_text: text.to_string(),
+                translated_text: hit.translated_text,
+                detected_source_lang: hit.source_lang,
+                target_lang: target_lang.to_string(),
+                provider: CACHE_PROVIDER.to_string(),
+                duration_ms: 0,
+                truncated,
+            })
+        }
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!("[cache] 读取本地缓存失败: {}", e);
+            None
+        }
     }
 }
 
@@ -535,5 +596,56 @@ mod tests {
             count, 2,
             "重复写入不该重置热度记录 —— 否则常翻的内容会因为被重新翻译过而被当成冷门淘汰"
         );
+    }
+
+    // ── 离线回退组装（coordinator 与手动翻译路径共用）────────────────────
+
+    #[tokio::test]
+    async fn cached_hit_is_assembled_as_a_result_from_the_cache_provider() {
+        let c = fast();
+        put(&c, "hello", "zh", "你好", "deepl").await;
+
+        let r = lookup_cached_result(&c, "hello", "zh", false)
+            .await
+            .expect("有缓存条目必须组装出结果");
+        assert_eq!(r.provider, CACHE_PROVIDER);
+        assert_eq!(r.translated_text, "你好");
+        assert_eq!(r.source_text, "hello");
+        assert_eq!(r.target_lang, "zh");
+        assert_eq!(r.duration_ms, 0, "缓存返回没有网络耗时");
+        assert!(!r.truncated);
+    }
+
+    #[tokio::test]
+    async fn truncated_flag_is_passed_through_to_the_cached_result() {
+        let c = fast();
+        put(&c, "hello", "zh", "你好", "deepl").await;
+        assert!(
+            lookup_cached_result(&c, "hello", "zh", true)
+                .await
+                .unwrap()
+                .truncated
+        );
+    }
+
+    /// 存量回声条目（回声守卫落地前写入的 A → A）在回退读取侧被拒收。
+    #[tokio::test]
+    async fn an_echo_entry_in_the_cache_is_rejected_on_fallback() {
+        let c = fast();
+        put(&c, "password", "zh", "password", "deepl").await;
+        assert!(
+            lookup_cached_result(&c, "password", "zh", false)
+                .await
+                .is_none(),
+            "译文与原文相同的缓存条目端出去就是「翻译结果是原文」"
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_miss_yields_none_on_fallback() {
+        let c = fast();
+        assert!(lookup_cached_result(&c, "never seen", "zh", false)
+            .await
+            .is_none());
     }
 }

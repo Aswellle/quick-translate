@@ -27,6 +27,7 @@ use std::sync::Mutex;
 use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Manager};
 
+use crate::domain::cache::{lookup_cached_result, should_fall_back_to_cache};
 use crate::domain::clipboard_filter::{self, FilterDecision, SensitiveRule};
 use crate::error::AppError;
 use crate::state::AppState;
@@ -499,7 +500,14 @@ async fn run_translation(app: &AppHandle, request: TranslationRequest) {
             // 任何新文本」是做不到的承诺。能做的是——译过的内容仍然显示得出来。
             // 这是整条链路里唯一读缓存的地方，因此在线时结果永远是新鲜的。
             if should_fall_back_to_cache(&e) {
-                if let Some(cached) = lookup_cache(&state, &request).await {
+                if let Some(cached) = lookup_cached_result(
+                    &state.cache,
+                    &request.text,
+                    &request.target_lang,
+                    request.truncated,
+                )
+                .await
+                {
                     if coordinator.run_if_current(id, || {
                         translation_flow::emit_result(app, &cached, &id.full());
                     }) {
@@ -540,56 +548,9 @@ fn log_stale_result(id: RequestId) {
     );
 }
 
-/// 缓存来源的 provider 标识。
-///
-/// 前端 `PROVIDER_LABELS` 里对应「本地缓存」。复用 provider 字段而不是给
-/// `TranslationResult` 加一个 `from_cache` 标志：既有的 SameLanguage 路径
-/// 已经在用非 provider 取值（"none"），说明这个字段本就是「来源」而非
-/// 「翻译商」，加字段会连带改动前端类型与组件。
-const CACHE_PROVIDER: &str = "cache";
-
-/// 是否该回退到本地缓存。
-///
-/// 只在「所有翻译源都用不了」时回退 —— 那才是信号。Permanent 不回退：
-/// 换谁都一样，缓存里也不会有更对的东西；SameLanguage 根本不是失败。
-/// 这两种情况把真实原因告诉用户，比递一个来源不明的旧译文有用。
-fn should_fall_back_to_cache(err: &AppError) -> bool {
-    matches!(err, AppError::AllProvidersFailed { .. })
-}
-
-/// 查缓存并组装成一次正常的翻译结果。
-///
-/// 回声条目过滤：缓存里可能存有历史版本写入的 `(A → A)` 条目（回声守卫
-/// 落地前的存量数据），离线回退把它们当译文端出去就是「翻译结果是原文」。
-/// 读取侧统一拒掉，存量毒化数据无需迁移即可失效。
-async fn lookup_cache(state: &AppState, request: &TranslationRequest) -> Option<TranslationResult> {
-    match state.cache.get(&request.text, &request.target_lang).await {
-        Ok(Some(hit)) => {
-            if crate::domain::translator::is_echo_text(&request.text, &hit.translated_text) {
-                tracing::info!(
-                    event = "cache_entry_rejected_as_echo",
-                    "[coordinator] 缓存命中了与原文相同的内容，按未命中处理"
-                );
-                return None;
-            }
-            Some(TranslationResult {
-                source_text: request.text.clone(),
-                translated_text: hit.translated_text,
-                detected_source_lang: hit.source_lang,
-                target_lang: request.target_lang.clone(),
-                provider: CACHE_PROVIDER.to_string(),
-                duration_ms: 0,
-                truncated: request.truncated,
-            })
-        }
-        Ok(None) => None,
-        Err(e) => {
-            // 缓存读失败不该把主链路也带下水 —— 它本来只是最后一根稻草
-            tracing::warn!("[coordinator] 读取本地缓存失败: {}", e);
-            None
-        }
-    }
-}
+// 缓存回退（should_fall_back_to_cache / lookup_cached_result / CACHE_PROVIDER）
+// 移到 domain/cache.rs：手动翻译路径（commands/translate.rs）与 coordinator
+// 共用同一套「全部翻译源失败 → 查本地缓存」的语义。
 
 /// 成功的翻译落盘：交给有界队列 + 单 worker（计划第 24 节）。
 ///
