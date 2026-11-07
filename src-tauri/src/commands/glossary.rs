@@ -14,8 +14,10 @@ use crate::state::AppState;
 #[tauri::command]
 pub async fn list_glossary_entries(
     state: State<'_, AppState>,
+    source_lang: String,
+    target_lang: String,
 ) -> Result<Vec<GlossaryEntry>, AppError> {
-    state.glossary.list().await
+    state.glossary.list(&source_lang, &target_lang).await
 }
 
 #[tauri::command]
@@ -41,38 +43,62 @@ pub async fn delete_glossary_entry(state: State<'_, AppState>, id: i64) -> Resul
 }
 
 #[tauri::command]
-pub async fn clear_glossary(state: State<'_, AppState>) -> Result<i64, AppError> {
-    state.glossary.clear().await
+pub async fn clear_glossary(
+    state: State<'_, AppState>,
+    source_lang: String,
+    target_lang: String,
+) -> Result<i64, AppError> {
+    state.glossary.clear(&source_lang, &target_lang).await
 }
 
-/// 导入 JSON：全量替换（整批校验通过才落库），返回写入条数。
+/// 导入 JSON：替换当前语言对的条目（整批校验通过才落库），返回写入条数。
 #[tauri::command]
 pub async fn import_glossary_json(
     state: State<'_, AppState>,
+    source_lang: String,
+    target_lang: String,
     content: String,
 ) -> Result<usize, AppError> {
-    let entries = glossary::import_json(&content).map_err(AppError::ConfigError)?;
-    state.glossary.replace_all(entries).await
+    let entries = glossary::import_json(&content, &source_lang, &target_lang)
+        .map_err(AppError::ConfigError)?;
+    state
+        .glossary
+        .replace_pair(&source_lang, &target_lang, entries)
+        .await
 }
 
-/// 导入 CSV：全量替换（整批校验通过才落库），返回写入条数。
+/// 导入 CSV：替换当前语言对的条目（整批校验通过才落库），返回写入条数。
 #[tauri::command]
 pub async fn import_glossary_csv(
     state: State<'_, AppState>,
+    source_lang: String,
+    target_lang: String,
     content: String,
 ) -> Result<usize, AppError> {
-    let entries = glossary::import_csv(&content).map_err(AppError::ConfigError)?;
-    state.glossary.replace_all(entries).await
+    let entries = glossary::import_csv(&content, &source_lang, &target_lang)
+        .map_err(AppError::ConfigError)?;
+    state
+        .glossary
+        .replace_pair(&source_lang, &target_lang, entries)
+        .await
 }
 
 #[tauri::command]
-pub async fn export_glossary_json(state: State<'_, AppState>) -> Result<String, AppError> {
-    let entries = state.glossary.list().await?;
+pub async fn export_glossary_json(
+    state: State<'_, AppState>,
+    source_lang: String,
+    target_lang: String,
+) -> Result<String, AppError> {
+    let entries = state.glossary.list(&source_lang, &target_lang).await?;
     glossary::export_json(&entries)
 }
 
 #[tauri::command]
-pub async fn export_glossary_csv(state: State<'_, AppState>) -> Result<String, AppError> {
-    let entries = state.glossary.list().await?;
+pub async fn export_glossary_csv(
+    state: State<'_, AppState>,
+    source_lang: String,
+    target_lang: String,
+) -> Result<String, AppError> {
+    let entries = state.glossary.list(&source_lang, &target_lang).await?;
     Ok(glossary::export_csv(&entries))
 }

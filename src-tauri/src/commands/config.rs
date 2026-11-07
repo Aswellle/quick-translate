@@ -123,9 +123,7 @@ const BOOL_KEYS: &[&str] = &[
 const THEME_VALUES: &[&str] = &["system", "light", "dark"];
 
 /// 支持的目标语言（与前端 SUPPORTED_LANGUAGES 一致）
-const TARGET_LANGS: &[&str] = &[
-    "zh", "zh-tw", "en", "ja", "ko", "fr", "de", "es", "ru", "pt", "it", "ar",
-];
+const TARGET_LANGS: &[&str] = crate::types::SUPPORTED_LANGS;
 
 /// 凭证键（值只需非空；掩码值已在更早的入口过滤）
 const CREDENTIAL_KEYS: &[&str] = &[

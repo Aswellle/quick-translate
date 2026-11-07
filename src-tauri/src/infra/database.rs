@@ -529,11 +529,14 @@ fn migrate_v7(tx: &Transaction) -> Result<(), AppError> {
 /// 术语表建表语句（schema v8）。
 ///
 /// 导出给 `domain::glossary` 的测试共用，保证测试表结构与线上一致。
-/// `source_term` 唯一索引按 NOCASE 建：同一原文的大小写变体视为重复 ——
-/// 两条 "Apple" 译法不同时无法决定用哪条，导入/新增阶段就应当拒绝。
+/// 术语按**语言对**组织（DeepL glossary 是一个语言对一个词典，且不支持
+/// 源语言自动检测）。同一语言对内原文唯一、大小写不敏感：两条同名条目
+/// 译法不同时无法决定用哪条，写入/导入阶段就拒绝。
 pub(crate) const GLOSSARY_TABLE_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS glossary_entries (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_lang    TEXT NOT NULL,
+    target_lang    TEXT NOT NULL,
     source_term    TEXT NOT NULL,
     target_term    TEXT NOT NULL,
     note           TEXT NOT NULL DEFAULT '',
@@ -541,8 +544,8 @@ CREATE TABLE IF NOT EXISTS glossary_entries (
     created_at     INTEGER NOT NULL,
     updated_at     INTEGER NOT NULL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_glossary_source_nocase
-    ON glossary_entries(source_term COLLATE NOCASE);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_glossary_pair_source_nocase
+    ON glossary_entries(source_lang, target_lang, source_term COLLATE NOCASE);
 "#;
 
 /// v8：新增本地术语表（计划 Task 10）。

@@ -261,6 +261,14 @@ impl Default for AppConfig {
     }
 }
 
+/// 应用支持的语言代码（与前端 SUPPORTED_LANGUAGES 一致）。
+///
+/// 单一定义来源：配置校验（target_lang）与术语表语言对校验共用，
+/// 避免两处清单漂移。
+pub const SUPPORTED_LANGS: &[&str] = &[
+    "zh", "zh-tw", "en", "ja", "ko", "fr", "de", "es", "ru", "pt", "it", "ar",
+];
+
 /// 获取当前 Unix 时间戳（毫秒）
 pub fn now_unix_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
