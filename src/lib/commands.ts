@@ -70,6 +70,8 @@ export interface AppConfig {
   reduce_transparency: boolean;
   /** 历史导出的默认保存目录；空串 = 每次导出弹原生保存对话框 */
   export_dir: string;
+  /** 本地翻译缓存开关（默认开启；关闭只暂停读写，已有条目保留） */
+  cache_enabled: boolean;
 }
 
 export interface HistoryQuery {

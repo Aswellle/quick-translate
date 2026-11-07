@@ -29,6 +29,7 @@ const baseConfig = (): AppConfig => ({
   sensitive_filter_enabled: true,
   reduce_transparency: false,
   export_dir: "",
+  cache_enabled: true,
 });
 
 describe("mergeExternalConfig", () => {

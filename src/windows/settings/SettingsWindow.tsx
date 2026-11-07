@@ -208,6 +208,7 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
     sensitive_filter_enabled: "敏感内容过滤",
     reduce_transparency: "减少透明效果",
     export_dir: "导出保存位置",
+    cache_enabled: "本地缓存",
   };
 
   /** 凭证字段在加载时已被清空；这里还原哪些键属于凭证（即时生效模型下
@@ -624,6 +625,12 @@ function GeneralTab({
         <ExportDirRow
           value={draft.export_dir}
           onChange={(v) => void applyConfig("export_dir", v, "toast")}
+        />
+        <ToggleRow
+          label="本地缓存"
+          hint="翻译成功的结果会存到本机，断网时可回退显示。关闭后不再读写缓存；已有条目仍保留，可在下方单独清空"
+          value={draft.cache_enabled}
+          onApply={(v) => void applyConfig("cache_enabled", v, "inline")}
         />
         <ClearCacheRow onClear={() => setConfirmClearCache(true)} busy={clearingCache} />
       </SettingsSection>
