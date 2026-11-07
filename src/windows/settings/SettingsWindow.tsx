@@ -34,15 +34,11 @@ import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
 import { toast } from "@/components/ToastManager";
 import { SUPPORTED_LANGUAGES, PROVIDERS, ERROR_MESSAGES, EVENTS } from "@/lib/constants";
+import { CREDENTIAL_KEYS, mergeExternalConfig, mayRollBackToPrevious } from "@/lib/configSync";
 import { useConfigStore } from "@/stores/configStore";
 import { TrendChart, ProviderChart } from "./StatsDashboard";
 import { applyTheme } from "@/hooks/useTheme";
 import { AboutTab } from "./AboutTab";
-
-// 需要特殊处理的凭证字段：getConfig() 返回 masked 值，不能直接写回
-const CREDENTIAL_KEYS = PROVIDERS
-  .filter((p) => p.requiresApiKey)
-  .flatMap((p) => p.credentialFields.map((f) => f.key));
 
 type TabId = "general" | "provider" | "about";
 
@@ -218,6 +214,27 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
   const isCredentialKey = (key: string) =>
     (CREDENTIAL_KEYS as string[]).includes(key);
 
+  // 在途持久化的键：乐观写入的 IPC 未决期间，外部真值（config-changed
+  // 广播 / 失败后的对账）不得覆盖它 —— 否则迟到的旧值会把乐观更新打回去，
+  // 后端却以乐观值为准，界面就此与后端漂移
+  const inFlightKeysRef = useRef<Set<string>>(new Set());
+
+  // 后端真值落到本地：草稿与全局 store 各合并一次（凭证字段与
+  // auto_start 由 mergeExternalConfig 统一跳过 —— 前者是掩码占位符，
+  // 后者的权威在注册表，载荷里的配置库副本可能落后）
+  const applyBackendTruth = useCallback((truth: Partial<AppConfig>) => {
+    const skip = (k: string) => inFlightKeysRef.current.has(k);
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const { merged, changed } = mergeExternalConfig(prev, truth, skip);
+      return changed ? merged : prev;
+    });
+    const { config, setConfig: setStore } = useConfigStore.getState();
+    if (!config) return;
+    const { merged, changed } = mergeExternalConfig(config, truth, skip);
+    if (changed) setStore(merged);
+  }, []);
+
   /**
    * 即时生效的统一入口：本地草稿更新 + 单键持久化 + 后端副作用。
    *
@@ -247,6 +264,7 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
         delete next[providerId];
         return next;
       });
+      inFlightKeysRef.current.add(key as string);
       try {
         await setConfigBatch([[key as string, String(value)]]);
         // 主题即时广播（其余键的后端副作用在 set_config 管线内已处理）
@@ -260,10 +278,22 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
           );
         }
       } catch (err) {
-        // 持久化失败：草稿退回原值，界面与后端保持一致
-        setDraft((prev) =>
-          prev ? { ...prev, [key]: previous as AppConfig[K] } : prev
-        );
+        // 持久化失败：草稿退回原值，界面与后端保持一致。
+        // 快速连续写入同键时，迟到的失败不能把后一次乐观写入的新值打回去
+        // （后端以后一次为准）—— 只有草稿仍持有本次写入的值才允许就地回滚。
+        // 回滚后仍对账一次后端真值：连续两次都失败时，previous 本身可能
+        // 是从未持久化过的乐观值；「已保存但副作用失败」时后端还可能是新值。
+        if (
+          draftRef.current &&
+          mayRollBackToPrevious(
+            (draftRef.current as unknown as Record<string, unknown>)[key as string],
+            value
+          )
+        ) {
+          setDraft((prev) =>
+            prev ? { ...prev, [key]: previous as AppConfig[K] } : prev
+          );
+        }
         setSaveStatus("err");
         setSaveStatusText(
           `${CONFIG_LABELS[key as string] ?? String(key)}生效失败：已还原`
@@ -273,11 +303,25 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
           "error"
         );
         console.error("[SettingsWindow] 配置生效失败:", key, err);
+        getConfig()
+          .then((truth) => applyBackendTruth(truth))
+          .catch(() => {
+            /* 对账失败：留给下一次 config-changed 或重开窗口兜底 */
+          });
+      } finally {
+        inFlightKeysRef.current.delete(key as string);
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   );
+
+  // config-changed：托盘切翻译源/切语言、开关剪贴板监控是绕过本窗口的
+  // 带外写入；设置窗口 hide 而非销毁、草稿不会重载，不合并的话重开窗口
+  // 看到的还是打开时的旧值
+  useTauriEvent<AppConfig>("config-changed", (event) => {
+    applyBackendTruth(event.payload);
+  });
 
   // draft 的同步镜像：applyConfig 的回滚分支要读「改动前」的值
   const draftRef = useRef<AppConfig | null>(null);
