@@ -4,12 +4,23 @@
 - Branch: main
 - Base commit: b64b04e（Merge pull request #80）
 - App version: 0.9.0
-- Current task: Task 06 缓存、历史和数据管理（核心项完成）；下一步 Task 05 设置一致性核验或缓存开关（待定）
+- Current task: Task 05 设置与配置一致性（完成）；下一步 Task 07 浮窗交互或 Task 08 Provider 管理中心（待定）
 - Working tree: 干净
 - 执行依据: docs/QUICK_TRANSLATE_AI_AGENT_DEVELOPMENT_PLAN.md（2026-11-07 修订）
 - 测试清单: docs/TEST_INVENTORY.md
 
 ## Completed
+
+### 2026-11-07 — Task 05 设置与配置一致性
+- 核验结论：批量原子性（QT-010 all-or-nothing，8 测试）与即时生效模型已具备；敏感过滤开关提示 Task 04 已加。发现两个真实缺口并修复：
+  - **重开设置页显示旧值**：托盘切换翻译源/目标语言/开关剪贴板监控是绕过命令管线的直写路径且不广播；设置窗口 hide 而非销毁、草稿只在挂载时加载一次。修复：后端在持久化与副作用落地后广播 `config-changed`（载荷与 get_config 同构、凭证保持脱敏）；设置页监听后按字段合并，凭证字段（掩码占位符）与 auto_start（注册表才是权威）不合并。
+  - **快速切换同键竞态**：前一次请求迟到的失败会无条件回滚，把后一次乐观写入打回旧值（后端却以后一次为准）。修复：回滚加守卫（草稿仍持有本次写入的值才允许就地回退，`mayRollBackToPrevious`）+ 失败后拉取 get_config 对账（`mergeExternalConfig` 统一跳过凭证/auto_start/在途键），界面最终收敛到后端真值。
+  - **剪贴板监控开关补隐私说明**（计划 Task 05 第 6 项）：说明本机判定边界、翻译时的发送对象、与敏感过滤的衔接。
+- 合并规则纯逻辑抽到 `src/lib/configSync.ts`（+11 单测：凭证跳过、auto_start 跳过、在途跳过、undefined 忽略、回滚守卫、CREDENTIAL_KEYS 完备性）。
+- Files: commands/config.rs、system/tray.rs、src/lib/configSync.ts（新增）、src/lib/__tests__/configSync.test.ts（新增）、src/windows/settings/SettingsWindow.tsx
+- Tests: `cargo test --lib` → 366 passed；fmt/clippy PASS；tsc PASS；vitest 48/48（+11）；build PASS
+- Commit: 10cebfc / 1e57eb9 / 86e25d5
+- 记录结论（不改动）：`set_clipboard_monitor_enabled`（前端无调用方）与 `complete_onboarding`（onboarding_completed 设置页不展示）的直写不广播，不影响设置页正确性；浮窗的主题/材质同步沿用专有事件通道，不需要 config-changed。
 
 ### 2026-11-07 — Task 06 缓存、历史和数据管理（核心项）
 - Changes:
@@ -79,4 +90,4 @@
   - Required manual test: 显式 opt-in 的真实凭证测试
 
 ## Next task
-- Task 05：设置与配置一致性 —— 核验即时生效失败回滚、多窗口同步、快速开关竞态（QT-010 已大体覆盖），找出残余缺口后逐项补测试；或先做缓存禁用/启用开关（默认保持开启 + 隐私说明），需维护者确认文案后实施。
+- Task 07：浮窗交互和可访问性（计划 §7）——先核验现状再定改动；或 Task 08 Provider 管理中心（诊断面板展示 Provider 最近错误/成功时间，Task 03 遗留的展示增强）。缓存禁用/启用开关仍待维护者确认文案。

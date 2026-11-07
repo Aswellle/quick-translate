@@ -18,7 +18,7 @@
 
 CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 3 平台、clippy 与单测 × Windows/macOS、release 构建验证 × 双平台。CI 不依赖真实 Provider 凭证。
 
-> 进展更新：Task 04（+33）与 Task 06（+19）后 Rust 单测现为 **366 passed**，前端仍为 37 / 8 文件。
+> 进展更新：Task 04（+33）、Task 06（+19）后 Rust 单测现为 **366 passed**；Task 05 后前端为 **48 / 9 文件**（+11，configSync 合并规则与回滚守卫）。
 
 ## Mock 注入能力（现状确认）
 
@@ -69,11 +69,12 @@ CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 
 | `util/backoff.rs` | 5 | 指数退避、抖动边界 |
 | `error.rs` | — | URL 脱敏 |
 
-## 前端测试清单（37 / 8 文件）
+## 前端测试清单（48 / 9 文件）
 
 | 文件 | 覆盖 |
 |---|---|
 | `lib/__tests__/constants.test.ts` | Rust↔前端错误码契约（新增 Rust 错误码必须同步文案） |
+| `lib/__tests__/configSync.test.ts` | 外部真值合并规则（凭证/auto_start/在途键跳过）+ 快速连续写入的回滚守卫 |
 | `lib/__tests__/domUtils.test.ts` | 键盘目标/拖拽阻断判定 |
 | `lib/__tests__/export.test.ts` | Markdown/HTML 导出格式化 |
 | `stores/__tests__/historyStore.test.ts` | 历史 store 分页/搜索 |
