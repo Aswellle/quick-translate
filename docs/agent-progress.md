@@ -4,12 +4,26 @@
 - Branch: main
 - Base commit: b64b04e（Merge pull request #80）
 - App version: 0.9.0
-- Current task: Task 05 设置与配置一致性（完成）；下一步 Task 07 浮窗交互或 Task 08 Provider 管理中心（待定）
+- Current task: Task 07 浮窗交互核验（完成）；下一步 Task 08 Provider 管理中心
 - Working tree: 干净
 - 执行依据: docs/QUICK_TRANSLATE_AI_AGENT_DEVELOPMENT_PLAN.md（2026-11-07 修订）
 - 测试清单: docs/TEST_INVENTORY.md
 
 ## Completed
+
+### 2026-11-07 — Task 07 浮窗交互与可访问性（核验 + 补测试）
+- 核验结论（计划 §7 实施项 1–6 与全部验收项，现状已具备，无需改代码）：
+  - **状态机**：idle/loading/success/error 四态显式管理；sr-only live region 常驻播报（此前只挂折叠态的缺陷已修过）；缓存/无需翻译结果有「本地缓存」「无需翻译」标识（PROVIDER_LABELS cache/none 条目）；截断有「已截断」标签；敏感过滤命中不弹窗 + toast 带「仍然翻译」动作（Task 04 设计，filter_gate 在建窗之前）。
+  - **错误恢复**：ErrorView 按 `SETTINGS_FIX_CODES`（AUTH_ERROR/QUOTA_EXHAUSTED）分流——修复动作在配置里的指向「前往设置」（直达 provider tab），其余告知真实重试路径「重新复制文字即可重试」。
+  - **长文本**：译文区 maxHeight 300px 滚动 + break-words；窗口尺寸 place_popup 纯函数 clamp 280–520 × 40–480（19 个既有测试覆盖边界）。
+  - **键盘/可访问性**：Esc/Space/Enter + CopyButton 可 Tab（可见文本即 accessible name）+ TrafficLights 无障碍契约测试（3 条曾为真实缺陷）。
+  - **主题/透明**：浅深双主题 CSS 变量体系 + reduce_transparency 应用内开关叠加系统媒体查询（macOS WKWebView 不支持该媒体查询的回退已实现）。
+- 补充：ErrorView 恢复操作分流组件测试（+5）——锁定「错误操作直接引导修复」这条验收的行为契约；未知错误码回退契约文案、不泄漏后端原始消息。
+- 未自动化（需实机视觉验证，如实记录）：深/浅色与降低透明下的对比度观感、emoji/RTL/混合语言实际渲染、DPI/多屏实摆位（place_popup 逻辑已有单测，实机定位未验）。
+- 记录结论（不改动）：计划实施 4 的「重新翻译」按钮——当前重试路径是重新复制（剪贴板监控自动重译），浮窗被动→激活的交互模型下按钮增益有限且需新增后端命令与暂存语义；验收未硬性要求，标为可选增强待产品决策。
+- Files: src/windows/popup/__tests__/ErrorView.test.tsx（新增）
+- Tests: vitest 53/53（+5）；tsc PASS
+- Commit: 9b37be9
 
 ### 2026-11-07 — Task 05 设置与配置一致性
 - 核验结论：批量原子性（QT-010 all-or-nothing，8 测试）与即时生效模型已具备；敏感过滤开关提示 Task 04 已加。发现两个真实缺口并修复：
@@ -90,4 +104,4 @@
   - Required manual test: 显式 opt-in 的真实凭证测试
 
 ## Next task
-- Task 07：浮窗交互和可访问性（计划 §7）——先核验现状再定改动；或 Task 08 Provider 管理中心（诊断面板展示 Provider 最近错误/成功时间，Task 03 遗留的展示增强）。缓存禁用/启用开关仍待维护者确认文案。
+- Task 08：Provider 配置体验与供应商管理中心（计划 §8）——信息架构重构较大（供应商目录分类、配置状态与健康状态区分、自定义兼容接口）。注意：AI 模型供应商接入被要求 19 暂缓，目录分类中「AI 模型」类目待解禁；SSRF 校验（自定义 endpoint）为前置安全项。建议先做 §8 中的非 AI 部分：配置状态与健康状态的 UI 区分、连接测试不污染熔断统计（核验 validate_provider 路径已满足）。缓存禁用/启用开关仍待维护者确认文案。
