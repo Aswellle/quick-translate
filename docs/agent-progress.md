@@ -4,12 +4,24 @@
 - Branch: main
 - Base commit: b64b04e（Merge pull request #80）
 - App version: 0.9.0
-- Current task: 全局快捷键首次实现（完成，待实机验证）；下一步 Task 10 术语表能力评估或快捷键端到端验证
+- Current task: 全局快捷键首次实现（完成，待实机验证）；Task 10 术语表原生能力评估（完成）；下一步术语表数据层 + DeepL glossary 接入
 - Working tree: 干净
 - 执行依据: docs/QUICK_TRANSLATE_AI_AGENT_DEVELOPMENT_PLAN.md（2026-11-07 修订）
 - 测试清单: docs/TEST_INVENTORY.md
 
 ## Completed
+
+### 2026-11-08 — Task 10 术语表：Provider 原生能力评估（完成评估，未动代码）
+- 新增 `docs/GLOSSARY_CAPABILITY_ASSESSMENT.md`：按计划要求先核验原生 glossary 能力，结论（文档级，未用真实凭证）：
+  - **DeepL**：支持，且是唯一可由应用端完整管理术语（创建/删除 glossary、翻译带 glossary_id）的现有 Provider；v2 无编辑接口，改条目 = 删旧建新；文本翻译可自动检测语言并应用匹配词典。
+  - **腾讯云**：支持引用控制台术语库（参数名/形态待复核 API 参考页）；术语条目只能在腾讯云控制台维护。
+  - **百度**：通用接口仅 `needIntervene=1` 开关（控制台「我的术语库」），应用不能管理条目；千帆版 `termIds` 属另一套 API。
+  - **有道**：支持 `vocabId` 引用控制台上传的术语表；主要英中方向。
+  - **Google**：当前 v2 Basic（API Key）不支持 glossary；v3 Advanced 需服务账号鉴权，属架构变更，首轮标记不支持。
+- 据此确定实施约束：应用内术语表只对 DeepL 真正生效；其余 Provider 如实显示「引用控制台术语库/不支持」，不得静默忽略或假装生效；缓存键必须含术语表指纹；不做无差别字符串替换；术语不进日志。
+- 未动业务代码；待复核清单见文档末尾（腾讯参数名、百度套餐限制、有道语言方向、DeepL ready 轮询策略）。
+- Files: docs/GLOSSARY_CAPABILITY_ASSESSMENT.md（新增）
+- Commit: 见下一条提交
 
 ### 2026-11-08 — 全局快捷键（首次实现，计划 Task 11）
 - Changes:
@@ -163,6 +175,6 @@
   - Required manual test: 显式 opt-in 的真实凭证测试
 
 ## Next task
+- Task 10 实施（按评估结论）：本地术语表数据层（schema v8 + CRUD + 校验 + 导入导出）→ DeepL glossary 同步与翻译接入（含缓存键指纹）→ 其余 Provider 的「引用控制台术语库/不支持」如实展示。
 - 全局快捷键实机验证（Windows 优先：注册/冲突/三个动作）；macOS 未验证项继续保留。
-- Task 10 术语表：先做 Provider 原生 glossary 能力评估（计划要求「原生能力优先」，不支持的 Provider 如实标记而非假装生效）；数据层/导入导出可先行。
-- 阻塞项：Task 08 剩余（供应商目录分类/AI 类目）待要求 19 解禁。
+- 阻塞项：Task 08 剩余（供应商目录分类/AI 类目）待要求 19 解禁；腾讯/百度/有道术语表参数细节待复核。
