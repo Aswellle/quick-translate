@@ -4,6 +4,7 @@
 
 use tauri::{AppHandle, State};
 
+use crate::domain::cache::{lookup_cached_result, should_fall_back_to_cache};
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::system::translation::request::MAX_TEXT_CHARS;
@@ -55,16 +56,38 @@ pub async fn translate_text(
     };
 
     // 调用翻译引擎
-    let mut result = state
+    let engine_outcome = state
         .translator
         .translate(&text_to_translate, &target)
-        .await?;
-    result.truncated = truncated;
+        .await;
 
-    // 与剪贴板路径一致：翻译源健康结论交给运行时层（计划第 4 节）
+    // 与剪贴板路径一致：翻译源健康结论交给运行时层（计划第 4 节），
+    // 无论成功失败都上报 —— coordinator 在 outcome 分支之前上报。
     state
         .runtime
         .report_providers_health(state.translator.providers_health().await);
+
+    // 全部翻译源失败 → 回退本地缓存（与 coordinator 的剪贴板路径同一语义，
+    // 判定与查询逻辑见 domain/cache.rs）。缓存结果不再落盘：条目本来就来自
+    // 上一次翻译，重复入队只会多出一条重复的历史记录。
+    let mut result = match engine_outcome {
+        Ok(r) => r,
+        Err(e) => {
+            if should_fall_back_to_cache(&e) {
+                if let Some(cached) =
+                    lookup_cached_result(&state.cache, &text_to_translate, &target, truncated).await
+                {
+                    tracing::info!(
+                        event = "translation_served_from_cache",
+                        "[translate_text] 翻译源均不可用，改用本地缓存"
+                    );
+                    return Ok(cached);
+                }
+            }
+            return Err(e);
+        }
+    };
+    result.truncated = truncated;
 
     // 落盘走有界队列 + 单 worker（计划第 24/41 节），与剪贴板路径同一条管道。
     // 此前这里是「每请求 spawn 一个游离历史写任务」—— 计划第 41 节明确禁止的
