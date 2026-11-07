@@ -504,6 +504,7 @@ async fn run_translation(app: &AppHandle, request: TranslationRequest) {
                     &state.cache,
                     &request.text,
                     &request.target_lang,
+                    "",
                     request.truncated,
                 )
                 .await
@@ -577,6 +578,8 @@ async fn persist_success(
             translated_text: result.translated_text.clone(),
             source_lang: result.detected_source_lang.clone(),
             provider: result.provider.clone(),
+            // 剪贴板路径没有显式源语言 → 不应用术语表（DeepL 限制）
+            glossary_fingerprint: String::new(),
         },
     };
 

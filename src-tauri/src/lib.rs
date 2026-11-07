@@ -270,6 +270,7 @@ pub fn run() {
 
             let hotkeys = Arc::new(system::hotkeys::HotkeyManager::new());
             let glossary = Arc::new(domain::glossary::GlossaryRepository::new(db.clone()));
+            let glossary_sync = Arc::new(system::glossary_sync::GlossarySyncStore::new(db.clone()));
 
             let app_state = AppState {
                 translator,
@@ -284,6 +285,7 @@ pub fn run() {
                 clipboard_monitor: monitor,
                 hotkeys: hotkeys.clone(),
                 glossary,
+                glossary_sync,
             };
             app.manage(app_state);
 

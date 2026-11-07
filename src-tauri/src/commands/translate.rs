@@ -28,12 +28,26 @@ pub async fn translate_text(
     state: State<'_, AppState>,
     text: String,
     target_lang: Option<String>,
+    source_lang: Option<String>,
 ) -> Result<TranslationResult, AppError> {
     // 参数验证
     let text = text.trim().to_string();
     if text.is_empty() {
         return Err(AppError::EmptyText);
     }
+
+    // 显式源语言（可空 = 自动检测）。术语表只在这条路径上可能生效 ——
+    // DeepL 不支持「术语表 + 源语言自动检测」。
+    let source_lang = match source_lang {
+        Some(s) if !s.trim().is_empty() && s.trim() != "auto" => {
+            let s = s.trim().to_string();
+            if !crate::types::SUPPORTED_LANGS.contains(&s.as_str()) {
+                return Err(AppError::ConfigError(format!("源语言不受支持: {}", s)));
+            }
+            Some(s)
+        }
+        _ => None,
+    };
 
     // 截断超长文本（与剪贴板路径共用同一上限，避免两处漂移）
     let (text_to_translate, truncated) = if text.chars().count() > MAX_TEXT_CHARS {
@@ -55,10 +69,28 @@ pub async fn translate_text(
             .unwrap_or_else(|| "zh".to_string()),
     };
 
-    // 调用翻译引擎
+    // 术语表：仅在「开启 + 当前翻译源是 DeepL + 显式源语言 + 该语言对有
+    // 条目」时同步并应用。同步失败返回 None（翻译继续，不假装生效）。
+    let applied_glossary = crate::system::glossary_sync::prepare_deepl_glossary(
+        &state,
+        source_lang.as_deref(),
+        &target,
+    )
+    .await;
+    let glossary_fingerprint = applied_glossary
+        .as_ref()
+        .map(|g| g.fingerprint.clone())
+        .unwrap_or_default();
+    let options = crate::domain::translator::TranslateOptions {
+        source_lang: source_lang.clone(),
+        glossary_id: applied_glossary.as_ref().map(|g| g.glossary_id.clone()),
+        glossary_fingerprint: applied_glossary.as_ref().map(|g| g.fingerprint.clone()),
+    };
+
+    // 调用翻译引擎（带上下文：显式源语言 + 已同步的 glossary）
     let engine_outcome = state
         .translator
-        .translate(&text_to_translate, &target)
+        .translate_with_options(&text_to_translate, &target, &options)
         .await;
 
     // 与剪贴板路径一致：翻译源健康结论交给运行时层（计划第 4 节），
@@ -70,12 +102,19 @@ pub async fn translate_text(
     // 全部翻译源失败 → 回退本地缓存（与 coordinator 的剪贴板路径同一语义，
     // 判定与查询逻辑见 domain/cache.rs）。缓存结果不再落盘：条目本来就来自
     // 上一次翻译，重复入队只会多出一条重复的历史记录。
+    // 缓存按「实际应用的术语指纹」查：术语变化后不会端出旧译法。
     let mut result = match engine_outcome {
         Ok(r) => r,
         Err(e) => {
             if should_fall_back_to_cache(&e) {
-                if let Some(cached) =
-                    lookup_cached_result(&state.cache, &text_to_translate, &target, truncated).await
+                if let Some(cached) = lookup_cached_result(
+                    &state.cache,
+                    &text_to_translate,
+                    &target,
+                    &glossary_fingerprint,
+                    truncated,
+                )
+                .await
                 {
                     tracing::info!(
                         event = "translation_served_from_cache",
@@ -117,6 +156,7 @@ pub async fn translate_text(
             translated_text: result.translated_text.clone(),
             source_lang: result.detected_source_lang.clone(),
             provider: result.provider.clone(),
+            glossary_fingerprint,
         },
     };
     if !state.persistence.enqueue(job) {

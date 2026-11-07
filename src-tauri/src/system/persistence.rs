@@ -46,6 +46,8 @@ pub struct OwnedCacheEntry {
     pub translated_text: String,
     pub source_lang: String,
     pub provider: String,
+    /// 本次实际应用的术语表指纹（空串 = 未应用），进入缓存键
+    pub glossary_fingerprint: String,
 }
 
 impl OwnedCacheEntry {
@@ -56,6 +58,7 @@ impl OwnedCacheEntry {
             translated_text: &self.translated_text,
             source_lang: &self.source_lang,
             provider: &self.provider,
+            glossary_fingerprint: &self.glossary_fingerprint,
         }
     }
 }
@@ -321,6 +324,7 @@ mod tests {
                 translated_text: "译文".to_string(),
                 source_lang: "en".to_string(),
                 provider: "deepl".to_string(),
+                glossary_fingerprint: String::new(),
             },
         }
     }
@@ -332,7 +336,7 @@ mod tests {
         let version: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 8, "全新库应跑到最新迁移版本");
+        assert_eq!(version, 9, "全新库应跑到最新迁移版本");
 
         let cache_table: i64 = conn
             .query_row(
@@ -382,7 +386,7 @@ mod tests {
         let mut history_count = 0;
         while std::time::Instant::now() < deadline {
             history_count = history.query(&HistoryQuery::default()).await.unwrap().len();
-            if history_count == 1 && cache.get("hello", "zh").await.unwrap().is_some() {
+            if history_count == 1 && cache.get("hello", "zh", "").await.unwrap().is_some() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -390,7 +394,7 @@ mod tests {
         assert_eq!(history_count, 1, "worker 应在期限内写入历史");
 
         assert!(
-            cache.get("hello", "zh").await.unwrap().is_some(),
+            cache.get("hello", "zh", "").await.unwrap().is_some(),
             "worker 应同时写入本地缓存"
         );
     }

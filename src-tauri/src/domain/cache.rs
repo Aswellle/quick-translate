@@ -53,6 +53,9 @@ pub struct CacheEntry<'a> {
     pub translated_text: &'a str,
     pub source_lang: &'a str,
     pub provider: &'a str,
+    /// 本次翻译实际应用的术语表指纹（空串 = 未应用）。进入缓存键，
+    /// 术语变化后旧译文不会再被命中。
+    pub glossary_fingerprint: &'a str,
 }
 
 pub struct TranslationCache {
@@ -106,12 +109,17 @@ impl TranslationCache {
         self.db.try_conn()
     }
 
-    /// 缓存键：归一化文本 + 目标语言。
+    /// 缓存键：归一化文本 + 目标语言 + 术语表指纹。
     ///
     /// 用 `\u{1}` 分隔而不是直接拼接：否则 "ab"+"c" 与 "a"+"bc" 会撞成同一个键。
-    /// 分隔符取控制字符，正常文本里不可能出现。
-    fn key(text: &str, target_lang: &str) -> String {
-        format!("{}\u{1}{}", text, target_lang)
+    /// 分隔符取控制字符，正常文本里不可能出现。指纹为空（未应用术语表）
+    /// 时与引入术语表之前的键完全一致，既有缓存不失效。
+    fn key(text: &str, target_lang: &str, fingerprint: &str) -> String {
+        if fingerprint.is_empty() {
+            format!("{}\u{1}{}", text, target_lang)
+        } else {
+            format!("{}\u{1}{}\u{1}{}", text, target_lang, fingerprint)
+        }
     }
 
     /// 该文本是否值得缓存
@@ -126,6 +134,7 @@ impl TranslationCache {
         &self,
         text: &str,
         target_lang: &str,
+        glossary_fingerprint: &str,
     ) -> Result<Option<CachedTranslation>, AppError> {
         if !self.enabled.load(std::sync::atomic::Ordering::Relaxed) {
             return Ok(None);
@@ -138,7 +147,7 @@ impl TranslationCache {
             return Ok(None);
         };
 
-        let key = Self::key(text, target_lang);
+        let key = Self::key(text, target_lang, glossary_fingerprint);
         let cutoff = now_unix_ms() - self.ttl.as_millis() as i64;
         let conn = conn.lock().await;
 
@@ -201,7 +210,11 @@ impl TranslationCache {
                  provider        = excluded.provider,
                  created_at      = excluded.created_at",
             rusqlite::params![
-                Self::key(entry.source_text, entry.target_lang),
+                Self::key(
+                    entry.source_text,
+                    entry.target_lang,
+                    entry.glossary_fingerprint
+                ),
                 entry.source_text,
                 entry.translated_text,
                 entry.source_lang,
@@ -309,9 +322,10 @@ pub async fn lookup_cached_result(
     cache: &TranslationCache,
     text: &str,
     target_lang: &str,
+    glossary_fingerprint: &str,
     truncated: bool,
 ) -> Option<crate::types::TranslationResult> {
-    match cache.get(text, target_lang).await {
+    match cache.get(text, target_lang, glossary_fingerprint).await {
         Ok(Some(hit)) => {
             if crate::domain::translator::is_echo_text(text, &hit.translated_text) {
                 tracing::info!(
@@ -384,6 +398,7 @@ mod tests {
             translated_text: translated,
             source_lang: "en",
             provider,
+            glossary_fingerprint: "",
         })
         .await
         .unwrap();
@@ -394,7 +409,7 @@ mod tests {
         let c = fast();
         put(&c, "hello", "zh", "你好", "deepl").await;
 
-        let hit = c.get("hello", "zh").await.unwrap().expect("应命中");
+        let hit = c.get("hello", "zh", "").await.unwrap().expect("应命中");
         assert_eq!(hit.translated_text, "你好");
         assert_eq!(hit.provider, "deepl");
     }
@@ -412,13 +427,13 @@ mod tests {
 
         // 表仍然可用：清空后的写入/读取照常
         put(&c, "hello", "zh", "你好", "deepl").await;
-        assert!(c.get("hello", "zh").await.unwrap().is_some());
+        assert!(c.get("hello", "zh", "").await.unwrap().is_some());
     }
 
     #[tokio::test]
     async fn miss_returns_none() {
         let c = fast();
-        assert!(c.get("never seen", "zh").await.unwrap().is_none());
+        assert!(c.get("never seen", "zh", "").await.unwrap().is_none());
     }
 
     /// 同一个源文本、不同目标语言必须是两条不同的缓存
@@ -429,14 +444,22 @@ mod tests {
         put(&c, "hello", "ja", "こんにちは", "deepl").await;
 
         assert_eq!(
-            c.get("hello", "zh").await.unwrap().unwrap().translated_text,
+            c.get("hello", "zh", "")
+                .await
+                .unwrap()
+                .unwrap()
+                .translated_text,
             "你好"
         );
         assert_eq!(
-            c.get("hello", "ja").await.unwrap().unwrap().translated_text,
+            c.get("hello", "ja", "")
+                .await
+                .unwrap()
+                .unwrap()
+                .translated_text,
             "こんにちは"
         );
-        assert!(c.get("hello", "fr").await.unwrap().is_none());
+        assert!(c.get("hello", "fr", "").await.unwrap().is_none());
     }
 
     /// 拼接歧义防护：("ab","c") 与 ("a","bc") 不能撞成同一个键
@@ -447,11 +470,11 @@ mod tests {
         put(&c, "a", "bc", "second", "deepl").await;
 
         assert_eq!(
-            c.get("ab", "c").await.unwrap().unwrap().translated_text,
+            c.get("ab", "c", "").await.unwrap().unwrap().translated_text,
             "first"
         );
         assert_eq!(
-            c.get("a", "bc").await.unwrap().unwrap().translated_text,
+            c.get("a", "bc", "").await.unwrap().unwrap().translated_text,
             "second"
         );
     }
@@ -465,7 +488,7 @@ mod tests {
 
         put(&c, &long, "zh", "译文", "deepl").await;
 
-        assert!(c.get(&long, "zh").await.unwrap().is_none());
+        assert!(c.get(&long, "zh", "").await.unwrap().is_none());
         assert_eq!(c.len().await, 0, "超长文本不该落盘");
     }
 
@@ -475,7 +498,7 @@ mod tests {
         let exact = "a".repeat(MAX_CACHED_TEXT_CHARS);
         assert!(TranslationCache::is_cacheable(&exact));
         put(&c, &exact, "zh", "译文", "deepl").await;
-        assert!(c.get(&exact, "zh").await.unwrap().is_some());
+        assert!(c.get(&exact, "zh", "").await.unwrap().is_some());
     }
 
     #[tokio::test]
@@ -483,7 +506,7 @@ mod tests {
         let c = fast();
         put(&c, "", "zh", "译文", "deepl").await;
         assert_eq!(c.len().await, 0);
-        assert!(c.get("", "zh").await.unwrap().is_none());
+        assert!(c.get("", "zh", "").await.unwrap().is_none());
     }
 
     // ── 过期 ─────────────────────────────────────────────────────────────
@@ -511,7 +534,7 @@ mod tests {
         }
 
         assert!(
-            c.get("stale", "zh").await.unwrap().is_none(),
+            c.get("stale", "zh", "").await.unwrap().is_none(),
             "过期条目不该被返回"
         );
 
@@ -541,11 +564,15 @@ mod tests {
 
         assert_eq!(c.len().await, 3);
         assert!(
-            c.get("coldest", "zh").await.unwrap().is_none(),
+            c.get("coldest", "zh", "").await.unwrap().is_none(),
             "最久未命中的条目应被淘汰"
         );
         for t in ["middle", "hottest", "extra"] {
-            assert!(c.get(t, "zh").await.unwrap().is_some(), "{} 应被保留", t);
+            assert!(
+                c.get(t, "zh", "").await.unwrap().is_some(),
+                "{} 应被保留",
+                t
+            );
         }
     }
 
@@ -561,7 +588,7 @@ mod tests {
         let base = now_unix_ms();
         insert_raw(&db, "x", base).await;
 
-        assert!(c.get("x", "zh").await.unwrap().is_some());
+        assert!(c.get("x", "zh", "").await.unwrap().is_some());
 
         let (last_hit, count): (i64, i64) = {
             let conn = db.lock().await;
@@ -600,11 +627,11 @@ mod tests {
         );
 
         put(&c, "hello", "zh", "旧译文", "deepl").await;
-        assert!(c.get("hello", "zh").await.unwrap().is_some()); // hit_count → 1
+        assert!(c.get("hello", "zh", "").await.unwrap().is_some()); // hit_count → 1
 
         put(&c, "hello", "zh", "新译文", "tencent").await;
 
-        let hit = c.get("hello", "zh").await.unwrap().unwrap(); // hit_count → 2
+        let hit = c.get("hello", "zh", "").await.unwrap().unwrap(); // hit_count → 2
         assert_eq!(hit.translated_text, "新译文", "译文应被更新");
         assert_eq!(hit.provider, "tencent");
 
@@ -631,7 +658,7 @@ mod tests {
         let c = fast();
         put(&c, "hello", "zh", "你好", "deepl").await;
 
-        let r = lookup_cached_result(&c, "hello", "zh", false)
+        let r = lookup_cached_result(&c, "hello", "zh", "", false)
             .await
             .expect("有缓存条目必须组装出结果");
         assert_eq!(r.provider, CACHE_PROVIDER);
@@ -647,7 +674,7 @@ mod tests {
         let c = fast();
         put(&c, "hello", "zh", "你好", "deepl").await;
         assert!(
-            lookup_cached_result(&c, "hello", "zh", true)
+            lookup_cached_result(&c, "hello", "zh", "", true)
                 .await
                 .unwrap()
                 .truncated
@@ -660,7 +687,7 @@ mod tests {
         let c = fast();
         put(&c, "password", "zh", "password", "deepl").await;
         assert!(
-            lookup_cached_result(&c, "password", "zh", false)
+            lookup_cached_result(&c, "password", "zh", "", false)
                 .await
                 .is_none(),
             "译文与原文相同的缓存条目端出去就是「翻译结果是原文」"
@@ -670,9 +697,40 @@ mod tests {
     #[tokio::test]
     async fn cache_miss_yields_none_on_fallback() {
         let c = fast();
-        assert!(lookup_cached_result(&c, "never seen", "zh", false)
+        assert!(lookup_cached_result(&c, "never seen", "zh", "", false)
             .await
             .is_none());
+    }
+
+    /// 术语表指纹进入缓存键：改了术语后，旧译文不会被新指纹命中；
+    /// 空指纹与引入术语表之前的键一致（既有缓存不失效）。
+    #[tokio::test]
+    async fn glossary_fingerprint_separates_cache_entries() {
+        let c = fast();
+        c.put(CacheEntry {
+            source_text: "Apple",
+            target_lang: "zh",
+            translated_text: "苹果",
+            source_lang: "en",
+            provider: "deepl",
+            glossary_fingerprint: "fp1",
+        })
+        .await
+        .unwrap();
+
+        assert!(c.get("Apple", "zh", "fp1").await.unwrap().is_some());
+        assert!(
+            c.get("Apple", "zh", "fp2").await.unwrap().is_none(),
+            "术语表变化后不得命中旧译文"
+        );
+        assert!(
+            c.get("Apple", "zh", "").await.unwrap().is_none(),
+            "未应用术语表的请求不得命中术语表译文"
+        );
+
+        // 无指纹条目照旧可用
+        put(&c, "hello", "zh", "你好", "deepl").await;
+        assert!(c.get("hello", "zh", "").await.unwrap().is_some());
     }
 
     // ── 读写开关（配置键 cache_enabled）──────────────────────────────────
@@ -687,7 +745,7 @@ mod tests {
         c.set_enabled(false);
         assert!(!c.is_enabled());
         assert!(
-            c.get("hello", "zh").await.unwrap().is_none(),
+            c.get("hello", "zh", "").await.unwrap().is_none(),
             "关闭后不得读取缓存"
         );
         put(&c, "world", "zh", "世界", "deepl").await;
@@ -695,7 +753,7 @@ mod tests {
 
         c.set_enabled(true);
         assert!(
-            c.get("hello", "zh").await.unwrap().is_some(),
+            c.get("hello", "zh", "").await.unwrap().is_some(),
             "重新打开后既有条目必须恢复可用"
         );
     }
@@ -716,7 +774,7 @@ mod tests {
         let c = fast();
         put(&c, "hello", "zh", "你好", "deepl").await;
         c.set_enabled(false);
-        assert!(lookup_cached_result(&c, "hello", "zh", false)
+        assert!(lookup_cached_result(&c, "hello", "zh", "", false)
             .await
             .is_none());
     }

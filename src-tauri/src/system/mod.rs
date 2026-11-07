@@ -1,4 +1,5 @@
 pub mod clipboard;
+pub mod glossary_sync;
 pub mod hotkeys;
 pub mod persistence;
 pub mod popup_geometry;

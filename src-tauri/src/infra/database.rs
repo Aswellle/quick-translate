@@ -287,6 +287,7 @@ pub fn run_migrations(conn: &Connection) -> Result<(), AppError> {
         (6, migrate_v6),
         (7, migrate_v7),
         (8, migrate_v8),
+        (9, migrate_v9),
     ];
 
     for &(version, migration_fn) in migrations {
@@ -554,6 +555,26 @@ fn migrate_v8(tx: &Transaction) -> Result<(), AppError> {
         .map_err(|e| AppError::DatabaseError(format!("Schema v8 迁移失败: {}", e)))
 }
 
+/// DeepL glossary 同步映射（schema v9）。
+pub(crate) const GLOSSARY_SYNC_TABLE_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS deepl_glossary_sync (
+    -- provider\1source_lang\1target_lang
+    pair_key     TEXT PRIMARY KEY,
+    fingerprint  TEXT NOT NULL,
+    glossary_id  TEXT NOT NULL,
+    updated_at   INTEGER NOT NULL
+);
+"#;
+
+/// v9：记录「语言对 → DeepL glossary_id + 术语指纹」的映射。
+///
+/// 指纹变化 = 条目变化 → 删旧建新（DeepL v2 无编辑接口）。映射持久化
+/// 避免每次启动重建全部 glossary。
+fn migrate_v9(tx: &Transaction) -> Result<(), AppError> {
+    tx.execute_batch(GLOSSARY_SYNC_TABLE_SQL)
+        .map_err(|e| AppError::DatabaseError(format!("Schema v9 迁移失败: {}", e)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -684,7 +705,7 @@ mod tests {
 
         // 升级到最新
         run_migrations(&conn).unwrap();
-        assert_eq!(current_schema_version(&conn), 8, "应停在最新版本");
+        assert_eq!(current_schema_version(&conn), 9, "应停在最新版本");
 
         // 旧记录必须原样保留，且新列有可用默认值
         let (text, provider, starred, source): (String, String, i64, String) = conn
@@ -742,7 +763,7 @@ mod tests {
             current_schema_version(&conn),
             "版本号连续且无重复记账"
         );
-        assert_eq!(rows, 8);
+        assert_eq!(rows, 9);
     }
 
     /// v6 → v7 专项：既有行全部补上来源类型默认值（v7 之前唯一的
@@ -788,7 +809,7 @@ mod tests {
         .unwrap();
 
         run_migrations(&conn).unwrap();
-        assert_eq!(current_schema_version(&conn), 8);
+        assert_eq!(current_schema_version(&conn), 9);
 
         let source: String = conn
             .query_row(

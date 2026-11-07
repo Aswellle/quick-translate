@@ -38,10 +38,36 @@ use youdao::YoudaoProvider;
 ///
 /// 去掉 `&mut self` 是为了让 provider 能以 `Arc<dyn TranslationProvider>` 的形式
 /// 被克隆出注册表 —— 这是「不持锁跨越网络 I/O」的前提（计划第 11 节）。
+/// 单次翻译请求的可选上下文（计划 Task 10）。
+///
+/// 默认全空 = 与既有 `translate(text, target)` 行为完全一致；只有支持
+/// 原生 glossary 的 provider（当前 DeepL）会读取这些字段，其余 provider
+/// 通过 trait 默认实现直接忽略 —— 不改变它们已有的请求形态。
+#[derive(Debug, Clone, Default)]
+pub struct TranslateOptions {
+    /// 显式源语言（应用内代码，如 "en"）。None = 自动检测。
+    pub source_lang: Option<String>,
+    /// 已同步到 provider 的 glossary 标识（DeepL glossary_id）。
+    pub glossary_id: Option<String>,
+    /// 本次实际应用的术语表指纹（缓存键用；None = 未应用术语表）。
+    pub glossary_fingerprint: Option<String>,
+}
+
 #[async_trait]
 pub trait TranslationProvider: Send + Sync {
     async fn translate(&self, text: &str, target_lang: &str)
         -> Result<TranslationResult, AppError>;
+
+    /// 带上下文的翻译。默认忽略上下文 —— 只有 DeepL 这类支持原生 glossary
+    /// 的 provider 覆盖它。既有 provider 不需要任何改动。
+    async fn translate_with_options(
+        &self,
+        text: &str,
+        target_lang: &str,
+        _options: &TranslateOptions,
+    ) -> Result<TranslationResult, AppError> {
+        self.translate(text, target_lang).await
+    }
 
     fn info(&self) -> ProviderInfo;
 
@@ -238,6 +264,7 @@ async fn try_provider(
     budget: &TranslationBudget,
     echo_count: &std::sync::atomic::AtomicU64,
     errors: &mut Vec<(String, String)>,
+    options: &TranslateOptions,
 ) -> AttemptOutcome {
     let provider_id = entry.provider.info().id;
     let policy = policy_for(&provider_id);
@@ -288,9 +315,13 @@ async fn try_provider(
 
         // 单次尝试超时 = 策略值与剩余预算取小 —— 总预算真正生效的地方
         let attempt_timeout = budget.attempt_timeout(policy);
-        let outcome =
-            tokio::time::timeout(attempt_timeout, entry.provider.translate(text, target_lang))
-                .await;
+        let outcome = tokio::time::timeout(
+            attempt_timeout,
+            entry
+                .provider
+                .translate_with_options(text, target_lang, options),
+        )
+        .await;
 
         // 引擎施加的超时与 provider 自报的超时走同一条处理路径，
         // 因此同样计入熔断、同样允许重试（计划第 8 节：Request timeout 重试 0~1 次）
@@ -460,8 +491,24 @@ impl TranslationEngine {
         text: &str,
         target_lang: &str,
     ) -> Result<TranslationResult, AppError> {
-        self.translate_with_budget(text, target_lang, TranslationBudget::new(TOTAL_BUDGET))
+        self.translate_with_options(text, target_lang, &TranslateOptions::default())
             .await
+    }
+
+    /// 带请求上下文的翻译（显式源语言、已同步的 glossary）。
+    pub async fn translate_with_options(
+        &self,
+        text: &str,
+        target_lang: &str,
+        options: &TranslateOptions,
+    ) -> Result<TranslationResult, AppError> {
+        self.translate_with_budget_options(
+            text,
+            target_lang,
+            TranslationBudget::new(TOTAL_BUDGET),
+            options,
+        )
+        .await
     }
 
     /// 带显式预算的翻译。
@@ -473,6 +520,18 @@ impl TranslationEngine {
         text: &str,
         target_lang: &str,
         budget: TranslationBudget,
+    ) -> Result<TranslationResult, AppError> {
+        self.translate_with_budget_options(text, target_lang, budget, &TranslateOptions::default())
+            .await
+    }
+
+    /// 带预算与上下文的翻译（内部实现；既有入口都委托到这里）。
+    pub async fn translate_with_budget_options(
+        &self,
+        text: &str,
+        target_lang: &str,
+        budget: TranslationBudget,
+        options: &TranslateOptions,
     ) -> Result<TranslationResult, AppError> {
         let active_id = self.active_provider_id.read().await.clone();
         let fallback = *self.fallback_enabled.read().await;
@@ -505,6 +564,7 @@ impl TranslationEngine {
                 &budget,
                 &self.echo_count,
                 &mut errors,
+                options,
             )
             .await
             {
