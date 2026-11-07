@@ -593,4 +593,112 @@ mod tests {
             .unwrap();
         assert_eq!(value, "cipher-salvaged", "抢救行必须覆盖默认空值");
     }
+
+    // ── 迁移升级路径：旧版本数据库必须无损升级到最新 schema ─────────────
+
+    fn current_schema_version(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT COALESCE(MAX(version),0) FROM schema_version",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// 从 v1 直接升级到最新：既有记录不丢失，v2 起的字段带默认值可用。
+    ///
+    /// 这是升级测试的锚点版本 —— 用户在 0.2.x 之后发布的任何版本，数据库
+    /// 都是从 v1 起步的。新增迁移时必须让本测试继续通过（它会跟随最新
+    /// 版本号自动检查）。
+    #[test]
+    fn upgrading_from_v1_preserves_existing_records() {
+        let conn = Connection::open_in_memory().unwrap();
+
+        // 构造一个「只跑过 v1」的库：直接执行 v1 SQL 并记账
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY NOT NULL,
+                applied_at INTEGER NOT NULL
+             );",
+        )
+        .unwrap();
+        let tx = conn.unchecked_transaction().unwrap();
+        migrate_v1(&tx).unwrap();
+        tx.execute(
+            "INSERT INTO schema_version (version, applied_at) VALUES (1, 1)",
+            [],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        // v1 时代的记录（字段集不含 is_starred）
+        conn.execute(
+            "INSERT INTO translation_records
+             (id, source_text, translated_text, source_lang, target_lang, provider, created_at)
+             VALUES ('legacy-1', 'hello', '你好', 'en', 'zh', 'google', 1700000000000)",
+            [],
+        )
+        .unwrap();
+
+        // 升级到最新
+        run_migrations(&conn).unwrap();
+        assert_eq!(current_schema_version(&conn), 6, "应停在最新版本");
+
+        // 旧记录必须原样保留，且新列有可用默认值
+        let (text, provider, starred): (String, String, i64) = conn
+            .query_row(
+                "SELECT translated_text, provider, is_starred
+                 FROM translation_records WHERE id = 'legacy-1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .expect("v1 记录必须存活到升级之后");
+        assert_eq!(text, "你好");
+        assert_eq!(provider, "google");
+        assert_eq!(starred, 0, "is_starred 默认 0");
+
+        // v6 的缓存表必须可用
+        conn.execute(
+            "INSERT INTO translation_cache
+             (cache_key, source_text, translated_text, source_lang, provider, created_at, last_hit_at)
+             VALUES ('k', 'a', 'b', 'en', 'google', 1, 1)",
+            [],
+        )
+        .expect("v6 表必须存在");
+    }
+
+    /// 已在最新版本的库重复跑 run_migrations 必须是幂等的。
+    #[test]
+    fn running_migrations_twice_is_idempotent() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        let v1 = current_schema_version(&conn);
+        run_migrations(&conn).unwrap();
+        assert_eq!(current_schema_version(&conn), v1, "重复迁移不得新增版本行");
+
+        // 数据仍然可写（schema 未被二次 ALTER 破坏）
+        conn.execute(
+            "INSERT INTO translation_records
+             (id, source_text, translated_text, source_lang, target_lang, provider, created_at)
+             VALUES ('t-1', 'a', 'b', 'en', 'zh', 'google', 1)",
+            [],
+        )
+        .unwrap();
+    }
+
+    /// 版本行数必须与迁移数一致：每个迁移恰好记一次账。
+    #[test]
+    fn each_migration_is_recorded_exactly_once() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM schema_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            rows,
+            current_schema_version(&conn),
+            "版本号连续且无重复记账"
+        );
+        assert_eq!(rows, 6);
+    }
 }
