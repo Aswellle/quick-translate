@@ -59,6 +59,12 @@ pub struct TranslationCache {
     db: crate::infra::database::Db,
     max_entries: i64,
     ttl: Duration,
+    /// 读取/写入开关（配置键 `cache_enabled`，默认开启）。
+    ///
+    /// 关闭 ≠ 删除：已有条目原样保留，用户仍可通过「清空缓存」显式删除。
+    /// 关闭期间不读不写，重新打开后旧条目（未过期者）恢复可用 ——
+    /// 把开关做成「暂停」而不是「销毁」，避免一次误点丢掉所有离线译文。
+    enabled: std::sync::atomic::AtomicBool,
 }
 
 impl TranslationCache {
@@ -67,6 +73,7 @@ impl TranslationCache {
             db,
             max_entries: MAX_ENTRIES,
             ttl: TTL,
+            enabled: std::sync::atomic::AtomicBool::new(true),
         }
     }
 
@@ -77,7 +84,20 @@ impl TranslationCache {
             db,
             max_entries,
             ttl,
+            enabled: std::sync::atomic::AtomicBool::new(true),
         }
+    }
+
+    /// 运行时切换读写开关。原子操作：翻译与落盘 worker 分别在不同任务里
+    /// 读它，不需要额外锁。
+    pub fn set_enabled(&self, enabled: bool) {
+        self.enabled
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(test)]
+    pub fn is_enabled(&self) -> bool {
+        self.enabled.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// 存储不可用（计划第 26 节的降级路径）：缓存是纯增益能力，
@@ -107,6 +127,9 @@ impl TranslationCache {
         text: &str,
         target_lang: &str,
     ) -> Result<Option<CachedTranslation>, AppError> {
+        if !self.enabled.load(std::sync::atomic::Ordering::Relaxed) {
+            return Ok(None);
+        }
         if !Self::is_cacheable(text) {
             return Ok(None);
         }
@@ -154,6 +177,9 @@ impl TranslationCache {
     /// 但**保留** last_hit_at 与 hit_count —— 那是这段内容的热度记录。
     /// 存储不可用 → 静默成功（写入本来就不影响主链路）。
     pub async fn put(&self, entry: CacheEntry<'_>) -> Result<(), AppError> {
+        if !self.enabled.load(std::sync::atomic::Ordering::Relaxed) {
+            return Ok(());
+        }
         if !Self::is_cacheable(entry.source_text) {
             return Ok(());
         }
@@ -645,6 +671,52 @@ mod tests {
     async fn cache_miss_yields_none_on_fallback() {
         let c = fast();
         assert!(lookup_cached_result(&c, "never seen", "zh", false)
+            .await
+            .is_none());
+    }
+
+    // ── 读写开关（配置键 cache_enabled）──────────────────────────────────
+
+    /// 关闭是「暂停」不是「销毁」：不读不写，但已有条目原样保留，
+    /// 重新打开后仍然可用。
+    #[tokio::test]
+    async fn disabling_pauses_reads_and_writes_without_deleting_entries() {
+        let c = fast();
+        put(&c, "hello", "zh", "你好", "deepl").await;
+
+        c.set_enabled(false);
+        assert!(!c.is_enabled());
+        assert!(
+            c.get("hello", "zh").await.unwrap().is_none(),
+            "关闭后不得读取缓存"
+        );
+        put(&c, "world", "zh", "世界", "deepl").await;
+        assert_eq!(c.len().await, 1, "关闭后不得写入新条目");
+
+        c.set_enabled(true);
+        assert!(
+            c.get("hello", "zh").await.unwrap().is_some(),
+            "重新打开后既有条目必须恢复可用"
+        );
+    }
+
+    /// 关闭期间「清空缓存」仍然有效 —— 隐私操作不能因为开关状态被挡住。
+    #[tokio::test]
+    async fn clearing_works_while_disabled() {
+        let c = fast();
+        put(&c, "hello", "zh", "你好", "deepl").await;
+        c.set_enabled(false);
+        assert_eq!(c.clear_and_count().await.unwrap(), 1);
+        assert_eq!(c.len().await, 0);
+    }
+
+    /// 关闭时离线回退不得把缓存端出去。
+    #[tokio::test]
+    async fn fallback_lookup_respects_the_disable_switch() {
+        let c = fast();
+        put(&c, "hello", "zh", "你好", "deepl").await;
+        c.set_enabled(false);
+        assert!(lookup_cached_result(&c, "hello", "zh", false)
             .await
             .is_none());
     }

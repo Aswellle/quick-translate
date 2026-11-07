@@ -115,6 +115,7 @@ const BOOL_KEYS: &[&str] = &[
     "clipboard_monitor_enabled",
     "sensitive_filter_enabled",
     "reduce_transparency",
+    "cache_enabled",
 ];
 
 /// 界面主题的合法取值
@@ -314,6 +315,11 @@ async fn handle_side_effect(
         }
         "reduce_transparency" => {
             emit_reduce_transparency_changed(app, value);
+        }
+        // 缓存读写开关：持久化已在上方完成，这里只切换活体实例。
+        // 关闭不删除既有条目（「清空缓存」仍是独立操作）。
+        "cache_enabled" => {
+            state.cache.set_enabled(value == "true");
         }
         _ => {}
     }

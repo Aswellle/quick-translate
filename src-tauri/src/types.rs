@@ -209,6 +209,12 @@ pub struct AppConfig {
     /// 历史记录导出的默认保存目录。空串 = 每次导出弹原生保存对话框；
     /// 非空 = 直接写入该目录（不再询问）。设置页可修改/清除。
     pub export_dir: String,
+    /// 翻译结果的本地缓存开关（默认开启）。
+    ///
+    /// 关闭只暂停读写，不删除已有条目 —— 「清空缓存」仍是独立操作。
+    /// 设为开关而不是只提供「清空」：不想在磁盘上留存译文副本的用户，
+    /// 需要一个持续生效的选项，而不是每次翻译后手动清一次。
+    pub cache_enabled: bool,
 }
 
 impl Default for AppConfig {
@@ -232,6 +238,7 @@ impl Default for AppConfig {
             sensitive_filter_enabled: true,
             reduce_transparency: false,
             export_dir: String::new(),
+            cache_enabled: true,
         }
     }
 }

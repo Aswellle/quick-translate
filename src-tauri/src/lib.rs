@@ -149,6 +149,11 @@ pub fn run() {
             // 无外层 Mutex：HistoryRepository 内部已有 Arc<Mutex<Connection>>，双重加锁无益
             let history = Arc::new(HistoryRepository::new(db.clone()));
             let cache = Arc::new(domain::cache::TranslationCache::new(db.clone()));
+            // 缓存开关是持久化配置：按已保存的值初始化活体实例。
+            // 键缺失（升级上来的旧库）按默认开启处理，与 AppConfig::default 一致。
+            cache.set_enabled(
+                config.blocking_read().get("cache_enabled").as_deref() != Some("false"),
+            );
 
             // ── Step 3: 注册翻译源 ────────────────────────────────────────────
             let translator = TranslationEngine::new(http_client.clone());

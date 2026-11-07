@@ -28,7 +28,7 @@ struct KeyDescriptor {
 ///
 /// 布尔/整数键（auto_start / history_limit / fallback_enabled /
 /// onboarding_completed / clipboard_monitor_enabled /
-/// sensitive_filter_enabled / reduce_transparency）
+/// sensitive_filter_enabled / reduce_transparency / cache_enabled）
 /// 的解析各自带类型转换与钳制逻辑，留在 match 里，表只收字符串直存类键。
 const KEY_DESCRIPTORS: &[KeyDescriptor] = &[
     KeyDescriptor {
@@ -203,6 +203,7 @@ impl ConfigService {
             "clipboard_monitor_enabled" => Some(self.cache.clipboard_monitor_enabled.to_string()),
             "sensitive_filter_enabled" => Some(self.cache.sensitive_filter_enabled.to_string()),
             "reduce_transparency" => Some(self.cache.reduce_transparency.to_string()),
+            "cache_enabled" => Some(self.cache.cache_enabled.to_string()),
             _ => None,
         }
     }
@@ -295,6 +296,7 @@ impl ConfigService {
             "clipboard_monitor_enabled" => self.cache.clipboard_monitor_enabled = value == "true",
             "sensitive_filter_enabled" => self.cache.sensitive_filter_enabled = value == "true",
             "reduce_transparency" => self.cache.reduce_transparency = value == "true",
+            "cache_enabled" => self.cache.cache_enabled = value == "true",
             _ => {}
         }
     }
@@ -393,6 +395,9 @@ fn load_config_from_db(conn: &Connection) -> Result<AppConfig, AppError> {
             }
             "reduce_transparency" => {
                 config.reduce_transparency = decode(&raw) == "true";
+            }
+            "cache_enabled" => {
+                config.cache_enabled = decode(&raw) == "true";
             }
             _ => {}
         }
@@ -562,6 +567,42 @@ mod tests {
         drop(conn);
         assert!(
             !reloaded.sensitive_filter_enabled,
+            "重启后必须仍为 false —— 漏掉 load 分支会静默回到 true"
+        );
+    }
+
+    /// cache_enabled 走与其它布尔键相同的三条路径（get / 缓存 / 载入），
+    /// 默认开启 —— 离线复用是既有行为，新增开关不得改变默认。
+    #[test]
+    fn cache_enabled_roundtrips_through_all_three_paths() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let db = test_db();
+        let mut svc = fresh_service(db);
+
+        assert_eq!(
+            svc.get("cache_enabled").as_deref(),
+            Some("true"),
+            "默认必须开启（不改变既有离线回退行为）"
+        );
+
+        rt.block_on(async {
+            svc.set("cache_enabled", "false").await.unwrap();
+        });
+        assert_eq!(
+            svc.get("cache_enabled").as_deref(),
+            Some("false"),
+            "写入后缓存必须立即反映新值"
+        );
+
+        let shared = svc.db.try_conn().unwrap();
+        let conn = shared.blocking_lock();
+        let reloaded = load_config_from_db(&conn).unwrap();
+        drop(conn);
+        assert!(
+            !reloaded.cache_enabled,
             "重启后必须仍为 false —— 漏掉 load 分支会静默回到 true"
         );
     }
