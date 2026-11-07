@@ -27,7 +27,7 @@ use std::sync::Mutex;
 use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Manager};
 
-use crate::domain::clipboard_filter::{self, FilterDecision};
+use crate::domain::clipboard_filter::{self, FilterDecision, SensitiveRule};
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::system::persistence::{OwnedCacheEntry, PersistJob};
@@ -229,6 +229,21 @@ impl Default for TranslationCoordinator {
     }
 }
 
+/// 自动翻译入口的过滤门控：开关开启且命中规则时返回拦截原因。
+///
+/// 抽成纯函数是为了让「过滤发生在任何网络请求之前」这条产品约束可测
+/// —— 它没有任何 I/O，`execute_at_position` 在 supersede / 建窗 /
+/// 启动翻译任务之前调用它，早退路径上不存在能发出请求的代码。
+fn filter_gate(text: &str, enabled: bool) -> Option<SensitiveRule> {
+    if !enabled {
+        return None;
+    }
+    match clipboard_filter::classify(text) {
+        FilterDecision::BlockSensitive { rule } => Some(rule),
+        FilterDecision::Allow => None,
+    }
+}
+
 /// 在指定光标位置执行翻译（剪贴板监控的唯一入口）。
 ///
 /// 名字与签名与重构前 `translation_flow::execute_at_position` 一致，
@@ -254,24 +269,22 @@ pub async fn execute_at_position(app: &AppHandle, cursor_x: f64, cursor_y: f64, 
         .get("sensitive_filter_enabled")
         .map(|v| v == "true")
         .unwrap_or(true);
-    if filter_enabled {
-        if let FilterDecision::BlockSensitive { rule } = clipboard_filter::classify(&text) {
-            let len = text.len();
-            let id = coordinator.supersede();
-            coordinator.store_filtered(id, text, (cursor_x, cursor_y));
-            state.runtime.record_clipboard_filtered();
-            crate::commands::system::emit_toast(
-                app,
-                ToastPayload::warning_with_action(rule.reason(), "translate_filtered", "仍然翻译"),
-            );
-            tracing::info!(
-                event = "clipboard_filtered_sensitive",
-                rule = rule.code(),
-                len = len,
-                "[coordinator] 命中敏感内容过滤，已拦截（不翻译、不记录原文）"
-            );
-            return;
-        }
+    if let Some(rule) = filter_gate(&text, filter_enabled) {
+        let len = text.len();
+        let id = coordinator.supersede();
+        coordinator.store_filtered(id, text, (cursor_x, cursor_y));
+        state.runtime.record_clipboard_filtered();
+        crate::commands::system::emit_toast(
+            app,
+            ToastPayload::warning_with_action(rule.reason(), "translate_filtered", "仍然翻译"),
+        );
+        tracing::info!(
+            event = "clipboard_filtered_sensitive",
+            rule = rule.code(),
+            len = len,
+            "[coordinator] 命中敏感内容过滤，已拦截（不翻译、不记录原文）"
+        );
+        return;
     }
 
     // 先开新一代：上一代的任务被就地 abort，其迟到结果也会因 id 不匹配被丢弃
@@ -771,6 +784,39 @@ mod tests {
         ] {
             assert!(!should_fall_back_to_cache(&err), "{:?} 不该回退缓存", err);
         }
+    }
+
+    // ── 敏感过滤门控（顺序契约：早于任何 I/O）──────────────────────────
+
+    /// 合成的 AWS Key ID 形态（AKIA + 16 位大写字母数字）。
+    fn aws_key_sample() -> String {
+        format!("AKIA{}", "X7".repeat(8))
+    }
+
+    /// 开关关闭时一律放行 —— 用户明确选择承担风险。
+    #[test]
+    fn filter_gate_is_bypassed_when_disabled() {
+        assert_eq!(
+            filter_gate(aws_key_sample().as_str(), false),
+            None,
+            "关闭过滤后敏感内容也必须放行"
+        );
+    }
+
+    /// 开启时命中高置信度凭证形态。
+    #[test]
+    fn filter_gate_blocks_sensitive_text_when_enabled() {
+        assert_eq!(
+            filter_gate(aws_key_sample().as_str(), true),
+            Some(SensitiveRule::AwsAccessKeyId)
+        );
+    }
+
+    /// 普通文本不受影响 —— 过滤不能伤害主链路的日常使用。
+    #[test]
+    fn filter_gate_allows_normal_text() {
+        assert_eq!(filter_gate("Hello, world. 一段普通文本。", true), None);
+        assert_eq!(filter_gate("", true), None);
     }
 
     // ── 敏感过滤暂存（手动覆盖的数据源）────────────────────────────────
