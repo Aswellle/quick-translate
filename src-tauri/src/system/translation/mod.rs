@@ -14,5 +14,5 @@
 pub mod coordinator;
 pub mod request;
 
-pub use coordinator::{execute_at_position, TranslationCoordinator};
+pub use coordinator::{execute_at_position, translate_filtered_text, TranslationCoordinator};
 pub use request::{RequestGeneration, RequestId, TranslationRequest, MAX_TEXT_CHARS};

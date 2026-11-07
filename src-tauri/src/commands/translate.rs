@@ -2,12 +2,22 @@
 // 翻译 command handler（前端手动触发，如设置面板"测试翻译"）
 // 注意：快捷键触发的翻译通过 system::translation_flow::execute() 执行，不经过此 command
 
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::system::translation::request::MAX_TEXT_CHARS;
 use crate::types::{ProviderStatus, TranslationRecord, TranslationResult};
+
+/// 手动覆盖敏感过滤：翻译最近一条被拦截的剪贴板内容。
+///
+/// 唯一的触发源是用户在浮窗/toast 上的显式点击 —— 本命令不主动拉取
+/// 剪贴板，也不接受前端传入的文本，只能消费 coordinator 暂存的那一条。
+/// 返回 false 表示没有待覆盖的内容（已被新复制取代或已覆盖过一次）。
+#[tauri::command]
+pub async fn translate_filtered_text(app: AppHandle) -> Result<bool, AppError> {
+    Ok(crate::system::translation::translate_filtered_text(&app).await)
+}
 
 /// 前端手动触发翻译
 /// 用于：设置面板的"测试翻译"按钮

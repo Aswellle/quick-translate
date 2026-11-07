@@ -206,6 +206,7 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
     history_limit: "历史记录上限",
     fallback_enabled: "自动 Fallback",
     clipboard_monitor_enabled: "剪贴板监控",
+    sensitive_filter_enabled: "敏感内容过滤",
     reduce_transparency: "减少透明效果",
     export_dir: "导出保存位置",
   };
@@ -538,6 +539,12 @@ function GeneralTab({
           hint="选中文本并复制后自动弹出翻译"
           value={draft.clipboard_monitor_enabled}
           onApply={onClipboardToggle}
+        />
+        <ToggleRow
+          label="敏感内容过滤"
+          hint="复制的内容疑似私钥、访问令牌或云服务凭证时，不自动发送给翻译服务（仅在本机判定，不消耗额度）。关闭后这些内容将照常发送"
+          value={draft.sensitive_filter_enabled}
+          onApply={(v) => void applyConfig("sensitive_filter_enabled", v, "inline")}
         />
         <ToggleRow
           label="自动 Fallback"

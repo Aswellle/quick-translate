@@ -239,6 +239,21 @@ pub struct ToastPayload {
     pub kind: String,
     /// 显示时长（毫秒），默认 3000
     pub duration: Option<u32>,
+    /// 可选动作按钮（目前只有敏感过滤拦截使用）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<ToastAction>,
+}
+
+/// Toast 上的动作按钮：前端按 `id` 分发，`label` 是按钮文案。
+///
+/// 引入动作按钮的动机（计划 3.2 第 6 条）：过滤拦下内容后，用户必须有
+/// 一条**显式**的「我知道风险，仍然翻译」路径 —— 否则过滤会变成无法
+/// 绕过的高墙，用户只能关掉整个过滤开关。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToastAction {
+    /// 动作标识："translate_filtered"
+    pub id: String,
+    pub label: String,
 }
 
 impl ToastPayload {
@@ -247,6 +262,7 @@ impl ToastPayload {
             message: message.into(),
             kind: "error".into(),
             duration: None,
+            action: None,
         }
     }
     pub fn warning(message: impl Into<String>) -> Self {
@@ -254,6 +270,7 @@ impl ToastPayload {
             message: message.into(),
             kind: "warning".into(),
             duration: None,
+            action: None,
         }
     }
     pub fn success(message: impl Into<String>) -> Self {
@@ -261,6 +278,7 @@ impl ToastPayload {
             message: message.into(),
             kind: "success".into(),
             duration: None,
+            action: None,
         }
     }
     pub fn info(message: impl Into<String>) -> Self {
@@ -268,6 +286,26 @@ impl ToastPayload {
             message: message.into(),
             kind: "info".into(),
             duration: None,
+            action: None,
+        }
+    }
+
+    /// 带动作按钮的警告 toast（敏感过滤拦截的「仍然翻译」入口）。
+    /// 停留时间拉长到 8 秒：这是需要用户阅读并决策的提示，不是一闪
+    /// 而过的状态通知。
+    pub fn warning_with_action(
+        message: impl Into<String>,
+        action_id: impl Into<String>,
+        action_label: impl Into<String>,
+    ) -> Self {
+        ToastPayload {
+            message: message.into(),
+            kind: "warning".into(),
+            duration: Some(8000),
+            action: Some(ToastAction {
+                id: action_id.into(),
+                label: action_label.into(),
+            }),
         }
     }
 }

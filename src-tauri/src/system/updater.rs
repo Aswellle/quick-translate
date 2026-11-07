@@ -29,6 +29,7 @@ pub async fn check_and_notify(app: &AppHandle) {
                     message: format!("发现新版本 v{}，正在后台下载…", version),
                     kind: "info".into(),
                     duration: Some(5000),
+                    action: None,
                 },
             );
 

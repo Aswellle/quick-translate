@@ -328,6 +328,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::translate::translate_text,
+            commands::translate::translate_filtered_text,
             commands::translate::list_providers,
             commands::translate::get_provider_status,
             commands::translate::validate_provider,

@@ -62,6 +62,8 @@ export interface AppConfig {
   fallback_enabled: boolean;
   onboarding_completed: boolean;
   clipboard_monitor_enabled: boolean;
+  /** 剪贴板敏感内容过滤（默认开启；关闭后疑似凭证不再被本地拦截） */
+  sensitive_filter_enabled: boolean;
   /** 应用内「减少透明效果」开关。与系统偏好媒体查询是叠加关系 */
   reduce_transparency: boolean;
   /** 历史导出的默认保存目录；空串 = 每次导出弹原生保存对话框 */
@@ -114,6 +116,8 @@ export interface RuntimeDiagnostics {
   fallback_count: number;
   /** 回声守卫拦下「译文=原文」的次数 */
   echo_count: number;
+  /** 敏感内容过滤拦下自动翻译的次数（原文不记录） */
+  clipboard_filtered_count: number;
 }
 
 export async function getRuntimeDiagnostics(): Promise<RuntimeDiagnostics> {
@@ -145,6 +149,16 @@ export async function onRuntimeStatusChanged(
 
 export async function validateProvider(providerId: string): Promise<boolean> {
   return invoke("validate_provider", { providerId });
+}
+
+/**
+ * 手动覆盖敏感过滤：翻译最近一条被拦截的剪贴板内容。
+ *
+ * 只能消费后端暂存的那一条（不接受文本参数）—— 前端无法借此把任意
+ * 内容塞进翻译链路。返回 false 表示没有待覆盖的内容。
+ */
+export async function translateFilteredText(): Promise<boolean> {
+  return invoke("translate_filtered_text");
 }
 
 // ---- 配置 Commands ----

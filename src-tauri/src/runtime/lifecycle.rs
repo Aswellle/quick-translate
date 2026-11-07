@@ -26,6 +26,8 @@ pub struct RuntimeDiagnostics {
     pub fallback_count: u64,
     /// 回声守卫拦下「译文=原文」的次数
     pub echo_count: u64,
+    /// 敏感内容过滤拦下自动翻译的次数（原文不记录）
+    pub clipboard_filtered_count: u64,
 }
 
 /// 进程级计数器本体。挂在 RuntimeStatus 上（全局唯一句柄），
@@ -34,6 +36,7 @@ pub struct RuntimeDiagnostics {
 pub struct DiagnosticsCounters {
     pub translation_success: AtomicU64,
     pub translation_failure: AtomicU64,
+    pub clipboard_filtered: AtomicU64,
 }
 
 /// 进程生命周期起点。
