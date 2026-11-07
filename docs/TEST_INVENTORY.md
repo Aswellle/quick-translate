@@ -7,9 +7,11 @@
 
 | 门禁 | 命令 | 基线结果 |
 |---|---|---|
-| Rust 单测 | `cargo test --manifest-path src-tauri/Cargo.toml --lib` | 313 passed / 0 failed |
+| Rust 单测 | `cargo test --manifest-path src-tauri/Cargo.toml --lib` | 314 passed / 0 failed |
 | Rust 格式 | `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` | PASS |
 | Rust lint | `cargo clippy --manifest-path src-tauri/Cargo.toml --lib -- -D warnings` | PASS |
+
+> 说明：`cargo clippy --lib --tests -- -D warnings` 当前有 16 个**既有** test 目标告警（测试代码 clone/常量断言等，0.8.0 基线时记录为 13 个，v0.9.0 期间又新增 3 个）。CI 门禁与仓库脚本的 clippy 均只针对 `--lib` 目标，不构成阻塞；批量清理属独立整理事项，不在功能任务中顺带处理。
 | 前端测试 | `npm test`（Vitest） | 37 passed / 8 文件 |
 | 前端类型 | `npx tsc --noEmit` | PASS |
 | 前端构建 | `npm run build` | CI 覆盖（本地待跑） |
@@ -29,11 +31,11 @@ CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 
 
 | 模块 | 数量 | 已覆盖 | 缺口 |
 |---|---|---|---|
-| `domain/translator/mod.rs` | 36 | fallback 链、超时重试、熔断交互、错误 Display 脱敏哨兵、语言映射表驱动、引擎统计 | Provider contract tests 对真实 API 形状的覆盖（Task 03/14） |
+| `domain/translator/mod.rs` | 37 | fallback 链、超时重试、熔断交互、错误 Display 脱敏哨兵、语言映射表驱动、引擎统计、任务中止终结 fallback 链 | Provider contract tests 对真实 API 形状的覆盖（Task 03/14） |
 | `domain/translator/health.rs` | 13 | 状态机流转、冷却阶梯（含长冷却）、半开单探测、Retry-After 边界 | 并发探测互斥已有；无待办 |
 | `domain/translator/error_class.rs` | 9 | 错误分类表 | 无待办 |
 | `domain/translator/policy.rs` | 10 | 请求策略、8s 预算、剩余预算校验 | 无待办 |
-| `system/translation/coordinator.rs` | 14 | 代际闸门、迟到结果丢弃、install 拒绝并中止、窗锁串行、commit_popup_show 全协议、缓存回退判定 | 取消发生在引擎 fallback 切换中的端到端断言（Task 02 核验项） |
+| `system/translation/coordinator.rs` | 14 | 代际闸门、迟到结果丢弃、install 拒绝并中止、窗锁串行、commit_popup_show 全协议、缓存回退判定 | 无待办（取消跨 fallback 切换由 translator 的 `aborted_task_never_continues_the_fallback_chain` 锁定，d3b3f97） |
 
 ### 剪贴板链路
 

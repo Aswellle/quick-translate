@@ -4,12 +4,19 @@
 - Branch: main
 - Base commit: b64b04e（Merge pull request #80）
 - App version: 0.9.0
-- Current task: Task 01 质量基线（完成）
-- Working tree: 干净（执行前仅未跟踪文档）
+- Current task: Task 02 翻译请求生命周期与竞态测试（完成）
+- Working tree: 干净
 - 执行依据: docs/QUICK_TRANSLATE_AI_AGENT_DEVELOPMENT_PLAN.md（2026-11-07 修订）
 - 测试清单: docs/TEST_INVENTORY.md
 
 ## Completed
+
+### 2026-11-07 — Task 02 翻译请求生命周期与竞态测试
+- Changes: 新增引擎级取消语义测试 `aborted_task_never_continues_the_fallback_chain`（domain/translator/mod.rs）。用 `Outcome::Slow(Duration::MAX)` 把任务钉在主源首次尝试中，abort 后断言 A 不被重试、B（fallback 源）零调用。补齐「取消请求不会继续发起 Fallback」这条验收的结构性证明；其余验收项（迟到结果丢弃、安装拒绝、窗锁串行、commit_popup_show 协议）已有 14 个 coordinator 测试覆盖。前端 useTauriEvent 的注册竞态防护与自动解绑经核读确认无缺陷。
+- Files: src-tauri/src/domain/translator/mod.rs
+- Tests: `cargo test --lib` → 314 passed / 0 failed（新增 1）；`cargo fmt --check` PASS；`cargo clippy --lib -- -D warnings` PASS（--tests 目标 16 个既有 test 告警，见 TEST_INVENTORY 说明，非本次引入）
+- Result: Task 02 验收项全部有测试对应。
+- Commit: d3b3f97
 
 ### 2026-11-07 — Task 01 建立可重复的质量基线
 - Changes: 无代码改动。核验全部基线门禁、Mock 注入能力与 CI 覆盖；建立测试清单文档与本进度文件。
@@ -40,4 +47,4 @@
   - Required manual test: 显式 opt-in 的真实凭证测试
 
 ## Next task
-- Task 02：翻译请求生命周期与竞态测试 —— 核验「取消发生在 fallback 切换中」的端到端行为，其余验收项已有测试覆盖（见 TEST_INVENTORY）。
+- Task 03：Provider 错误契约与 Fallback 完整性 —— 核验错误矩阵覆盖（鉴权/额度/限流/超时/语言不支持/空响应）、凭证更新重置健康状态、诊断面板的 Provider 最近错误记录；其余项（错误分类表、熔断状态机、Retry-After）已有测试覆盖（见 TEST_INVENTORY）。
