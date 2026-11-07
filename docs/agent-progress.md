@@ -4,12 +4,26 @@
 - Branch: main
 - Base commit: b64b04e（Merge pull request #80）
 - App version: 0.9.0
-- Current task: Task 04 剪贴板隐私防护（完成）；下一步 Task 06 数据层测试补强
+- Current task: Task 06 缓存、历史和数据管理（核心项完成）；下一步 Task 05 设置一致性核验或缓存开关（待定）
 - Working tree: 干净
 - 执行依据: docs/QUICK_TRANSLATE_AI_AGENT_DEVELOPMENT_PLAN.md（2026-11-07 修订）
 - 测试清单: docs/TEST_INVENTORY.md
 
 ## Completed
+
+### 2026-11-07 — Task 06 缓存、历史和数据管理（核心项）
+- Changes:
+  - **修复真实缺陷**：`ORDER BY created_at DESC` 缺第二排序键，同毫秒记录的翻页顺序不确定（SQLite 排序的偶然行为，非契约）。三处查询 + FIFO 清理补 `rowid` 第二键；探测代码确认当前行为后以测试锁定契约。
+  - **历史查询契约测试**（+12）：CRUD（toggle_star/delete/clear）、FIFO 只删最旧未收藏、LIKE 转义（`%`/`_` 字面量）、中文子串检索、limit/offset 钳制、starred 过滤、收藏持久性。
+  - **大数据量测试**（计划 6.6/6.9）：1 万条下首页/深分页走 `idx_records_created_at` 索引、CJK 搜索、500ms 预算断言；万条规模 FIFO 精确删除且收藏记录存活。
+  - **迁移升级测试**（+3）：v1→最新升级保留既有记录（新列默认值可用）、重复迁移幂等、版本行恰好记一次账。
+  - **持久化丢弃计数**（计划 3.3）：队列满导致的写入丢弃从静默 warn 变为可观测指标 `persistence_dropped_count`，状态面板展示「落盘丢弃 N 条」。
+  - **独立的清空缓存入口**（计划 3.3）：`clear_translation_cache` 命令 + 设置页操作行，带二次确认对话框（说明影响范围：历史不受影响），与清空历史互相独立。
+  - **落盘 worker 关闭语义核验**（计划 6.9，纯核验无改动）：worker 循环 `while let Some(job) = rx.recv().await`——tokio mpsc 的 `recv()` 仅在通道关闭且缓冲排空后才返回 None，因此 sender（PersistenceWriter）drop 时 worker 会先消化完队列内剩余写入再退出（有限 drain）。进程被硬杀时最多丢 32 条缓冲写入：有界、WAL 不损坏、丢弃已有诊断计数。未加显式退出等待钩子——进程退出不保证 async 任务被轮询，等待钩子是伪保障。
+- Files: domain/history.rs、domain/cache.rs、infra/database.rs、system/persistence.rs、runtime/{status,lifecycle}.rs、commands/history.rs、lib.rs、src/lib/commands.ts、src/windows/settings/SettingsWindow.tsx
+- Tests: `cargo test --lib` → 366 passed（+19）；clippy/fmt PASS；tsc PASS；vitest 37/37；build PASS
+- Commit: 564b733 / 7f81ab7 / 5462e19 / 3e47bd9
+- 未做（留待后续）: 缓存禁用/启用开关（默认保持开启，涉及隐私说明文案，属产品决策项）；「清空缓存」是否加入托盘菜单。
 
 ### 2026-11-07 — Task 04 剪贴板隐私防护与过滤引擎
 - Changes:
@@ -65,4 +79,4 @@
   - Required manual test: 显式 opt-in 的真实凭证测试
 
 ## Next task
-- Task 03：Provider 错误契约与 Fallback 完整性 —— 核验错误矩阵覆盖（鉴权/额度/限流/超时/语言不支持/空响应）、凭证更新重置健康状态、诊断面板的 Provider 最近错误记录；其余项（错误分类表、熔断状态机、Retry-After）已有测试覆盖（见 TEST_INVENTORY）。
+- Task 05：设置与配置一致性 —— 核验即时生效失败回滚、多窗口同步、快速开关竞态（QT-010 已大体覆盖），找出残余缺口后逐项补测试；或先做缓存禁用/启用开关（默认保持开启 + 隐私说明），需维护者确认文案后实施。

@@ -18,6 +18,8 @@
 
 CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 3 平台、clippy 与单测 × Windows/macOS、release 构建验证 × 双平台。CI 不依赖真实 Provider 凭证。
 
+> 进展更新：Task 04（+33）与 Task 06（+19）后 Rust 单测现为 **366 passed**，前端仍为 37 / 8 文件。
+
 ## Mock 注入能力（现状确认）
 
 - **翻译 Provider 注入**：`domain/translator/mod.rs` 测试模块内已有 `MockProvider`（可编排 `Outcome::Ok/Timeout/...` 序列）、`SharedMock`（`Arc` 共享调用计数）与 `engine_with()` 构造器 —— 翻译引擎、fallback 链、熔断交互均可确定性驱动，无需真实网络。
@@ -50,10 +52,10 @@ CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 
 
 | 模块 | 数量 | 已覆盖 | 缺口 |
 |---|---|---|---|
-| `domain/cache.rs` | 12 | TTL、LRU、键构造、回声过滤 | 缓存开关禁用写入路径（Task 06 核验） |
-| `domain/history.rs` | **3** | 仅 stats 参数钳制（days 边界、区间倒置） | **query 分页/搜索转义、toggle_star、clear_all、delete_by_id、enforce_limit FIFO 均无直测（Task 06 补）** |
-| `system/persistence.rs` | 8 | 有界队列、丢弃策略、单 worker | 关闭时 drain 生命周期（Task 06 核验） |
-| `infra/database.rs` | **3** | 损坏抢救、配置行恢复 | **v1→v6 迁移升级路径无测试（Task 06 补；schema 变更前必须有）** |
+| `domain/cache.rs` | 13 | TTL、LRU、键构造、回声过滤、清空缓存仅删缓存条目 | 缓存禁用/启用开关（默认保持开启，属产品决策项，见 agent-progress） |
+| `domain/history.rs` | **18** | query 分页（`rowid` 第二排序键）、LIKE 转义、中文子串检索、toggle_star/delete_by_id/clear_all、FIFO 只删最旧未收藏、参数钳制、starred 过滤、收藏持久性；万条规模分页/搜索索引与 500ms 预算、万条 FIFO | 无待办 |
+| `system/persistence.rs` | 9 | 有界队列、丢弃策略、单 worker、入队失败诊断计数 | 关闭时 drain 语义已核验：channel 排空后退出（见 agent-progress Task 06），无显式退出等待——设计如此，非缺陷 |
+| `infra/database.rs` | **6** | 损坏抢救、配置行恢复、v1→最新迁移升级保留记录、重复迁移幂等、版本行逐版本记账 | 无待办（任何新 schema 变更前先加迁移测试） |
 | `domain/config.rs` | 13 | 描述符表完备性、批次 all-or-nothing、类型校验 | 无待办 |
 | `infra/crypto.rs` | 12 | AES-GCM、掩码、错误处理 | 无待办 |
 
@@ -83,12 +85,12 @@ CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 
 ## 已识别缺口汇总（映射后续任务）
 
 1. ~~敏感内容过滤引擎整体缺失~~ → 已由 Task 04 完成（`domain/clipboard_filter.rs` + 入口门控 + 手动覆盖）。应用排除列表仍缺：当前剪贴板 API 无法可靠获得来源进程，需产品决策。
-2. `history.rs` 查询/收藏/清空/FIFO 直测缺失 → Task 06
-3. `database.rs` 迁移升级路径无测试 → Task 06（任何新 schema 变更的前置条件）
+2. ~~`history.rs` 查询/收藏/清空/FIFO 直测缺失~~ → 已由 Task 06 完成（3 → 18 个测试 + 第二排序键修复）
+3. ~~`database.rs` 迁移升级路径无测试~~ → 已由 Task 06 完成（3 → 6 个测试，v1 升级/幂等/记账）
 4. 应用排除列表缺失（依赖平台来源进程能力，需先评估） → Task 04
 5. 手动翻译入口缺失 → Task 09
 6. 全局快捷键：`@tauri-apps/plugin-global-shortcut` 已声明依赖但未接线 → Task 11（需先决策依赖去留）
-7. 缓存禁用/清空的独立入口待核验 → Task 06
+7. ~~缓存禁用/清空的独立入口待核验~~ → 清空入口已由 Task 06 完成（独立命令 + 设置页操作行）；禁用开关留作产品决策项（默认保持开启）
 
 ## 约定
 
