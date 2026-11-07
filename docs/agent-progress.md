@@ -4,12 +4,25 @@
 - Branch: main
 - Base commit: b64b04e（Merge pull request #80）
 - App version: 0.9.0
-- Current task: 全局快捷键首次实现（完成，待实机验证）；Task 10 术语表原生能力评估（完成）；下一步术语表数据层 + DeepL glossary 接入
+- Current task: 全局快捷键（完成，待实机验证）；Task 10 术语表（数据层 + DeepL 同步 + 管理 UI 完成，真实 API 未验证）；下一步 opt-in 真实凭证验证或 Task 11 收尾
 - Working tree: 干净
 - 执行依据: docs/QUICK_TRANSLATE_AI_AGENT_DEVELOPMENT_PLAN.md（2026-11-07 修订）
 - 测试清单: docs/TEST_INVENTORY.md
 
 ## Completed
+
+### 2026-11-08 — Task 10 术语表：DeepL 同步、缓存指纹与管理 UI
+- Changes:
+  - **引擎上下文**：新增 `TranslateOptions`（显式源语言 / glossary_id / 指纹）；trait 默认 `translate_with_options` 委托给 `translate`，其余 Provider 零改动；DeepL 覆盖后以 form 参数下发 `source_lang` 与 `glossary_id`。
+  - **DeepL glossary 同步**（`system/glossary_sync.rs`，schema v9 `deepl_glossary_sync`）：按语言对创建/复用 glossary；指纹未变复用持久化映射；变化时先建新、更新映射、尽力删除旧 glossary；`ready=false` 轮询约 1s；同步失败只降级为「本次不应用」并记日志，绝不阻塞翻译。仅「术语表开启 + 当前源是 DeepL + 显式源语言 + 该语言对有条目」时工作。
+  - **缓存键纳入术语指纹**：应用术语表的译文与未应用的互不命中；空指纹保持旧键格式，既有缓存不失效；离线回退按实际应用指纹查询。
+  - **手动翻译**新增源语言选择（默认自动检测），命令新增 `source_lang` 参数并校验受支持语言。
+  - **设置页「术语表」Tab**：语言对选择、启用开关、条目增删改、区分大小写、JSON/CSV 导入（文件选择）与导出（复制到剪贴板）、按语言对清空；当前 Provider 能力如实说明（腾讯/百度/有道只能引用控制台术语库，Google 不支持）。`ToggleRow`/`SettingsRow` 抽到 `SettingsControls` 避免循环依赖。
+- Tests: cargo test --lib **401 passed**（+7：DeepL 请求参数、glossary 创建请求形状、缓存指纹隔离、同步映射读写/TSV/键构造）；fmt/clippy PASS；vitest **86/86**（+4）；tsc/build PASS
+- Commit: 67ecf0e / 1d95e1c
+- **未验证（如实记录）**：DeepL glossary 的真实 API 调用（无真实凭证，请求形状仅 mock 层验证）；术语表在真实翻译中的效果（服务商对术语的匹配语义、大小写行为）需 opt-in contract test；macOS 未验证。
+- 未做：腾讯/百度/有道的「引用控制台术语库 ID/开关」入口；剪贴板路径的显式源语言设置（当前按 DeepL 限制不应用术语表）。
+
 
 ### 2026-11-08 — Task 10 术语表：本地数据层（schema v8）
 - Changes:
@@ -189,6 +202,6 @@
   - Required manual test: 显式 opt-in 的真实凭证测试
 
 ## Next task
-- Task 10 继续（已选定按语言对管理）：DeepL glossary 同步（创建/失效/ready 轮询）→ 翻译请求显式源语言（手动窗口源语言选择）→ 缓存键接入术语指纹 → 前端管理 UI（语言对选择、CRUD、导入导出、启用开关、Provider 支持状态如实展示）。
-- 全局快捷键实机验证（Windows 优先：注册/冲突/三个动作）；macOS 未验证项继续保留。
+- Task 10 剩余：腾讯/百度/有道的「引用控制台术语库/开关」入口（参数细节先复核）；DeepL 真实凭证 contract test（opt-in）。
+- 全局快捷键与术语表实机验证（Windows 优先）；macOS 未验证项继续保留。
 - 阻塞项：Task 08 剩余（供应商目录分类/AI 类目）待要求 19 解禁；腾讯/百度/有道术语表参数细节待复核。
