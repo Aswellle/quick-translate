@@ -27,11 +27,12 @@ use std::sync::Mutex;
 use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Manager};
 
+use crate::domain::clipboard_filter::{self, FilterDecision};
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::system::persistence::{OwnedCacheEntry, PersistJob};
 use crate::system::translation_flow;
-use crate::types::{TranslationRecord, TranslationResult};
+use crate::types::{ToastPayload, TranslationRecord, TranslationResult};
 
 use super::request::{RequestGeneration, RequestId, TranslationRequest};
 
@@ -205,6 +206,32 @@ impl Default for TranslationCoordinator {
 pub async fn execute_at_position(app: &AppHandle, cursor_x: f64, cursor_y: f64, text: String) {
     let state = app.state::<AppState>();
     let coordinator = state.coordinator.clone();
+
+    // ── 敏感内容过滤：必须发生在任何网络请求 / UI 动作之前 ─────────────
+    //
+    // 放在 supersede 之前的语义：被拦截的内容不打断进行中的翻译、
+    // 不显示浮窗、不产生任何请求。拦截反馈用 toast —— 一句不含原文的
+    // 解释（计划 3.2 第 9 条「可解释反馈」）；原文不出现在事件、日志、
+    // 历史里的任何地方。
+    let filter_enabled = state
+        .config
+        .read()
+        .await
+        .get("sensitive_filter_enabled")
+        .map(|v| v == "true")
+        .unwrap_or(true);
+    if filter_enabled {
+        if let FilterDecision::BlockSensitive { rule } = clipboard_filter::classify(&text) {
+            crate::commands::system::emit_toast(app, ToastPayload::warning(rule.reason()));
+            tracing::info!(
+                event = "clipboard_filtered_sensitive",
+                rule = rule.code(),
+                len = text.len(),
+                "[coordinator] 命中敏感内容过滤，已拦截（不翻译、不记录原文）"
+            );
+            return;
+        }
+    }
 
     // 先开新一代：上一代的任务被就地 abort，其迟到结果也会因 id 不匹配被丢弃
     let id = coordinator.supersede();

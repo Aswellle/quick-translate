@@ -109,6 +109,7 @@ const BOOL_KEYS: &[&str] = &[
     "fallback_enabled",
     "onboarding_completed",
     "clipboard_monitor_enabled",
+    "sensitive_filter_enabled",
     "reduce_transparency",
 ];
 

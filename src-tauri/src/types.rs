@@ -176,6 +176,12 @@ pub struct AppConfig {
     pub onboarding_completed: bool,
     /// 是否启用剪贴板监控自动翻译
     pub clipboard_monitor_enabled: bool,
+    /// 剪贴板敏感内容过滤开关（domain::clipboard_filter）。
+    ///
+    /// 默认开启：疑似凭证（私钥/JWT/云服务令牌等高置信度形态）在发送给
+    /// 翻译服务之前被本地拦截。关闭意味着用户自行承担凭证外发风险，
+    /// 设置页文案必须如实说明这一点。
+    pub sensitive_filter_enabled: bool,
     /// 减少透明效果（应用内开关）。
     ///
     /// 为什么需要它：`prefers-reduced-transparency` 媒体查询在 WKWebView
@@ -209,6 +215,7 @@ impl Default for AppConfig {
             fallback_enabled: true,
             onboarding_completed: false,
             clipboard_monitor_enabled: true,
+            sensitive_filter_enabled: true,
             reduce_transparency: false,
             export_dir: String::new(),
         }
