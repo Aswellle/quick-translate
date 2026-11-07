@@ -35,6 +35,7 @@ import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
 import { toast } from "@/components/ToastManager";
 import { SUPPORTED_LANGUAGES, PROVIDERS, ERROR_MESSAGES, EVENTS } from "@/lib/constants";
 import { CREDENTIAL_KEYS, mergeExternalConfig, mayRollBackToPrevious } from "@/lib/configSync";
+import { providerStateLabel, STATE_TONE_CLASS } from "@/lib/providerState";
 import { useConfigStore } from "@/stores/configStore";
 import { TrendChart, ProviderChart } from "./StatsDashboard";
 import { applyTheme } from "@/hooks/useTheme";
@@ -1306,48 +1307,7 @@ function ProviderTab({
   );
 }
 
-/**
- * 运行时状态的展示词表（计划第 28/51 节）。
- * 用户不需要看到开发者的 Open/HalfOpen 术语 ——
- * 「暂时不可用」「认证失败」这类话配上「将自动恢复」就够了。
- */
-function providerStateLabel(
-  status: ProviderStatus | undefined,
-  hasCredentials: boolean
-): { text: string; tone: "ok" | "warn" | "err" | "muted" } | null {
-  if (!status || !hasCredentials) {
-    return hasCredentials ? null : { text: "未配置", tone: "muted" };
-  }
-  switch (status.health_state) {
-    case "healthy":
-      return { text: "正常", tone: "ok" };
-    case "half_open":
-      return { text: "正在恢复…", tone: "warn" };
-    case "open":
-    case "degraded": {
-      // 用最近一次错误的类别细分「暂时不可用」的原因
-      switch (status.last_error_class) {
-        case "auth":
-          return { text: "认证失败，请检查凭证", tone: "err" };
-        case "quota":
-          return { text: "额度已用尽", tone: "err" };
-        case "rate_limit":
-          return { text: "请求过于频繁，稍后自动恢复", tone: "warn" };
-        default:
-          return { text: "暂时不可用，将自动恢复", tone: "warn" };
-      }
-    }
-    default:
-      return null;
-  }
-}
-
-const STATE_TONE_CLASS: Record<string, string> = {
-  ok: "text-green-500",
-  warn: "text-amber-500",
-  err: "text-red-500",
-  muted: "text-[var(--text-secondary)]",
-};
+// ── 运行时状态展示：词表与色调映射见 lib/providerState.ts ──
 
 /**
  * 单个凭证字段：输入纯本地、blur 时提交。
