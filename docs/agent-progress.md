@@ -4,12 +4,25 @@
 - Branch: main
 - Base commit: b64b04e（Merge pull request #80）
 - App version: 0.9.0
-- Current task: Task 09 手动翻译入口（含缓存回退统一，完成）；缓存读写开关（完成）；下一步 Task 10 术语表或 Task 11 全局快捷键（待定）
+- Current task: 全局快捷键首次实现（完成，待实机验证）；下一步 Task 10 术语表能力评估或快捷键端到端验证
 - Working tree: 干净
 - 执行依据: docs/QUICK_TRANSLATE_AI_AGENT_DEVELOPMENT_PLAN.md（2026-11-07 修订）
 - 测试清单: docs/TEST_INVENTORY.md
 
 ## Completed
+
+### 2026-11-08 — 全局快捷键（首次实现，计划 Task 11）
+- Changes:
+  - 引入 `tauri-plugin-global-shortcut`（Rust 端注册/分发；离线环境锁定 2.3.2）。前端只编辑加速键并读取状态，不走插件 JS API。
+  - 三个动作全部复用既有入口：**翻译剪贴板** → `coordinator::execute_at_position`（敏感过滤、代际闸门、历史/缓存落盘与剪贴板路径完全一致；监控暂停时也可手动触发一次）；**打开手动翻译** → 托盘同一个窗口实例；**暂停/恢复监控** → 与设置页共用 `apply_clipboard_monitor_switch`。
+  - 注册失败只记录状态与日志、不影响启动；改动时先注册新值、成功后才注销旧值（冲突时旧快捷键保持可用）。
+  - 加速键作为普通字符串配置键（`hotkey_translate_clipboard` / `hotkey_open_manual` / `hotkey_toggle_monitor`）走 descriptor 表，启动按配置注册；`get_hotkey_status` 返回配置值/实际生效值/失败原因。
+  - 设置页「快捷键」分组：录制（window 捕获阶段，不依赖按钮焦点）、Esc 取消、Backspace 清除禁用、注册状态与冲突原因展示；`lib/hotkeys.ts` 负责键盘事件 → 加速键与按平台格式化。
+- Tests: cargo test --lib 380 passed（+4）；fmt/clippy PASS；vitest 82/82（+12）；tsc/build PASS
+- Commit: d41e66f / 3ae9b2c
+- **未验证（如实记录）**：快捷键的 OS 注册、冲突提示与三个动作的端到端行为需要实机验证 —— 本机未启动 Tauri 应用实跑；macOS 完全未验证（`on_shortcut` 在主线程内联执行的处理已核读 tauri-runtime-wry 源码，但平台行为未实测）。默认加速键 `CmdOrControl+Alt+T/M/P` 可能与其他应用冲突，冲突时设置页会显示真实原因。
+- 依赖去留：`@tauri-apps/plugin-global-shortcut`（JS 包）当前未被使用（本实现走 Rust 端）。保留还是移除留待后续小步（移除需同步 package-lock）。
+- 未做：动作「显示/隐藏浮窗」「重新翻译上一次文本」需要前端状态或新的暂存语义，留待后续；快捷键录制暂不校验跨平台键位差异。
 
 ### 2026-11-08 — 本地缓存读写开关（完成，Task 06 遗留项收尾）
 - 背景：此前只能「清空缓存」，不想在磁盘留存译文副本的用户没有持续生效的选项。
@@ -135,18 +148,21 @@
 - Task: 无
 
 ## Blockers / decisions needed
-- `@tauri-apps/plugin-global-shortcut` 依赖已声明但完全未接线：Task 11 前需决策「实现快捷键」还是「移除依赖」。不阻塞其他任务。
+- `@tauri-apps/plugin-global-shortcut`（JS 包）已无使用方（快捷键走 Rust 端）：保留 / 移除待定，移除需同步 package-lock。不阻塞其他任务。
 - 应用排除列表（Task 04）：当前剪贴板 API 在两个平台均无可靠的来源进程标识，需按计划先实现敏感过滤 + 暂停，应用排除标为平台能力待评估。
 
 ## Risks not yet verified
+- Platform: Windows
+  - Scenario: 全局快捷键的 OS 注册、冲突提示与三个动作的端到端行为
+  - Required manual test: 启动应用，逐个按下 `CmdOrControl+Alt+T/M/P`；再用其他应用占用同一组合验证冲突提示与旧快捷键保持可用
 - Platform: macOS
-  - Scenario: 浮窗定位、剪贴板 changeCount 语义、打开外部 URL
+  - Scenario: 浮窗定位、剪贴板 changeCount 语义、打开外部 URL、全局快捷键注册
   - Required manual test: QT-001/002/004 的 macOS 实机验证（上轮审计遗留，EXTERNAL_VALIDATION_REQUIRED）
 - Platform: Windows + macOS
   - Scenario: 真实翻译服务商的 contract tests（当前均为 mock 层验证）
   - Required manual test: 显式 opt-in 的真实凭证测试
 
 ## Next task
+- 全局快捷键实机验证（Windows 优先：注册/冲突/三个动作）；macOS 未验证项继续保留。
 - Task 10 术语表：先做 Provider 原生 glossary 能力评估（计划要求「原生能力优先」，不支持的 Provider 如实标记而非假装生效）；数据层/导入导出可先行。
-- Task 11 全局快捷键：先决策 `@tauri-apps/plugin-global-shortcut` 依赖去留，再按计划要求（默认不冲突、可自定义、冲突提示、注册失败不影响启动、设置页显示状态）实施。
 - 阻塞项：Task 08 剩余（供应商目录分类/AI 类目）待要求 19 解禁。

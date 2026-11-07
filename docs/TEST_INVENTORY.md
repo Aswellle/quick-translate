@@ -18,7 +18,7 @@
 
 CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 3 平台、clippy 与单测 × Windows/macOS、release 构建验证 × 双平台。CI 不依赖真实 Provider 凭证。
 
-> 进展更新：Task 04（+33）、Task 06（+19）、Task 09 来源类型（+2）、Task 09 缓存回退统一（+4）、缓存读写开关（+4）后 Rust 单测现为 **376 passed**；Task 05/07/08/09 后前端为 **70 / 13 文件**（+33）。
+> 进展更新：Task 04（+33）、Task 06（+19）、Task 09 来源类型（+2）、Task 09 缓存回退统一（+4）、缓存读写开关（+4）、全局快捷键（+4）后 Rust 单测现为 **380 passed**；Task 05/07/08/09 与快捷键 UI 后前端为 **82 / 14 文件**（+45）。
 
 ## Mock 注入能力（现状确认）
 
@@ -66,15 +66,17 @@ CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 
 | `runtime/status.rs` | 14 | 组件状态聚合、指纹去重 |
 | `commands/system.rs` | 10 | open_url 白名单校验 |
 | `system/tray.rs` | — | 托盘状态行组装 |
+| `system/hotkeys.rs` | **4** | 动作清单唯一性、默认加速键非空且不重复、默认值贯通 AppConfig、初始注册状态 | OS 注册/冲突/三个动作分发需实机验证（未自动化） |
 | `util/backoff.rs` | 5 | 指数退避、抖动边界 |
 | `error.rs` | — | URL 脱敏 |
 
-## 前端测试清单（48 / 9 文件）
+## 前端测试清单（82 / 14 文件）
 
 | 文件 | 覆盖 |
 |---|---|
 | `lib/__tests__/constants.test.ts` | Rust↔前端错误码契约（新增 Rust 错误码必须同步文案） |
 | `lib/__tests__/configSync.test.ts` | 外部真值合并规则（凭证/auto_start/在途键跳过）+ 快速连续写入的回滚守卫 |
+| `lib/__tests__/hotkeys.test.ts` | 键盘事件 → 加速键（修饰键顺序、具名键、拒绝无效组合）+ 按平台格式化 + 动作/配置键映射 |
 | `lib/__tests__/domUtils.test.ts` | 键盘目标/拖拽阻断判定 |
 | `lib/__tests__/export.test.ts` | Markdown/HTML 导出格式化 |
 | `stores/__tests__/historyStore.test.ts` | 历史 store 分页/搜索 |
@@ -90,7 +92,7 @@ CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 
 3. ~~`database.rs` 迁移升级路径无测试~~ → 已由 Task 06 完成（3 → 6 个测试，v1 升级/幂等/记账）
 4. 应用排除列表缺失（依赖平台来源进程能力，需先评估） → Task 04
 5. ~~手动翻译入口缺失~~ → 已由 Task 09 完成（托盘菜单 + 独立小窗 + `translate_text`；schema v7 来源类型；手动路径缓存回退与剪贴板路径统一）
-6. 全局快捷键：`@tauri-apps/plugin-global-shortcut` 已声明依赖但未接线 → Task 11（需先决策依赖去留）
+6. ~~全局快捷键：`@tauri-apps/plugin-global-shortcut` 已声明依赖但未接线~~ → 首次实现完成（Rust 端 `tauri-plugin-global-shortcut` + `system/hotkeys.rs`，三个动作复用既有入口，设置页可录制/禁用/查看注册状态）；OS 注册与冲突行为待实机验证；JS 包去留待定
 7. ~~缓存禁用/清空的独立入口待核验~~ → 清空入口已由 Task 06 完成（独立命令 + 设置页操作行）；读写开关已补齐（`cache_enabled`，默认开启，关闭只暂停不删除）
 
 ## 约定
