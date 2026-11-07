@@ -73,6 +73,10 @@ pub struct PersistJob {
 
 pub struct PersistenceWriter {
     tx: mpsc::Sender<PersistJob>,
+    /// 诊断计数句柄：入队失败（队列满 / worker 已停）时记账。
+    /// 丢弃本身仍是正确行为（绝不能阻塞翻译结果回传），但静默丢弃会
+    /// 让「历史莫名少了记录」无法排查 —— 计数暴露在诊断快照里（计划 3.3）。
+    runtime: Option<Arc<RuntimeStatus>>,
 }
 
 impl PersistenceWriter {
@@ -114,6 +118,8 @@ impl PersistenceWriter {
         capacity: usize,
     ) -> Self {
         let (tx, mut rx) = mpsc::channel::<PersistJob>(capacity);
+        // writer 侧留一份引用用于入队失败记账（worker 侧的会被 async move 拿走）
+        let runtime_for_writer = runtime.clone();
 
         tauri::async_runtime::spawn(async move {
             info!("[persistence] worker 已启动");
@@ -132,7 +138,10 @@ impl PersistenceWriter {
             info!("[persistence] 队列已关闭，worker 退出");
         });
 
-        Self { tx }
+        Self {
+            tx,
+            runtime: Some(runtime_for_writer),
+        }
     }
 
     /// 入队。返回 false 表示队列已满或 worker 已停止，本次写入被丢弃。
@@ -143,7 +152,12 @@ impl PersistenceWriter {
     pub fn enqueue(&self, job: PersistJob) -> bool {
         match self.tx.try_send(job) {
             Ok(()) => true,
-            Err(mpsc::error::TrySendError::Full(_)) => false,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                if let Some(rt) = &self.runtime {
+                    rt.record_persistence_dropped();
+                }
+                false
+            }
             Err(mpsc::error::TrySendError::Closed(_)) => false,
         }
     }
@@ -156,7 +170,7 @@ impl PersistenceWriter {
     fn channel_only(capacity: usize) -> Self {
         let (tx, rx) = mpsc::channel(capacity);
         std::mem::forget(rx);
-        Self { tx }
+        Self { tx, runtime: None }
     }
 }
 
@@ -414,6 +428,28 @@ mod tests {
         assert!(
             !writer.enqueue(job("b")),
             "队列满时应返回 false，绝不能把翻译回传路径堵住"
+        );
+    }
+
+    /// 入队失败必须留下诊断计数（计划 3.3：丢弃不能静默到无法排查）。
+    #[test]
+    fn enqueue_failure_records_dropped_count() {
+        let (tx, rx) = mpsc::channel(1);
+        std::mem::forget(rx); // 无人消费，队列保持满
+        let runtime = test_runtime();
+        let writer = PersistenceWriter {
+            tx,
+            runtime: Some(runtime.clone()),
+        };
+
+        assert!(writer.enqueue(job("a")));
+        assert!(!writer.enqueue(job("b")));
+        assert!(!writer.enqueue(job("c")));
+
+        assert_eq!(
+            runtime.diagnostics().persistence_dropped_count,
+            2,
+            "两次入队失败都应计入诊断"
         );
     }
 

@@ -1089,6 +1089,8 @@ function RuntimeStatusSection({
               {diag.translation_failure_count > 0 && `（失败 ${diag.translation_failure_count}）`}
               {diag.fallback_count > 0 && ` · 兜底切换 ${diag.fallback_count} 次`}
               {diag.echo_count > 0 && ` · 回声拦截 ${diag.echo_count} 次`}
+              {diag.clipboard_filtered_count > 0 && ` · 敏感拦截 ${diag.clipboard_filtered_count} 次`}
+              {diag.persistence_dropped_count > 0 && ` · 落盘丢弃 ${diag.persistence_dropped_count} 条`}
               {diag.clipboard_restart_count > 0 && ` · 剪贴板自愈 ${diag.clipboard_restart_count} 次`}
             </p>
           )}

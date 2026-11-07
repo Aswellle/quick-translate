@@ -185,6 +185,14 @@ impl RuntimeStatus {
         }
     }
 
+    /// 记录一次持久化队列丢弃（纯记账，不触发状态广播）。
+    pub fn record_persistence_dropped(&self) {
+        use std::sync::atomic::Ordering;
+        self.counters
+            .persistence_dropped
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     /// 记录一次敏感内容拦截（纯记账，不触发状态广播、不含原文）。
     pub fn record_clipboard_filtered(&self) {
         use std::sync::atomic::Ordering;
@@ -209,6 +217,7 @@ impl RuntimeStatus {
             fallback_count: 0,
             echo_count: 0,
             clipboard_filtered_count: self.counters.clipboard_filtered.load(Ordering::Relaxed),
+            persistence_dropped_count: self.counters.persistence_dropped.load(Ordering::Relaxed),
         }
     }
 

@@ -118,6 +118,8 @@ export interface RuntimeDiagnostics {
   echo_count: number;
   /** 敏感内容过滤拦下自动翻译的次数（原文不记录） */
   clipboard_filtered_count: number;
+  /** 持久化队列满导致历史/缓存写入被丢弃的次数 */
+  persistence_dropped_count: number;
 }
 
 export async function getRuntimeDiagnostics(): Promise<RuntimeDiagnostics> {
