@@ -4,12 +4,23 @@
 - Branch: main
 - Base commit: b64b04e（Merge pull request #80）
 - App version: 0.9.0
-- Current task: Task 09 手动翻译入口（含缓存回退统一，完成）；下一步 Task 10 术语表或缓存开关（待定）
+- Current task: Task 09 手动翻译入口（含缓存回退统一，完成）；缓存读写开关（完成）；下一步 Task 10 术语表或 Task 11 全局快捷键（待定）
 - Working tree: 干净
 - 执行依据: docs/QUICK_TRANSLATE_AI_AGENT_DEVELOPMENT_PLAN.md（2026-11-07 修订）
 - 测试清单: docs/TEST_INVENTORY.md
 
 ## Completed
+
+### 2026-11-08 — 本地缓存读写开关（完成，Task 06 遗留项收尾）
+- 背景：此前只能「清空缓存」，不想在磁盘留存译文副本的用户没有持续生效的选项。
+- Changes:
+  - `TranslationCache` 增加原子开关：关闭后 `get`/`put` 直接返回（不读不写），已有条目保留，重新开启恢复可用；清空缓存不受开关影响。语义定为「暂停」而非「销毁」，避免误点丢数据。
+  - 配置键 `cache_enabled`（默认 true，不改变既有行为）贯通布尔键三条路径 + 命令层 BOOL_KEYS + 副作用分支（切换活体实例）+ 启动初始化（旧库无此键按开启处理）。
+  - 设置页「行为」分组新增开关，说明关闭后不再读写、已有条目保留可单独清空。
+  - +4 Rust 测试（暂停语义与恢复、关闭期间清空、离线回退尊重开关、配置三路径往返）。
+- Tests: cargo test --lib 376 passed（+4）；fmt/clippy PASS；tsc PASS；vitest 70/70；build PASS
+- Commit: 4f4941e / 8bda27b
+- 未做：术语表（Task 10）— 原生 glossary 依赖 Provider 能力抽象（属暂缓的 AI Provider 工作），先评估再实施；全局快捷键（Task 11）— 需先决策 `@tauri-apps/plugin-global-shortcut` 依赖去留（实现快捷键还是移除依赖），见 Blockers。
 
 ### 2026-11-07 — Task 09 统一手动翻译入口（完成）
 - 第一小步（7930da0，schema v7）：`translation_records.source` 列（clipboard/manual），既有行回填 clipboard；translate_text 写 manual、coordinator 写 clipboard；前端类型同步。+2 Rust 测试（v6→v7 升级回填、来源往返契约）。
@@ -136,5 +147,6 @@
   - Required manual test: 显式 opt-in 的真实凭证测试
 
 ## Next task
-- Task 10 术语表（中期项，可启动最小功能：原文术语/目标译法/可选说明，纯本地）或缓存禁用开关（文案待确认）。
-- 阻塞项：Task 08 剩余（供应商目录分类/AI 类目）待要求 19 解禁；缓存开关文案待确认。
+- Task 10 术语表：先做 Provider 原生 glossary 能力评估（计划要求「原生能力优先」，不支持的 Provider 如实标记而非假装生效）；数据层/导入导出可先行。
+- Task 11 全局快捷键：先决策 `@tauri-apps/plugin-global-shortcut` 依赖去留，再按计划要求（默认不冲突、可自定义、冲突提示、注册失败不影响启动、设置页显示状态）实施。
+- 阻塞项：Task 08 剩余（供应商目录分类/AI 类目）待要求 19 解禁。

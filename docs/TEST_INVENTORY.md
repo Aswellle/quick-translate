@@ -18,7 +18,7 @@
 
 CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 3 平台、clippy 与单测 × Windows/macOS、release 构建验证 × 双平台。CI 不依赖真实 Provider 凭证。
 
-> 进展更新：Task 04（+33）、Task 06（+19）、Task 09 来源类型（+2）、Task 09 缓存回退统一（+4）后 Rust 单测现为 **372 passed**；Task 05/07/08/09 后前端为 **70 / 13 文件**（+33）。
+> 进展更新：Task 04（+33）、Task 06（+19）、Task 09 来源类型（+2）、Task 09 缓存回退统一（+4）、缓存读写开关（+4）后 Rust 单测现为 **376 passed**；Task 05/07/08/09 后前端为 **70 / 13 文件**（+33）。
 
 ## Mock 注入能力（现状确认）
 
@@ -52,11 +52,11 @@ CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 
 
 | 模块 | 数量 | 已覆盖 | 缺口 |
 |---|---|---|---|
-| `domain/cache.rs` | **17** | TTL、LRU、键构造、回声过滤、清空缓存仅删缓存条目、离线回退结果组装（provider=cache / truncated 透传 / 回声拒收 / 未命中） | 缓存禁用/启用开关（默认保持开启，属产品决策项，见 agent-progress） |
+| `domain/cache.rs` | **20** | TTL、LRU、键构造、回声过滤、清空缓存仅删缓存条目、离线回退结果组装（provider=cache / truncated 透传 / 回声拒收 / 未命中）、读写开关（暂停不删除 / 关闭期间清空 / 回退尊重开关） | 无待办 |
 | `domain/history.rs` | **19** | query 分页（`rowid` 第二排序键）、LIKE 转义、中文子串检索、toggle_star/delete_by_id/clear_all、FIFO 只删最旧未收藏、参数钳制、starred 过滤、收藏持久性、来源类型（clipboard/manual）往返；万条规模分页/搜索索引与 500ms 预算、万条 FIFO | 无待办 |
 | `system/persistence.rs` | 9 | 有界队列、丢弃策略、单 worker、入队失败诊断计数 | 关闭时 drain 语义已核验：channel 排空后退出（见 agent-progress Task 06），无显式退出等待——设计如此，非缺陷 |
 | `infra/database.rs` | **6** | 损坏抢救、配置行恢复、v1→最新迁移升级保留记录、重复迁移幂等、版本行逐版本记账 | 无待办（任何新 schema 变更前先加迁移测试） |
-| `domain/config.rs` | 13 | 描述符表完备性、批次 all-or-nothing、类型校验 | 无待办 |
+| `domain/config.rs` | **14** | 描述符表完备性、批次 all-or-nothing、类型校验、布尔键三路径往返（含 cache_enabled） | 无待办 |
 | `infra/crypto.rs` | 12 | AES-GCM、掩码、错误处理 | 无待办 |
 
 ### 系统与运行时
@@ -91,7 +91,7 @@ CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 
 4. 应用排除列表缺失（依赖平台来源进程能力，需先评估） → Task 04
 5. ~~手动翻译入口缺失~~ → 已由 Task 09 完成（托盘菜单 + 独立小窗 + `translate_text`；schema v7 来源类型；手动路径缓存回退与剪贴板路径统一）
 6. 全局快捷键：`@tauri-apps/plugin-global-shortcut` 已声明依赖但未接线 → Task 11（需先决策依赖去留）
-7. ~~缓存禁用/清空的独立入口待核验~~ → 清空入口已由 Task 06 完成（独立命令 + 设置页操作行）；禁用开关留作产品决策项（默认保持开启）
+7. ~~缓存禁用/清空的独立入口待核验~~ → 清空入口已由 Task 06 完成（独立命令 + 设置页操作行）；读写开关已补齐（`cache_enabled`，默认开启，关闭只暂停不删除）
 
 ## 约定
 
