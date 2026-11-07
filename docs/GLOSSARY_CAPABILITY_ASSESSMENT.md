@@ -20,7 +20,7 @@
 
 - 创建：`POST /v2/glossaries`，必填 `name`、`source_lang`、`target_lang`、`entries`、`entries_format`（`tsv` 默认，也支持 `csv`）。一个 glossary 绑定一个语言对。
 - 更新：v2 只有创建 / 查询 / 删除，没有编辑接口 → 条目变化时删旧建新。
-- 使用：翻译请求传 `glossary_id`；文本翻译时 `source_lang` 可省略，DeepL 自动检测并应用匹配的词典；文档翻译必须显式 `source_lang`。
+- 使用：翻译请求传 `glossary_id`；v2 文档称文本翻译时 `source_lang` 可省略并自动匹配词典，但另有资料明确指出 **glossary 不支持源语言自动检测**，请求语言对必须与词典精确匹配。两种说法冲突 → 实施按保守语义处理：**显式传 source_lang 才应用 glossary**，自动检测路径不应用；真实行为以 opt-in contract test 为准。
 - 限制：glossary 最大 10 MiB；单条原文/译文与名称最大 1024 UTF-8 字节；单账号最多 1000 个 glossary；泰语不支持。
 - 创建后需检查 `ready` 标志，为 false 时等待后再用。
 - 来源：<https://developers.deepl.com/docs/api-reference/glossaries>
@@ -66,6 +66,7 @@
 4. **不做无差别字符串替换**（计划决策 1）；占位符保护方案只作为后续独立评估项，且必须先有「占位符被服务商改写」的测试。
 5. **术语数据本地保存并纳入备份导出**（计划决策 5）；日志不得包含术语原文。
 6. 大小写敏感与词边界：DeepL glossary 的匹配语义以官方为准（v2 tsv 每行原文/译文），UI 提供选项前需确认其实际生效范围，不能假装支持。
+7. **语言对模型**：DeepL glossary 按（源语言, 目标语言）词典组织，且 glossary 不能用于源语言自动检测。因此本地术语必须按语言对管理，翻译请求必须显式带源语言才能应用；自动检测路径如实不应用（不能二次请求去探测语言，成本与延迟都不可接受）。
 
 ## 未决/待复核清单
 

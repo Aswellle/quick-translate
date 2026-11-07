@@ -11,6 +11,19 @@
 
 ## Completed
 
+### 2026-11-08 — Task 10 术语表：本地数据层（schema v8）
+- Changes:
+  - schema v8：`glossary_entries`（source_term/target_term/note/case_sensitive + 时间戳），原文 NOCASE 唯一索引；迁移测试更新到 v8。
+  - `domain/glossary.rs`：仓库 CRUD（重复大小写不敏感拒绝、更新不撞其他条目、存储不可用时列表为空/写入报错）、全量替换的批量原子性、CSV/JSON 导入导出（引号/逗号/换行、可选表头、批内重复校验）、术语表指纹（排序后 SHA-256，说明字段不参与，禁用/空表为空串）。
+  - 配置键 `glossary_enabled`（默认开启，无条目时等价空操作）；AppState 注入仓库；9 个 IPC 命令（CRUD/清空/导入导出）。**尚未接入任何 Provider，尚未做前端 UI。**
+- Tests: cargo test --lib 393 passed（+13）；fmt/clippy PASS
+- Commit: c6db99d
+- **新发现的硬约束（影响下一步设计）**：DeepL 官方文档明确「glossary 不能用于源语言自动检测」。当前剪贴板/手动翻译都是自动检测源语言，因此要真正应用 DeepL 术语表，必须：
+  1) 翻译请求带**显式源语言**（手动窗口加源语言选择；剪贴板路径需要用户指定源语言或保持不应用）；
+  2) 术语条目按**语言对**组织（DeepL glossary 是一对源/目标语言一个词典，v3 多语言 glossary 仍要求请求语言对精确匹配）。
+  这意味着刚建的 v8 表（无语言列）不足以支撑原生应用，下一步需要扩展 schema（增加 source_lang/target_lang）并调整仓库/导入导出/UI —— 因 v8 尚未发布，可直接在 v8 内扩展（不必追加 v9），但需用户确认「按语言对管理术语」这一产品模型。
+- 未做：DeepL glossary 生命周期同步（创建/删除/失效）、缓存键接入指纹、前端管理 UI、其余 Provider 的「引用控制台术语库」入口。
+
 ### 2026-11-08 — Task 10 术语表：Provider 原生能力评估（完成评估，未动代码）
 - 新增 `docs/GLOSSARY_CAPABILITY_ASSESSMENT.md`：按计划要求先核验原生 glossary 能力，结论（文档级，未用真实凭证）：
   - **DeepL**：支持，且是唯一可由应用端完整管理术语（创建/删除 glossary、翻译带 glossary_id）的现有 Provider；v2 无编辑接口，改条目 = 删旧建新；文本翻译可自动检测语言并应用匹配词典。
@@ -160,6 +173,10 @@
 - Task: 无
 
 ## Blockers / decisions needed
+- **术语表语言对模型（Task 10 下一步，需要用户决策）**：DeepL glossary 按（源语言, 目标语言）词典组织且不支持源语言自动检测。当前 v8 表只有原文/译法，无语言列。候选：
+  - A. 按语言对管理术语（每条含 source_lang/target_lang，UI 先选语言对）；手动翻译窗口加「源语言」选择；剪贴板自动检测路径不应用术语表（DeepL 限制）。最贴合 Provider 语义，推荐。
+  - B. 全局术语表 + 全局「源语言」设置（默认自动检测）；只有指定源语言时才应用。模型简单，但剪贴板路径要用户放弃自动检测才生效。
+  - C. 暂缓 Provider 应用，先做管理 UI/导入导出，等 Provider 能力抽象（Task 13）后再接。
 - `@tauri-apps/plugin-global-shortcut`（JS 包）已无使用方（快捷键走 Rust 端）：保留 / 移除待定，移除需同步 package-lock。不阻塞其他任务。
 - 应用排除列表（Task 04）：当前剪贴板 API 在两个平台均无可靠的来源进程标识，需按计划先实现敏感过滤 + 暂停，应用排除标为平台能力待评估。
 
@@ -175,6 +192,6 @@
   - Required manual test: 显式 opt-in 的真实凭证测试
 
 ## Next task
-- Task 10 实施（按评估结论）：本地术语表数据层（schema v8 + CRUD + 校验 + 导入导出）→ DeepL glossary 同步与翻译接入（含缓存键指纹）→ 其余 Provider 的「引用控制台术语库/不支持」如实展示。
+- 等待术语表语言对模型决策（见 Blockers）。决策后：扩展 schema（v8 内加 source_lang/target_lang 或续 v9）→ DeepL glossary 同步（创建/失效/ready 轮询）→ 缓存键接入指纹 → 前端管理 UI（CRUD/导入导出/启用开关）。
 - 全局快捷键实机验证（Windows 优先：注册/冲突/三个动作）；macOS 未验证项继续保留。
 - 阻塞项：Task 08 剩余（供应商目录分类/AI 类目）待要求 19 解禁；腾讯/百度/有道术语表参数细节待复核。
