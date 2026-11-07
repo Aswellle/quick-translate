@@ -18,7 +18,7 @@
 
 CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 3 平台、clippy 与单测 × Windows/macOS、release 构建验证 × 双平台。CI 不依赖真实 Provider 凭证。
 
-> 进展更新：Task 04（+33）、Task 06（+19）、Task 09 来源类型（+2）、Task 09 缓存回退统一（+4）、缓存读写开关（+4）、全局快捷键（+4）、术语表数据层（+13）后 Rust 单测现为 **393 passed**；Task 05/07/08/09 与快捷键 UI 后前端为 **82 / 14 文件**（+45）。
+> 进展更新：Task 04（+33）、Task 06（+19）、Task 09 来源类型（+2）、Task 09 缓存回退统一（+4）、缓存读写开关（+4）、全局快捷键（+4）、术语表数据层（+14，含语言对隔离）后 Rust 单测现为 **394 passed**；Task 05/07/08/09 与快捷键 UI 后前端为 **82 / 14 文件**（+45）。
 
 ## Mock 注入能力（现状确认）
 
@@ -53,7 +53,7 @@ CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 
 | 模块 | 数量 | 已覆盖 | 缺口 |
 |---|---|---|---|
 | `domain/cache.rs` | **20** | TTL、LRU、键构造、回声过滤、清空缓存仅删缓存条目、离线回退结果组装（provider=cache / truncated 透传 / 回声拒收 / 未命中）、读写开关（暂停不删除 / 关闭期间清空 / 回退尊重开关） | 无待办 |
-| `domain/glossary.rs` | **12** | CRUD、大小写不敏感重复拒绝、批内重复与批量原子性、CSV/JSON 导入导出（引号/逗号/换行/可选表头）、指纹（顺序无关、说明不参与、禁用为空） | Provider 应用（DeepL glossary 同步）与缓存键接入未实现 |
+| `domain/glossary.rs` | **13** | 按语言对的 CRUD、语言对隔离、大小写不敏感重复拒绝、批内重复与批量原子性、CSV/JSON 导入导出（引号/逗号/换行/可选表头/其他语言对拒绝）、指纹（顺序无关、说明不参与、禁用为空） | Provider 应用（DeepL glossary 同步）与缓存键接入未实现 |
 | `domain/history.rs` | **19** | query 分页（`rowid` 第二排序键）、LIKE 转义、中文子串检索、toggle_star/delete_by_id/clear_all、FIFO 只删最旧未收藏、参数钳制、starred 过滤、收藏持久性、来源类型（clipboard/manual）往返；万条规模分页/搜索索引与 500ms 预算、万条 FIFO | 无待办 |
 | `system/persistence.rs` | 9 | 有界队列、丢弃策略、单 worker、入队失败诊断计数 | 关闭时 drain 语义已核验：channel 排空后退出（见 agent-progress Task 06），无显式退出等待——设计如此，非缺陷 |
 | `infra/database.rs` | **6** | 损坏抢救、配置行恢复、v1→最新迁移升级保留记录、重复迁移幂等、版本行逐版本记账（当前 v8） | 无待办（任何新 schema 变更前先加迁移测试） |

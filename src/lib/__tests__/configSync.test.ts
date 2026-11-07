@@ -33,6 +33,7 @@ const baseConfig = (): AppConfig => ({
   hotkey_translate_clipboard: "CmdOrControl+Alt+T",
   hotkey_open_manual: "CmdOrControl+Alt+M",
   hotkey_toggle_monitor: "CmdOrControl+Alt+P",
+  glossary_enabled: true,
 });
 
 describe("mergeExternalConfig", () => {

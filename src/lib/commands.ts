@@ -76,6 +76,8 @@ export interface AppConfig {
   hotkey_translate_clipboard: string;
   hotkey_open_manual: string;
   hotkey_toggle_monitor: string;
+  /** 术语表总开关（按语言对管理；只对支持原生 glossary 的 Provider 生效） */
+  glossary_enabled: boolean;
 }
 
 /** 单个全局快捷键的注册状态（Rust `system::hotkeys::HotkeyStatus`） */
