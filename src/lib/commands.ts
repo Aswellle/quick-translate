@@ -72,6 +72,22 @@ export interface AppConfig {
   export_dir: string;
   /** 本地翻译缓存开关（默认开启；关闭只暂停读写，已有条目保留） */
   cache_enabled: boolean;
+  /** 全局快捷键加速键（空串 = 禁用该动作） */
+  hotkey_translate_clipboard: string;
+  hotkey_open_manual: string;
+  hotkey_toggle_monitor: string;
+}
+
+/** 单个全局快捷键的注册状态（Rust `system::hotkeys::HotkeyStatus`） */
+export interface HotkeyStatus {
+  action: string;
+  label: string;
+  /** 配置里保存的值（空串 = 已禁用） */
+  configured: string;
+  /** 当前真正注册成功的值；注册失败时保留旧值 */
+  active: string | null;
+  /** 最近一次注册失败的原因（如被其他应用占用） */
+  error: string | null;
 }
 
 export interface HistoryQuery {
@@ -356,6 +372,13 @@ export async function getAutostart(): Promise<boolean> {
 /** 当前应用版本号（tauri.conf.json 的 version） */
 export async function getAppVersion(): Promise<string> {
   return invoke("get_app_version");
+}
+
+// ---- 全局快捷键 ----
+
+/** 各动作的快捷键注册状态（配置值 / 实际生效值 / 失败原因） */
+export async function getHotkeyStatus(): Promise<HotkeyStatus[]> {
+  return invoke("get_hotkey_status");
 }
 
 // ---- 系统浏览器打开链接 ----

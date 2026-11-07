@@ -23,9 +23,11 @@ import {
   getRuntimeStatus,
   getRuntimeDiagnostics,
   onRuntimeStatusChanged,
+  getHotkeyStatus,
   type AppConfig,
   type StatsResult,
   type ProviderStatus,
+  type HotkeyStatus,
   type RuntimeStatusSnapshot,
   type RuntimeDiagnostics,
 } from "@/lib/commands";
@@ -35,6 +37,12 @@ import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
 import { toast } from "@/components/ToastManager";
 import { SUPPORTED_LANGUAGES, PROVIDERS, ERROR_MESSAGES, EVENTS } from "@/lib/constants";
 import { CREDENTIAL_KEYS, mergeExternalConfig, mayRollBackToPrevious } from "@/lib/configSync";
+import {
+  HOTKEY_CONFIG_KEYS,
+  acceleratorFromKeyEvent,
+  formatAccelerator,
+  isMacPlatform,
+} from "@/lib/hotkeys";
 import { providerStateLabel, STATE_TONE_CLASS } from "@/lib/providerState";
 import { useConfigStore } from "@/stores/configStore";
 import { TrendChart, ProviderChart } from "./StatsDashboard";
@@ -72,6 +80,21 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
   // 诊断计数不主动广播，随状态变化时一并刷新。
   const [runtimeSnapshot, setRuntimeSnapshot] = useState<RuntimeStatusSnapshot | null>(null);
   const [runtimeDiag, setRuntimeDiag] = useState<RuntimeDiagnostics | null>(null);
+  // 全局快捷键注册状态（计划 Task 11）：配置值、实际生效值、失败原因。
+  // 只在打开面板/改动快捷键后刷新 —— 注册状态不主动广播。
+  const [hotkeyStatus, setHotkeyStatus] = useState<HotkeyStatus[]>([]);
+
+  const refreshHotkeyStatus = useCallback(() => {
+    getHotkeyStatus()
+      .then(setHotkeyStatus)
+      .catch(() => {
+        /* 状态拉取失败不影响其余设置 */
+      });
+  }, []);
+
+  useEffect(() => {
+    refreshHotkeyStatus();
+  }, [refreshHotkeyStatus]);
 
   useEffect(() => {
     let cancelled = false;
@@ -209,6 +232,9 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
     reduce_transparency: "减少透明效果",
     export_dir: "导出保存位置",
     cache_enabled: "本地缓存",
+    hotkey_translate_clipboard: "翻译剪贴板快捷键",
+    hotkey_open_manual: "打开手动翻译快捷键",
+    hotkey_toggle_monitor: "暂停/恢复监控快捷键",
   };
 
   /** 凭证字段在加载时已被清空；这里还原哪些键属于凭证（即时生效模型下
@@ -316,6 +342,16 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []
+  );
+
+  /** 快捷键改动：走同一条即时生效管线；无论成败都刷新注册状态
+   *  （失败时状态里带着真实冲突原因，旧快捷键仍然可用）。 */
+  const applyHotkey = useCallback(
+    async (key: keyof AppConfig, accelerator: string) => {
+      await applyConfig(key, accelerator, "toast");
+      refreshHotkeyStatus();
+    },
+    [applyConfig, refreshHotkeyStatus]
   );
 
   // config-changed：托盘切翻译源/切语言、开关剪贴板监控是绕过本窗口的
@@ -435,7 +471,20 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
       {/* ── 内容区（Tab 切换 150ms 淡入，消除硬切感）── */}
       <div key={activeTab} className="flex-1 overflow-y-auto px-6 py-5 animate-fade-in">
         {activeTab === "general" && (
-          <GeneralTab draft={draft} onChange={updateDraft} applyConfig={(key, value, feedback) => void applyConfig(key, value, feedback)} onClipboardToggle={handleClipboardToggle} stats={stats} statsLoading={statsLoading} runtimeSnapshot={runtimeSnapshot} runtimeDiag={runtimeDiag} providerStatus={providerStatus} onNavigate={setActiveTab} />
+          <GeneralTab
+            draft={draft}
+            onChange={updateDraft}
+            applyConfig={(key, value, feedback) => void applyConfig(key, value, feedback)}
+            onClipboardToggle={handleClipboardToggle}
+            stats={stats}
+            statsLoading={statsLoading}
+            runtimeSnapshot={runtimeSnapshot}
+            runtimeDiag={runtimeDiag}
+            providerStatus={providerStatus}
+            hotkeyStatus={hotkeyStatus}
+            onApplyHotkey={applyHotkey}
+            onNavigate={setActiveTab}
+          />
         )}
         {activeTab === "provider" && (
           <ProviderTab
@@ -503,6 +552,8 @@ function GeneralTab({
   runtimeSnapshot,
   runtimeDiag,
   providerStatus,
+  hotkeyStatus,
+  onApplyHotkey,
   onNavigate,
 }: {
   draft: AppConfig;
@@ -519,6 +570,8 @@ function GeneralTab({
   runtimeSnapshot: RuntimeStatusSnapshot | null;
   runtimeDiag: RuntimeDiagnostics | null;
   providerStatus: Record<string, ProviderStatus>;
+  hotkeyStatus: HotkeyStatus[];
+  onApplyHotkey: (key: keyof AppConfig, accelerator: string) => Promise<void>;
   onNavigate: (tab: TabId) => void;
 }) {
   // ── 清空翻译缓存（历史与缓存独立管理，计划 3.3）──────────────────────
@@ -633,6 +686,21 @@ function GeneralTab({
           onApply={(v) => void applyConfig("cache_enabled", v, "inline")}
         />
         <ClearCacheRow onClear={() => setConfirmClearCache(true)} busy={clearingCache} />
+      </SettingsSection>
+
+      {/* 全局快捷键（计划 Task 11）：注册失败只影响该动作，应用照常运行；
+          状态如实显示配置值、实际生效值与冲突原因 */}
+      <SettingsSection label="快捷键">
+        <p className="text-[11px] leading-relaxed text-[var(--text-tertiary)] px-1 -mt-1 pb-1">
+          在任意应用中都可触发。点击「修改」后按下组合键；Esc 取消，Backspace 清除并禁用该动作。
+        </p>
+        {hotkeyStatus.length === 0 ? (
+          <p className="text-[12px] text-[var(--text-tertiary)] px-1 py-2">正在读取注册状态…</p>
+        ) : (
+          hotkeyStatus.map((status) => (
+            <HotkeyRow key={status.action} status={status} onApply={onApplyHotkey} />
+          ))
+        )}
       </SettingsSection>
 
       {/* 清空缓存确认（计划 3.3：用户数据清理必须二次确认并说明影响范围） */}
@@ -1570,6 +1638,104 @@ function ProviderCard({
 }
 
 // ──────────── 通用子组件 ────────────
+
+/**
+ * 一行全局快捷键：展示配置值、实际生效值与注册错误；点「修改」进入录制。
+ *
+ * 录制用 window 的捕获阶段监听而不是按钮 onKeyDown：macOS 的 WKWebView
+ * 点击按钮不保证给焦点，依赖焦点会时灵时不灵。录制期间拦下所有按键
+ * （preventDefault + stopPropagation），不触发页面内其它快捷键。
+ */
+function HotkeyRow({
+  status,
+  onApply,
+}: {
+  status: HotkeyStatus;
+  onApply: (key: keyof AppConfig, accelerator: string) => Promise<void>;
+}) {
+  const [recording, setRecording] = useState(false);
+  const [hint, setHint] = useState<string | null>(null);
+  const isMac = useMemo(() => isMacPlatform(), []);
+  const configKey = HOTKEY_CONFIG_KEYS[status.action];
+
+  useEffect(() => {
+    if (!recording || !configKey) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === "Escape") {
+        setRecording(false);
+        setHint(null);
+        return;
+      }
+      const noModifier =
+        !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
+      if ((event.key === "Backspace" || event.key === "Delete") && noModifier) {
+        setRecording(false);
+        setHint(null);
+        void onApply(configKey, "");
+        return;
+      }
+      const accelerator = acceleratorFromKeyEvent(event);
+      if (!accelerator) {
+        setHint("需要 Ctrl/⌘、Alt 等修饰键与一个普通键组合");
+        return;
+      }
+      setRecording(false);
+      setHint(null);
+      void onApply(configKey, accelerator);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [recording, configKey, onApply]);
+
+  if (!configKey) return null;
+
+  const display = status.configured
+    ? formatAccelerator(status.configured, isMac)
+    : "未设置";
+  const stateText = status.error
+    ? `注册失败：${status.error}`
+    : status.configured === ""
+      ? "已禁用"
+      : status.active === status.configured
+        ? "已注册"
+        : status.active
+          ? `当前仍生效：${formatAccelerator(status.active, isMac)}（新值未生效）`
+          : "未注册（可能已被其他应用占用）";
+
+  return (
+    <div className="flex items-start justify-between gap-3 px-3 py-2.5">
+      <div className="min-w-0">
+        <div className="text-[13px] text-[var(--text-primary)]">{status.label}</div>
+        <div
+          className={[
+            "text-[11px] mt-0.5 leading-relaxed",
+            status.error ? "text-red-500" : "text-[var(--text-tertiary)]",
+          ].join(" ")}
+        >
+          {recording ? "请按下组合键…（Esc 取消，Backspace 清除）" : stateText}
+        </div>
+        {hint && <div className="text-[11px] mt-0.5 text-orange-500">{hint}</div>}
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        <kbd className="px-2 py-1 rounded-md bg-[var(--surface-secondary)] border border-[var(--border-primary)] text-[11px] font-mono text-[var(--text-secondary)]">
+          {display}
+        </kbd>
+        <button
+          type="button"
+          onClick={() => {
+            setHint(null);
+            setRecording((v) => !v);
+          }}
+          className="text-[12px] font-medium px-3 py-1 rounded-lg border border-[var(--border-primary)] hover:bg-[var(--hover-bg)] transition-colors text-[var(--text-primary)]"
+        >
+          {recording ? "取消" : "修改"}
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function SettingsSection({ label, children }: { label: string; children: React.ReactNode }) {
   return (
