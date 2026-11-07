@@ -1317,7 +1317,7 @@ function ProviderTab({
  * 留空失焦不提交 —— 「留空 = 保持已配置值不变」的语义由后端掩码过滤
  * 与本组件共同保证。
  */
-function CredentialField({
+export function CredentialField({
   field,
   value,
   configured,
@@ -1329,35 +1329,77 @@ function CredentialField({
   onCommit: (v: string) => void;
 }) {
   const [editValue, setEditValue] = useState<string | null>(null);
+  // 密钥核对：password 框看不到已粘贴内容，「显示/隐藏」切换解决只能靠
+  // 测试按钮盲验的问题。切换按钮不抢焦点（mousedown preventDefault）——
+  // blur 即提交，焦点被抢走会把半截密钥当成完整凭证提交出去。
+  const [reveal, setReveal] = useState(false);
+  const isSecret = field.type === "password";
 
   return (
     <div>
       <label className="text-[12px] font-medium text-[var(--text-secondary)] mb-1 block">
         {field.label}
       </label>
-      <input
-        type={field.type}
-        value={editValue ?? ""}
-        onChange={(e) => setEditValue(e.target.value)}
-        onBlur={() => {
-          if (editValue !== null) {
-            const trimmed = editValue.trim();
-            if (trimmed) onCommit(trimmed);
-            setEditValue(null);
+      <div className="relative">
+        <input
+          type={isSecret && !reveal ? "password" : "text"}
+          value={editValue ?? ""}
+          onChange={(e) => setEditValue(e.target.value)}
+          onBlur={() => {
+            if (editValue !== null) {
+              const trimmed = editValue.trim();
+              if (trimmed) onCommit(trimmed);
+              setEditValue(null);
+            }
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          }}
+          placeholder={
+            configured
+              ? "已配置（留空保持不变，输入新值覆盖）"
+              : field.placeholder
           }
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-        }}
-        placeholder={
-          configured
-            ? "已配置（留空保持不变，输入新值覆盖）"
-            : field.placeholder
-        }
-        className="input-field w-full font-mono text-xs"
-        autoComplete="off"
-        spellCheck={false}
-      />
+          className={[
+            "input-field w-full font-mono text-xs",
+            isSecret ? "pr-9" : "",
+          ].join(" ")}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        {isSecret && (
+          <button
+            type="button"
+            aria-label={reveal ? "隐藏密钥" : "显示密钥"}
+            aria-pressed={reveal}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => setReveal((v) => !v)}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors"
+          >
+            {reveal ? (
+              <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path
+                  d="M2.5 2.5l11 11M6.6 6.7a2 2 0 002.8 2.8M4.4 4.5C2.9 5.7 1.5 8 1.5 8s2.5 4.5 6.5 4.5c1 0 1.9-.3 2.7-.7m1.6-1.2C13.7 9.6 14.5 8 14.5 8S12 3.5 8 3.5c-.7 0-1.4.1-2 .3"
+                  stroke="currentColor"
+                  strokeWidth="1.3"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            ) : (
+              <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path
+                  d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"
+                  stroke="currentColor"
+                  strokeWidth="1.3"
+                  strokeLinejoin="round"
+                />
+                <circle cx="8" cy="8" r="2" stroke="currentColor" strokeWidth="1.3" />
+              </svg>
+            )}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
