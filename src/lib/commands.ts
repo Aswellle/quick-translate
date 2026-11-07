@@ -177,6 +177,17 @@ export async function setConfigBatch(
   return invoke("set_config_batch", { updates });
 }
 
+/**
+ * 手动触发翻译（计划 Task 09）：与剪贴板路径共用同一翻译引擎、
+ * 同一落盘管道；历史记录来源标为 manual。结果直接返回，不经事件。
+ */
+export async function translateText(
+  text: string,
+  targetLang?: string
+): Promise<TranslationResult> {
+  return invoke("translate_text", { text, targetLang });
+}
+
 // ---- 历史 Commands ----
 
 export async function queryHistory(

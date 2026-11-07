@@ -10,8 +10,9 @@ import { PopupWindow } from "@/windows/popup/PopupWindow";
 import { SettingsWindow } from "@/windows/settings/SettingsWindow";
 import { HistoryWindow } from "@/windows/history/HistoryWindow";
 import { OnboardingWindow } from "@/windows/onboarding/OnboardingWindow";
+import { ManualTranslateWindow } from "@/windows/manual/ManualTranslateWindow";
 
-type WindowType = "popup" | "settings" | "history" | "onboarding";
+type WindowType = "popup" | "settings" | "history" | "onboarding" | "manual";
 
 /** settings 窗口可携带子路径：#settings/provider 直达翻译源配置 Tab */
 function getWindowType(): WindowType {
@@ -19,6 +20,7 @@ function getWindowType(): WindowType {
   if (hash.startsWith("settings")) return "settings";
   if (hash === "history")    return "history";
   if (hash === "onboarding") return "onboarding";
+  if (hash === "manual")     return "manual";
   return "popup";
 }
 
@@ -90,6 +92,7 @@ export default function App() {
       {windowType === "settings"    && <SettingsWindow key={settingsInitialTab} initialTab={settingsInitialTab} />}
       {windowType === "history"     && <HistoryWindow />}
       {windowType === "onboarding"  && <OnboardingWindow />}
+      {windowType === "manual"      && <ManualTranslateWindow />}
     </div>
   );
 }
