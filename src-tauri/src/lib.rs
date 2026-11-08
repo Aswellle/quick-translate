@@ -360,6 +360,7 @@ pub fn run() {
             commands::config::set_config_batch,
             commands::history::query_history,
             commands::history::count_history,
+            commands::history::get_history_filter_options,
             commands::history::clear_history,
             commands::history::clear_translation_cache,
             commands::history::delete_history_record,

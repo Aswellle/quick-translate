@@ -18,6 +18,7 @@ vi.mock("@/lib/commands", () => ({
   exportHistoryToFile: vi.fn(async () => null),
   deleteHistoryRecord: vi.fn(async () => {}),
   toggleStarRecord: vi.fn(async () => true),
+  getHistoryFilterOptions: vi.fn(async () => ({ language_pairs: [], providers: [] })),
 }));
 
 // 事件层 mock：捕获各事件的监听器，测试直接驱动它们

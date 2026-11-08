@@ -105,6 +105,12 @@ export interface HistoryQuery {
   limit: number;
   offset: number;
   starred_only?: boolean;
+  /** 按来源类型过滤："clipboard" | "manual"；缺省 = 不过滤 */
+  source_type?: "clipboard" | "manual";
+  /** 按「源语言→目标语言」对过滤，格式 "en→zh"；缺省 = 不过滤 */
+  language_pair?: string;
+  /** 按翻译源过滤（provider id）；缺省 = 不过滤 */
+  provider?: string;
 }
 
 export interface AppError {
@@ -231,9 +237,28 @@ export async function queryHistory(
 
 export async function countHistory(
   search?: string,
-  starredOnly?: boolean
+  starredOnly?: boolean,
+  sourceType?: "clipboard" | "manual",
+  languagePair?: string,
+  provider?: string
 ): Promise<number> {
-  return invoke("count_history", { search, starredOnly });
+  return invoke("count_history", {
+    search,
+    starredOnly,
+    sourceType,
+    languagePair,
+    provider,
+  });
+}
+
+/** 历史筛选下拉的可选项（库内实际出现过的语言对与翻译源） */
+export interface HistoryFilterOptions {
+  language_pairs: string[];
+  providers: string[];
+}
+
+export async function getHistoryFilterOptions(): Promise<HistoryFilterOptions> {
+  return invoke("get_history_filter_options");
 }
 
 export async function clearHistory(): Promise<void> {

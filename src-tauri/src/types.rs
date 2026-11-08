@@ -92,6 +92,14 @@ pub struct HistoryQuery {
     pub limit: i64,                 // 默认 50
     pub offset: i64,                // 分页偏移
     pub starred_only: Option<bool>, // 仅显示收藏
+    /// 按来源类型过滤（"clipboard" | "manual"）。None/缺省 = 不过滤。
+    /// 未知值按不过滤处理（向前兼容：旧前端升级场景不存在，但直接
+    /// 调 IPC 的脏值不应把列表打空）。
+    pub source_type: Option<String>,
+    /// 按「源语言→目标语言」对过滤，格式 "en→zh"。None = 不过滤。
+    pub language_pair: Option<String>,
+    /// 按翻译源过滤（provider id）。None = 不过滤。
+    pub provider: Option<String>,
 }
 
 impl Default for HistoryQuery {
@@ -101,8 +109,20 @@ impl Default for HistoryQuery {
             limit: 50,
             offset: 0,
             starred_only: None,
+            source_type: None,
+            language_pair: None,
+            provider: None,
         }
     }
+}
+
+/// 历史筛选下拉的可选项（库内实际出现过的值，前端不硬编码清单）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryFilterOptions {
+    /// 去重后的 "源语言→目标语言"，按字典序
+    pub language_pairs: Vec<String>,
+    /// 去重后的 provider id，按字典序
+    pub providers: Vec<String>,
 }
 
 /// 使用统计结果

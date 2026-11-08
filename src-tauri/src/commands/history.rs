@@ -6,7 +6,7 @@ use tauri::{Emitter, State};
 
 use crate::error::AppError;
 use crate::state::AppState;
-use crate::types::{HistoryQuery, StatsResult, TranslationRecord};
+use crate::types::{HistoryFilterOptions, HistoryQuery, StatsResult, TranslationRecord};
 
 /// 历史数据发生变化后通知前端窗口刷新。
 ///
@@ -26,16 +26,37 @@ pub async fn query_history(
     state.history.query(&params).await
 }
 
-/// 获取历史记录总数（用于前端分页计算）
+/// 筛选下拉的可选项：库内实际出现过的语言对与翻译源。
+///
+/// 选项从数据本身派生（而不是硬编码语言清单）——用户只翻过 en→zh 和
+/// ja→zh 时，列表里就只有这两项，不会出现一堆永远查不出结果的死选项。
+#[tauri::command]
+pub async fn get_history_filter_options(
+    state: State<'_, AppState>,
+) -> Result<HistoryFilterOptions, AppError> {
+    state.history.filter_options().await
+}
+
+/// 获取历史记录总数（用于前端分页计算；过滤条件与 query_history 同构，
+/// 否则总数与列表对不上）
 #[tauri::command]
 pub async fn count_history(
     state: State<'_, AppState>,
     search: Option<String>,
     starred_only: Option<bool>,
+    source_type: Option<String>,
+    language_pair: Option<String>,
+    provider: Option<String>,
 ) -> Result<i64, AppError> {
     state
         .history
-        .count(search.as_deref(), starred_only.unwrap_or(false))
+        .count(
+            search.as_deref(),
+            starred_only.unwrap_or(false),
+            source_type.as_deref(),
+            language_pair.as_deref(),
+            provider.as_deref(),
+        )
         .await
 }
 

@@ -8,8 +8,10 @@ import {
   clearHistory,
   exportHistory,
   exportHistoryToFile,
+  getHistoryFilterOptions,
   getConfig,
   type AppError,
+  type HistoryFilterOptions,
 } from "@/lib/commands";
 import { EVENTS } from "@/lib/constants";
 import { toast } from "@/components/ToastManager";
@@ -19,6 +21,7 @@ import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
 import { formatAsMarkdown, formatAsHtml } from "@/lib/export";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SearchBar } from "./SearchBar";
+import { FilterBar, type HistoryFilters } from "./FilterBar";
 import { HistoryList } from "./HistoryList";
 import { ExportDialog } from "./ExportDialog";
 
@@ -31,11 +34,17 @@ export function HistoryWindow() {
     page,
     pageSize,
     starredOnly,
+    sourceFilter,
+    languagePairFilter,
+    providerFilter,
     setRecords,
     setLoading,
     setSearchQuery,
     setPage,
     setStarredOnly,
+    setSourceFilter,
+    setLanguagePairFilter,
+    setProviderFilter,
     clearAll,
   } = useHistoryStore();
 
@@ -48,9 +57,18 @@ export function HistoryWindow() {
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   // export_dir 配置快照：打开对话框时拉一次，供去向说明展示
   const [exportDestination, setExportDestination] = useState<string>("");
+  // 筛选下拉的可选项：窗口打开时拉一次（库内实际出现过的语言对/翻译源）
+  const [filterOptions, setFilterOptions] = useState<HistoryFilterOptions | null>(null);
 
   const loadHistory = useCallback(
-    async (query: string, pageNum: number, onlyStarred: boolean) => {
+    async (
+      query: string,
+      pageNum: number,
+      onlyStarred: boolean,
+      source: "clipboard" | "manual" | null,
+      languagePair: string | null,
+      provider: string | null
+    ) => {
       // 请求序号门：并发加载（防抖窗口内的连续搜索、收藏切换）乱序返回时，
       // 只让最新一次的结果生效
       const seq = ++loadSeqRef.current;
@@ -63,8 +81,11 @@ export function HistoryWindow() {
             limit: pageSize,
             offset: pageNum * pageSize,
             starred_only: onlyStarred || undefined,
+            source_type: source || undefined,
+            language_pair: languagePair || undefined,
+            provider: provider || undefined,
           }),
-          countHistory(searchVal, onlyStarred || undefined),
+          countHistory(searchVal, onlyStarred || undefined, source || undefined, languagePair || undefined, provider || undefined),
         ]);
         if (seq !== loadSeqRef.current) return;
         setRecords(recs, count);
@@ -81,8 +102,8 @@ export function HistoryWindow() {
   );
 
   useEffect(() => {
-    loadHistory(searchQuery, page, starredOnly);
-  }, [loadHistory, searchQuery, page, starredOnly]);
+    loadHistory(searchQuery, page, starredOnly, sourceFilter, languagePairFilter, providerFilter);
+  }, [loadHistory, searchQuery, page, starredOnly, sourceFilter, languagePairFilter, providerFilter]);
 
   // 落盘 worker 每写成功一条历史就广播 history-changed：本窗口 hide 而非
   // 销毁，组件树永不重挂载，没有这条事件列表会一直停留在打开时的旧快照
@@ -92,11 +113,31 @@ export function HistoryWindow() {
   // 避免看不见的 UI 每条翻译都付一次全量查询
   const onHistoryChanged = useVisibleRefresh(
     useCallback(() => {
-      const { searchQuery, page, starredOnly } = useHistoryStore.getState();
-      loadHistory(searchQuery, page, starredOnly);
+      const { searchQuery, page, starredOnly, sourceFilter, languagePairFilter, providerFilter } =
+        useHistoryStore.getState();
+      loadHistory(searchQuery, page, starredOnly, sourceFilter, languagePairFilter, providerFilter);
     }, [loadHistory])
   );
   useTauriEvent(EVENTS.HISTORY_CHANGED, onHistoryChanged);
+
+  // 筛选可选项：窗口打开时拉一次。失败静默降级为空选项（下拉只剩
+  // 「全部」），不影响列表本身
+  useEffect(() => {
+    getHistoryFilterOptions()
+      .then(setFilterOptions)
+      .catch((err) => console.error("[history] 加载筛选选项失败:", err));
+  }, []);
+
+  // 筛选变化 → store（store 侧统一回第一页），列表加载由上面的
+  // 筛选依赖 effect 承担
+  const handleFiltersChange = useCallback(
+    (next: HistoryFilters) => {
+      setSourceFilter(next.source);
+      setLanguagePairFilter(next.languagePair);
+      setProviderFilter(next.provider);
+    },
+    [setSourceFilter, setLanguagePairFilter, setProviderFilter]
+  );
 
   const handleSearch = useCallback(
     (query: string) => {
@@ -279,7 +320,7 @@ export function HistoryWindow() {
         </div>
       </div>
 
-      {/* ── 搜索栏 + 收藏过滤 ── */}
+      {/* ── 搜索栏 + 收藏过滤 + 筛选行 ── */}
       <div className="px-5 py-3 border-b border-[var(--border-secondary)] flex items-center gap-2.5">
         <div className="flex-1">
           <SearchBar
@@ -313,6 +354,21 @@ export function HistoryWindow() {
         </button>
       </div>
 
+      {/* ── 筛选行：来源 / 语言对 / 翻译源（与服务端过滤正交组合）。
+          来源筛选不依赖选项清单，永远可用；空库时另外两个下拉只有
+          「全部」一项，无害 ── */}
+      <div className="px-5 pb-3 -mt-1 border-b border-[var(--border-secondary)]">
+        <FilterBar
+          filters={{
+            source: sourceFilter,
+            languagePair: languagePairFilter,
+            provider: providerFilter,
+          }}
+          options={filterOptions}
+          onChange={handleFiltersChange}
+        />
+      </div>
+
       {/* ── 历史列表 ──
           骨架屏只在「首屏且尚无任何数据」时出现：切换收藏/搜索/翻页时
           旧列表保持原位、isLoading 只压暗禁用分页按钮，数据到达后原位
@@ -323,7 +379,15 @@ export function HistoryWindow() {
           isLoading ? (
             <LoadingPlaceholder />
           ) : (
-            <EmptyState hasSearch={!!searchQuery} starredOnly={starredOnly} />
+            <EmptyState
+              hasSearch={!!searchQuery}
+              starredOnly={starredOnly}
+              hasFilter={
+                sourceFilter !== null ||
+                languagePairFilter !== null ||
+                providerFilter !== null
+              }
+            />
           )
         ) : (
           <>
@@ -429,10 +493,14 @@ function LoadingPlaceholder() {
 function EmptyState({
   hasSearch,
   starredOnly,
+  hasFilter,
 }: {
   hasSearch: boolean;
   starredOnly: boolean;
+  /** 来源/语言对/翻译源筛选激活中：空态是「筛选无结果」而非「没有记录」 */
+  hasFilter: boolean;
 }) {
+  const filtered = hasSearch || hasFilter;
   return (
     <div className="flex flex-col items-center justify-center h-full gap-3 text-[var(--text-secondary)] animate-fade-in">
       <div className="w-16 h-16 rounded-2xl bg-[var(--surface-tertiary)] dark:bg-[var(--surface-secondary)] flex items-center justify-center shadow-sm">
@@ -449,8 +517,8 @@ function EmptyState({
       </div>
       <div className="text-center space-y-1">
         <p className="text-[13px] font-medium text-[var(--text-secondary)]">
-          {hasSearch
-            ? "没有找到匹配的记录"
+          {filtered
+            ? "没有符合当前条件的记录"
             : starredOnly
             ? "暂无收藏记录"
             : "暂无翻译历史"}
@@ -458,7 +526,12 @@ function EmptyState({
         {hasSearch && (
           <p className="text-[12px] text-[var(--text-secondary)]">试试其他关键词</p>
         )}
-        {!hasSearch && !starredOnly && (
+        {!hasSearch && hasFilter && (
+          <p className="text-[12px] text-[var(--text-secondary)]">
+            试一下放宽筛选条件，或点「清除筛选」
+          </p>
+        )}
+        {!filtered && !starredOnly && (
           <p className="text-[12px] text-[var(--text-secondary)]">
             复制文字即翻译，记录会自动保存在这里
           </p>

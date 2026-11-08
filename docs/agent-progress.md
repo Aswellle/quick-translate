@@ -11,6 +11,25 @@
 
 ## Completed
 
+### 2026-11-08 — 翻译历史筛选增强（计划 5.2「翻译历史增强」）
+- 范围：按来源类型（剪贴板/手动）、语言对（"en→zh" 精确方向）、翻译源筛选历史列表；
+  与搜索/收藏/分页正交组合，全部服务端过滤。未动浮窗与历史渲染结构。
+- Changes:
+  - `HistoryQuery` 新增 source_type / language_pair / provider 三个可选维度；
+    query 与 count 共用同一 WHERE 组装（filters + where_clause），总数与列表
+    永远同构。query_all/query_like 四分支组合收敛为单一 query_records ——
+    每加一个维度分支数会翻倍的问题就此消除。
+  - 未知 source_type 与畸形 language_pair 按不过滤处理：脏值不打空列表。
+  - 新命令 get_history_filter_options：DISTINCT 出库内实际出现过的语言对与
+    翻译源，前端下拉从数据派生选项，不硬编码清单。
+  - 前端 FilterBar：三个下拉 + 一键「清除筛选」；任一维度变化回第一页；
+    选项加载失败静默降级。空态文案区分「筛选无结果」与「没有记录」。
+- Tests:
+  - `cargo test --lib` → 417 passed（+3：筛选 query/count 同构与正交 2、选项派生 1）
+  - `npm test` → 100 passed / 18 文件（+4 FilterBar 契约）
+  - `cargo fmt -- --check` / `clippy --lib -D warnings` / `tsc --noEmit` → PASS
+- 分支：feat/history-filters（5 个提交，推送后走 PR）
+
 ### 2026-11-08 — 评审 WATCHLIST 处置：可落地项修复，其余记录取舍
 - Changes:
   - 手动翻译窗口目标语言初值跟随配置 store（35d1492）：挂载瞬间对 config 的
