@@ -95,21 +95,27 @@ export function ToggleRow({
             {status.text}
           </span>
         )}
-        <Toggle value={value} onChange={apply} busy={busy} />
+        <Toggle value={value} onChange={apply} busy={busy} label={label} />
       </div>
     </SettingsRow>
   );
 }
 
-// macOS 风格的 Toggle 开关
+// macOS 风格的 Toggle 开关。
+//
+// aria-label 是屏幕阅读器的唯一名称来源：纯视觉开关没有可见文本，
+// 不补的话读屏只报「开关，已开启」—— 全页 8 个开关完全无法区分，
+// 关掉敏感过滤这类有安全后果的操作可能被误触。
 function Toggle({
   value,
   onChange,
   busy = false,
+  label,
 }: {
   value: boolean;
   onChange: (v: boolean) => void;
   busy?: boolean;
+  label: string;
 }) {
   return (
     <button
@@ -117,6 +123,7 @@ function Toggle({
       disabled={busy}
       role="switch"
       aria-checked={value}
+      aria-label={label}
       className={[
         "relative w-9 h-5 rounded-full transition-colors duration-200",
         value ? "bg-[var(--system-blue)]" : "bg-[var(--surface-tertiary)]",

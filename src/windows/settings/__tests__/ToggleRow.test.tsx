@@ -16,6 +16,9 @@ describe("ToggleRow 就近生效提示", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    // 清掉上一个测试遗留的容器：同 id 控件跨测试累积会让 jsdom 的
+    // getElementById 快路径作用域查询错返回 null。
+    document.body.innerHTML = "";
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -45,4 +48,16 @@ describe("ToggleRow 就近生效提示", () => {
     });
     expect(container.querySelector('[role="status"]')).toBeNull();
   });
+
+  it("开关带可访问名称（aria-label 与行标签一致）", () => {
+    const onApply = vi.fn();
+    act(() => {
+      root.render(<ToggleRow label="剪贴板监控" value={false} onApply={onApply} />);
+    });
+
+    const toggle = container.querySelector('[role="switch"]') as HTMLButtonElement;
+    expect(toggle.getAttribute("aria-label")).toBe("剪贴板监控");
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+  });
 });
+
