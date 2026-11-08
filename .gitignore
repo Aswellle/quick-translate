@@ -34,6 +34,9 @@ logs/
 # Claude Code
 CLAUDE.md
 
+# Local development docs (untracked by design)
+docs/
+
 # Tauri signing keys (NEVER commit private key)
 ~/.tauri/
 *.key
