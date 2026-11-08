@@ -26,16 +26,26 @@ pub async fn query_history(
     state.history.query(&params).await
 }
 
-/// 获取历史记录总数（用于前端分页计算）
+/// 获取历史记录总数（用于前端分页计算；过滤条件与 query_history 同构，
+/// 否则总数与列表对不上）
 #[tauri::command]
 pub async fn count_history(
     state: State<'_, AppState>,
     search: Option<String>,
     starred_only: Option<bool>,
+    source_type: Option<String>,
+    language_pair: Option<String>,
+    provider: Option<String>,
 ) -> Result<i64, AppError> {
     state
         .history
-        .count(search.as_deref(), starred_only.unwrap_or(false))
+        .count(
+            search.as_deref(),
+            starred_only.unwrap_or(false),
+            source_type.as_deref(),
+            language_pair.as_deref(),
+            provider.as_deref(),
+        )
         .await
 }
 
