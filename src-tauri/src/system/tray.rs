@@ -428,7 +428,12 @@ fn open_settings_at(app: &AppHandle, tab: Option<&str>) {
         );
         return;
     }
-    match WebviewWindowBuilder::new(app, "settings", WebviewUrl::App(url.into()))
+    let builder = match crate::isolated_webview_dir() {
+        Some(dir) => WebviewWindowBuilder::new(app, "settings", WebviewUrl::App(url.into()))
+            .data_directory(dir),
+        None => WebviewWindowBuilder::new(app, "settings", WebviewUrl::App(url.into())),
+    };
+    match builder
         .title("QuickTranslate 设置")
         .additional_browser_args(crate::system::BROWSER_ARGS)
         // 仪表盘（趋势图 + 指标卡）需要纵向空间：480 高的首屏只露得出
@@ -456,7 +461,16 @@ pub(crate) fn open_manual_translate_window(app: &AppHandle) {
         super::window_util::show_and_focus(&window);
         return;
     }
-    match WebviewWindowBuilder::new(app, "manual", WebviewUrl::App("index.html#manual".into()))
+    let builder = match crate::isolated_webview_dir() {
+        Some(dir) => {
+            WebviewWindowBuilder::new(app, "manual", WebviewUrl::App("index.html#manual".into()))
+                .data_directory(dir)
+        }
+        None => {
+            WebviewWindowBuilder::new(app, "manual", WebviewUrl::App("index.html#manual".into()))
+        }
+    };
+    match builder
         .title("QuickTranslate 手动翻译")
         .additional_browser_args(crate::system::BROWSER_ARGS)
         .inner_size(440.0, 480.0)
@@ -480,7 +494,16 @@ fn open_history_window(app: &AppHandle) {
         super::window_util::show_and_focus(&window);
         return;
     }
-    match WebviewWindowBuilder::new(app, "history", WebviewUrl::App("index.html#history".into()))
+    let builder = match crate::isolated_webview_dir() {
+        Some(dir) => {
+            WebviewWindowBuilder::new(app, "history", WebviewUrl::App("index.html#history".into()))
+                .data_directory(dir)
+        }
+        None => {
+            WebviewWindowBuilder::new(app, "history", WebviewUrl::App("index.html#history".into()))
+        }
+    };
+    match builder
         .title("翻译历史")
         .additional_browser_args(crate::system::BROWSER_ARGS)
         .inner_size(720.0, 540.0)
