@@ -36,6 +36,7 @@ const baseConfig = (): AppConfig => ({
   glossary_enabled: true,
   baidu_use_term_base: false,
   youdao_vocab_id: "",
+  tencent_term_repo_ids: "",
 });
 
 describe("mergeExternalConfig", () => {

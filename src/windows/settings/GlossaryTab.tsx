@@ -36,8 +36,8 @@ function providerNote(provider: string): { className: string; text: string } {
       };
     case "tencent":
       return {
-        className: "text-[var(--text-tertiary)]",
-        text: "腾讯云只能引用控制台创建的术语库；本地条目不会自动同步到腾讯云，可在此保存或导出备用。",
+        className: "text-[var(--text-secondary)]",
+        text: "腾讯云支持引用控制台创建的术语库（请求参数 TermRepoIDList）；术语内容在腾讯云控制台维护，本地条目不会自动同步。",
       };
     case "baidu":
       return {
@@ -249,8 +249,22 @@ export function GlossaryTab({
               onApply={(v) => applyConfig("baidu_use_term_base", v, "inline")}
             />
           )}
+          {draft.provider === "tencent" && (
+            <ConsoleIdRow
+              label="控制台术语库 ID"
+              hint="腾讯云控制台创建的术语库 ID，多个用英文逗号分隔（请求参数 TermRepoIDList）；留空不使用。"
+              placeholder="repo-id-1, repo-id-2"
+              ariaLabel="腾讯云术语库 ID"
+              value={draft.tencent_term_repo_ids}
+              onCommit={(v) => applyConfig("tencent_term_repo_ids", v, "toast")}
+            />
+          )}
           {draft.provider === "youdao" && (
-            <VocabIdRow
+            <ConsoleIdRow
+              label="控制台术语表 ID"
+              hint="有道控制台上传术语表后取得的 out_id（请求参数 vocabId）；留空不使用。"
+              placeholder="vocabId"
+              ariaLabel="有道术语表 ID"
               value={draft.youdao_vocab_id}
               onCommit={(v) => applyConfig("youdao_vocab_id", v, "toast")}
             />
@@ -472,11 +486,19 @@ export function GlossaryTab({
   );
 }
 
-/** 有道控制台术语表 ID：失焦提交（与凭证字段同一即时生效模型）。 */
-function VocabIdRow({
+/** 控制台术语库/术语表 ID 输入：失焦提交（与凭证字段同一即时生效模型）。 */
+function ConsoleIdRow({
+  label,
+  hint,
+  placeholder,
+  ariaLabel,
   value,
   onCommit,
 }: {
+  label: string;
+  hint: string;
+  placeholder: string;
+  ariaLabel: string;
   value: string;
   onCommit: (v: string) => void;
 }) {
@@ -489,11 +511,9 @@ function VocabIdRow({
   return (
     <div className="flex items-start justify-between gap-3">
       <div className="min-w-0">
-        <p className="text-[13px] font-medium text-[var(--text-primary)]">
-          控制台术语表 ID
-        </p>
+        <p className="text-[13px] font-medium text-[var(--text-primary)]">{label}</p>
         <p className="text-[11px] text-[var(--text-secondary)] mt-0.5 leading-snug">
-          有道控制台上传术语表后取得的 out_id（请求参数 vocabId）；留空不使用。
+          {hint}
         </p>
       </div>
       <input
@@ -507,9 +527,9 @@ function VocabIdRow({
             e.currentTarget.blur();
           }
         }}
-        placeholder="vocabId"
+        placeholder={placeholder}
         className="input-field text-xs py-1.5 w-44 shrink-0"
-        aria-label="有道术语表 ID"
+        aria-label={ariaLabel}
         spellCheck={false}
       />
     </div>

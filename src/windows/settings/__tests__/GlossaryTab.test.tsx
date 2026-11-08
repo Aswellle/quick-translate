@@ -64,6 +64,7 @@ function config(provider: string): AppConfig {
     glossary_enabled: true,
     baidu_use_term_base: false,
     youdao_vocab_id: "",
+    tencent_term_repo_ids: "",
   };
 }
 
@@ -198,6 +199,31 @@ describe("GlossaryTab", () => {
       "baidu_use_term_base",
       true,
       "inline"
+    );
+  });
+
+  it("腾讯云术语库 ID 失焦提交", async () => {
+    mockedList.mockResolvedValue([]);
+    render("tencent");
+    await act(async () => {});
+    const input = container.querySelector(
+      'input[aria-label="腾讯云术语库 ID"]'
+    ) as HTMLInputElement;
+    expect(input).toBeTruthy();
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype,
+      "value"
+    )!.set!;
+    act(() => {
+      input.focus();
+      setter.call(input, "repo-1,repo-2");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.blur();
+    });
+    expect(applyConfig).toHaveBeenCalledWith(
+      "tencent_term_repo_ids",
+      "repo-1,repo-2",
+      "toast"
     );
   });
 });

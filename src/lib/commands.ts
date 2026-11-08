@@ -82,6 +82,8 @@ export interface AppConfig {
   baidu_use_term_base: boolean;
   /** 有道：控制台术语表 ID（vocabId，空串 = 不使用） */
   youdao_vocab_id: string;
+  /** 腾讯云：控制台术语库 ID 列表（逗号分隔，TermRepoIDList；空串 = 不使用） */
+  tencent_term_repo_ids: string;
 }
 
 /** 单个全局快捷键的注册状态（Rust `system::hotkeys::HotkeyStatus`） */
