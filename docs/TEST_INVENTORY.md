@@ -18,7 +18,7 @@
 
 CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 3 平台、clippy 与单测 × Windows/macOS、release 构建验证 × 双平台。CI 不依赖真实 Provider 凭证。
 
-> 进展更新：Task 04（+33）、Task 06（+19）、Task 09 来源类型（+2）、Task 09 缓存回退统一（+4）、缓存读写开关（+4）、全局快捷键（+4）、术语表数据层（+14，含语言对隔离）、DeepL 同步与缓存指纹（+7）、百度/有道控制台术语库（+3）、腾讯 TermRepoIDList（+2）、快捷键重试（+1）、评审整改（+7：DeepL 同步硬超时 +1、缓存作用域令牌 +2、手动路径敏感过滤 +4）后 Rust 单测现为 **414 passed**；前端为 **91 / 16 文件**（+3：手动窗口敏感内容确认）。
+> 进展更新：Task 04（+33）、Task 06（+19）、Task 09 来源类型（+2）、Task 09 缓存回退统一（+4）、缓存读写开关（+4）、全局快捷键（+4）、术语表数据层（+14，含语言对隔离）、DeepL 同步与缓存指纹（+7）、百度/有道控制台术语库（+3）、腾讯 TermRepoIDList（+2）、快捷键重试（+1）、评审整改（+7：DeepL 同步硬超时 +1、缓存作用域令牌 +2、手动路径敏感过滤 +4）后 Rust 单测现为 **414 passed**；前端为 **96 / 17 文件**（+3：手动窗口敏感内容确认；+5：手动窗口目标语言时序 2 例、事件名契约 3 例）。
 
 ## Mock 注入能力（现状确认）
 
@@ -73,11 +73,12 @@ CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 
 | `util/backoff.rs` | 5 | 指数退避、抖动边界 |
 | `error.rs` | — | URL 脱敏 |
 
-## 前端测试清单（91 / 16 文件）
+## 前端测试清单（96 / 17 文件）
 
 | 文件 | 覆盖 |
 |---|---|
 | `lib/__tests__/constants.test.ts` | Rust↔前端错误码契约（新增 Rust 错误码必须同步文案） |
+| `lib/__tests__/events.test.ts` | Rust↔前端事件名契约（emit ↔ listen 全配对，kebab-case 约束） |
 | `lib/__tests__/configSync.test.ts` | 外部真值合并规则（凭证/auto_start/在途键跳过）+ 快速连续写入的回滚守卫 |
 | `lib/__tests__/hotkeys.test.ts` | 键盘事件 → 加速键（修饰键顺序、具名键、拒绝无效组合）+ 按平台格式化 + 动作/配置键映射 |
 | `lib/__tests__/domUtils.test.ts` | 键盘目标/拖拽阻断判定 |
