@@ -74,7 +74,10 @@ impl TencentProvider {
         let mut seen = std::collections::HashSet::new();
         raw.split(',')
             .map(str::trim)
-            .filter(|id| !id.is_empty() && id.chars().count() <= 128)
+            // 分号与 U+0001 是缓存作用域令牌/键的分隔符，ID 内出现会撞键
+            .filter(|id| {
+                !id.is_empty() && id.chars().count() <= 128 && !id.contains([';', '\u{1}'])
+            })
             .filter(|id| seen.insert((*id).to_string()))
             .take(10)
             .map(str::to_string)

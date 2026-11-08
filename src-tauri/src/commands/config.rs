@@ -223,15 +223,19 @@ fn validate_value(key: &str, value: &str) -> Result<(), AppError> {
                 return Err(invalid());
             }
         }
-        // 术语表 ID 由有道控制台生成；允许清空（= 不使用）
+        // 术语表 ID 由有道控制台生成；允许清空（= 不使用）。
+        // 逗号/分号/U+0001 是缓存作用域令牌的分隔符（cache::scope_token），
+        // ID 内出现会与相邻维度撞键 —— 一个 ID 让两个上下文共享缓存
         "youdao_vocab_id" => {
-            if value.chars().count() > 200 {
+            if value.chars().count() > 200 || value.contains([',', ';', '\u{1}']) {
                 return Err(invalid());
             }
         }
-        // 腾讯云术语库 ID 列表（逗号分隔）；允许清空（= 不使用）
+        // 腾讯云术语库 ID 列表（逗号分隔）；允许清空（= 不使用）。
+        // 单个 ID 内不允许出现列表分隔符之外的分隔符（分号是 scope_token
+        // 里 tc= 维度的连接符，U+0001 是缓存键分隔符）
         "tencent_term_repo_ids" => {
-            if value.chars().count() > 500 {
+            if value.chars().count() > 500 || value.contains([';', '\u{1}']) {
                 return Err(invalid());
             }
         }
