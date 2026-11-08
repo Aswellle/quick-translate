@@ -331,11 +331,20 @@ fn map_glossary_status(response: reqwest::Response, status: u16) -> AppError {
     }
 }
 
+/// DeepL glossary 同步动作（创建/删除，含就绪轮询）的硬超时。
+///
+/// 同步内联在翻译关键路径上（`prepare_deepl_glossary` 在翻译发起前完成），
+/// 此前只有单次 HTTP 的 5s 客户端超时，创建 + 轮询叠加最坏可拖住翻译
+/// 半分钟以上。现在每个同步动作整体受此时限约束，超时返回错误，由调用方
+/// 降级为「本次不应用术语表」—— 同步永远不会把翻译开头拖过可感知时限。
+pub const GLOSSARY_SYNC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// 创建 glossary，返回 glossary_id（已就绪）。
 ///
 /// `entries_tsv` 每行 `原文\t译文`。创建后若 `ready=false`，最多轮询 5 次
 /// （200ms 间隔，合计约 1s）；仍未就绪返回错误，由调用方降级为「本次不
-/// 应用术语表」—— 不阻塞翻译主链路。
+/// 应用术语表」—— 不阻塞翻译主链路。整个创建动作受
+/// [`GLOSSARY_SYNC_TIMEOUT`] 硬超时约束，超时同样按失败降级。
 pub async fn create_glossary(
     client: &HttpClient,
     api_key: &str,
@@ -357,12 +366,45 @@ pub async fn create_glossary(
         source_lang,
         target_lang,
         entries_tsv,
+        GLOSSARY_SYNC_TIMEOUT,
     )
     .await
 }
 
 /// 可指定 glossary 端点根 URL（测试用 mock server；生产传官方地址）。
+/// 整个创建动作（请求 + 就绪轮询）受 `sync_timeout` 硬超时约束。
+// 请求参数 + 超时上限：形状由 DeepL v2 接口与测试 mock 双方固定，不值得为
+// 过 clippy 再抽一层参数结构。
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn create_glossary_at(
+    url: &str,
+    client: &HttpClient,
+    api_key: &str,
+    name: &str,
+    source_lang: &str,
+    target_lang: &str,
+    entries_tsv: &str,
+    sync_timeout: std::time::Duration,
+) -> Result<String, AppError> {
+    tokio::time::timeout(
+        sync_timeout,
+        create_glossary_request(
+            url,
+            client,
+            api_key,
+            name,
+            source_lang,
+            target_lang,
+            entries_tsv,
+        ),
+    )
+    .await
+    .map_err(|_| AppError::Timeout {
+        timeout_secs: sync_timeout.as_secs(),
+    })?
+}
+
+async fn create_glossary_request(
     url: &str,
     client: &HttpClient,
     api_key: &str,
@@ -427,6 +469,7 @@ pub(crate) async fn create_glossary_at(
 }
 
 /// 删除 glossary。404 视为已删除（幂等）；其他失败交给调用方记日志。
+/// 整个删除动作同样受 [`GLOSSARY_SYNC_TIMEOUT`] 硬超时约束。
 pub async fn delete_glossary(
     client: &HttpClient,
     api_key: &str,
@@ -437,10 +480,34 @@ pub async fn delete_glossary(
             provider: "deepl".to_string(),
         });
     }
-    delete_glossary_at(&glossary_url(api_key), client, api_key, glossary_id).await
+    delete_glossary_at(
+        &glossary_url(api_key),
+        client,
+        api_key,
+        glossary_id,
+        GLOSSARY_SYNC_TIMEOUT,
+    )
+    .await
 }
 
 pub(crate) async fn delete_glossary_at(
+    url: &str,
+    client: &HttpClient,
+    api_key: &str,
+    glossary_id: &str,
+    sync_timeout: std::time::Duration,
+) -> Result<(), AppError> {
+    tokio::time::timeout(
+        sync_timeout,
+        delete_glossary_request(url, client, api_key, glossary_id),
+    )
+    .await
+    .map_err(|_| AppError::Timeout {
+        timeout_secs: sync_timeout.as_secs(),
+    })?
+}
+
+async fn delete_glossary_request(
     url: &str,
     client: &HttpClient,
     api_key: &str,
@@ -669,6 +736,7 @@ mod tests {
             "en",
             "zh",
             "Apple\t苹果",
+            GLOSSARY_SYNC_TIMEOUT,
         ));
         assert_eq!(result.unwrap(), "g-1");
 
@@ -680,5 +748,51 @@ mod tests {
         assert!(lower.contains("\"source_lang\":\"en\""), "{}", request);
         assert!(lower.contains("\"target_lang\":\"zh\""), "{}", request);
         assert!(lower.contains("apple\\t"), "条目必须进请求体");
+    }
+
+    /// 同步硬超时（评审整改）：服务端拖延应答时，创建动作必须在期限之内
+    /// 以 Timeout 失败返回，而不是叠加轮询把翻译关键路径挂住。
+    #[test]
+    fn create_glossary_times_out_when_server_is_slow() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("test server accept");
+            let mut buf = [0u8; 8192];
+            let _ = stream.read(&mut buf);
+            thread::sleep(std::time::Duration::from_secs(1));
+            let body = r#"{"glossary_id":"g-slow","ready":true,"name":"n"}"#;
+            let response = format!(
+                "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+        });
+
+        let started = std::time::Instant::now();
+        let result = tauri::async_runtime::block_on(create_glossary_at(
+            &format!("http://{}/v2/glossaries", addr),
+            &HttpClient::new(),
+            "testkey:fx",
+            "qt-en-zh",
+            "en",
+            "zh",
+            "Apple\t苹果",
+            std::time::Duration::from_millis(150),
+        ));
+        let elapsed = started.elapsed();
+
+        assert!(
+            matches!(result, Err(AppError::Timeout { .. })),
+            "慢速服务必须在期限内超时，实际: {:?}",
+            result
+        );
+        assert!(
+            elapsed < std::time::Duration::from_millis(900),
+            "超时必须及时返回（服务端拖延 1s，期限 150ms），实际耗时 {:?}",
+            elapsed
+        );
+        server.join().unwrap();
     }
 }
