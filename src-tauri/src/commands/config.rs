@@ -152,6 +152,7 @@ fn validate_value(key: &str, value: &str) -> Result<(), AppError> {
             | "hotkey_translate_clipboard"
             | "hotkey_open_manual"
             | "hotkey_toggle_monitor"
+            | "hotkey_toggle_popup"
             | "youdao_vocab_id"
             | "tencent_term_repo_ids"
     ) || BOOL_KEYS.contains(&key)
@@ -201,7 +202,10 @@ fn validate_value(key: &str, value: &str) -> Result<(), AppError> {
         "provider" if value.trim().is_empty() => return Err(invalid()),
         // 加速键语法由注册时裁决（错误可定位到具体冲突），这里只挡
         // 明显异常的长度，避免把任意大字符串写进配置
-        "hotkey_translate_clipboard" | "hotkey_open_manual" | "hotkey_toggle_monitor" => {
+        "hotkey_translate_clipboard"
+        | "hotkey_open_manual"
+        | "hotkey_toggle_monitor"
+        | "hotkey_toggle_popup" => {
             if value.chars().count() > 100 {
                 return Err(invalid());
             }

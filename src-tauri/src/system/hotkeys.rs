@@ -24,6 +24,7 @@ use crate::types::{AppConfig, ToastPayload};
 pub const ACTION_TRANSLATE_CLIPBOARD: &str = "translate_clipboard";
 pub const ACTION_OPEN_MANUAL: &str = "open_manual";
 pub const ACTION_TOGGLE_MONITOR: &str = "toggle_monitor";
+pub const ACTION_TOGGLE_POPUP: &str = "toggle_popup";
 
 pub struct HotkeyActionDef {
     pub id: &'static str,
@@ -54,6 +55,12 @@ pub const ACTIONS: &[HotkeyActionDef] = &[
         config_key: "hotkey_toggle_monitor",
         default_accelerator: "CmdOrControl+Alt+P",
         label: "暂停/恢复剪贴板监控",
+    },
+    HotkeyActionDef {
+        id: ACTION_TOGGLE_POPUP,
+        config_key: "hotkey_toggle_popup",
+        default_accelerator: "CmdOrControl+Alt+H",
+        label: "显示/隐藏翻译浮窗",
     },
 ];
 
@@ -220,6 +227,7 @@ fn configured_value(config: &AppConfig, action: &str) -> Option<String> {
         ACTION_TRANSLATE_CLIPBOARD => Some(config.hotkey_translate_clipboard.clone()),
         ACTION_OPEN_MANUAL => Some(config.hotkey_open_manual.clone()),
         ACTION_TOGGLE_MONITOR => Some(config.hotkey_toggle_monitor.clone()),
+        ACTION_TOGGLE_POPUP => Some(config.hotkey_toggle_popup.clone()),
         _ => None,
     }
 }
@@ -240,6 +248,12 @@ fn dispatch(app: &AppHandle, action: &str) {
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
                 toggle_monitor(&app).await;
+            });
+        }
+        ACTION_TOGGLE_POPUP => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                toggle_popup(&app).await;
             });
         }
         _ => {}
@@ -320,6 +334,40 @@ async fn toggle_monitor(app: &AppHandle) {
             "剪贴板监控已暂停"
         }),
     );
+}
+
+/// 显示/隐藏翻译浮窗。
+///
+/// 窗口不存在（从未翻译过）时如实提示，而不是创建一个空白浮窗。
+/// 显示复用 translation_flow 的完整路径（拖拽位置优先、复位不可聚焦、
+/// 看守基线重置）；隐藏复用 popup_watch 的唯一关闭路径。
+async fn toggle_popup(app: &AppHandle) {
+    use crate::system::{popup_watch, translation_flow};
+
+    if app.get_webview_window("popup").is_none() {
+        crate::commands::system::emit_toast(app, ToastPayload::info("还没有翻译内容可显示"));
+        return;
+    }
+
+    let visible = app
+        .get_webview_window("popup")
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false);
+    if visible {
+        popup_watch::hide_popup_now(app);
+        return;
+    }
+
+    let (x, y) = crate::system::clipboard::get_cursor_position();
+    let position = translation_flow::compute_popup_position_dpi(app, x, y);
+    if translation_flow::show_popup_window(app, &position).await {
+        let state = app.state::<AppState>();
+        state.popup_watch.begin();
+        state
+            .runtime
+            .report_popup(crate::runtime::ComponentState::Healthy, None);
+        tracing::info!(event = "popup_show_by_hotkey", "[hotkeys] 快捷键显示浮窗");
+    }
 }
 
 #[cfg(test)]

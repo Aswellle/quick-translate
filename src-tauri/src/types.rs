@@ -223,6 +223,7 @@ pub struct AppConfig {
     pub hotkey_translate_clipboard: String,
     pub hotkey_open_manual: String,
     pub hotkey_toggle_monitor: String,
+    pub hotkey_toggle_popup: String,
     /// 术语表总开关（计划 Task 10）。
     ///
     /// 关闭时术语条目不参与任何翻译请求与缓存键；条目本身保留。
@@ -264,6 +265,7 @@ impl Default for AppConfig {
             hotkey_translate_clipboard: "CmdOrControl+Alt+T".to_string(),
             hotkey_open_manual: "CmdOrControl+Alt+M".to_string(),
             hotkey_toggle_monitor: "CmdOrControl+Alt+P".to_string(),
+            hotkey_toggle_popup: "CmdOrControl+Alt+H".to_string(),
             glossary_enabled: true,
             baidu_use_term_base: false,
             youdao_vocab_id: String::new(),
