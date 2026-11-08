@@ -250,6 +250,7 @@ export function SettingsWindow({
     hotkey_toggle_monitor: "暂停/恢复监控快捷键",
     hotkey_toggle_popup: "显示/隐藏浮窗快捷键",
     hotkey_retranslate_last: "重新翻译快捷键",
+    translation_style: "翻译风格",
     glossary_enabled: "术语表",
     baidu_use_term_base: "百度控制台术语库",
     youdao_vocab_id: "有道词汇表ID",
@@ -654,6 +655,24 @@ function GeneralTab({
                 {l.flag} {l.name}
               </option>
             ))}
+          </select>
+        </SettingsRow>
+        <SettingsRow
+          label="翻译风格"
+          htmlFor="setting-translation-style"
+          hint="仅 DeepL 支持部分目标语言（英/中目标不生效），其他翻译源忽略此设置"
+        >
+          <select
+            id="setting-translation-style"
+            value={draft.translation_style}
+            onChange={(e) =>
+              onChange("translation_style", e.target.value as AppConfig["translation_style"])
+            }
+            className="input-field w-32"
+          >
+            <option value="natural">自然</option>
+            <option value="formal">正式</option>
+            <option value="informal">非正式</option>
           </select>
         </SettingsRow>
         <SettingsRow label="界面主题" htmlFor="setting-theme">

@@ -67,6 +67,7 @@ function config(provider: string): AppConfig {
     baidu_use_term_base: false,
     youdao_vocab_id: "",
     tencent_term_repo_ids: "",
+    translation_style: "natural",
   };
 }
 
