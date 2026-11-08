@@ -9,6 +9,8 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { createRoot, type Root } from "react-dom/client";
 import { act } from "react";
 import { ManualTranslateWindow, MANUAL_MAX_CHARS } from "../ManualTranslateWindow";
+import { useConfigStore } from "@/stores/configStore";
+import type { AppConfig } from "@/lib/commands";
 
 vi.mock("@/lib/commands", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/commands")>();
@@ -60,6 +62,7 @@ describe("ManualTranslateWindow", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    useConfigStore.setState({ config: null, isLoaded: false });
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -70,6 +73,35 @@ describe("ManualTranslateWindow", () => {
       root.render(<ManualTranslateWindow />);
     });
   }
+
+  /** 目标语言下拉（按出现顺序第 1 个 select 的 value） */
+  function targetSelectValue(container: HTMLElement): string {
+    const selects = container.querySelectorAll("select");
+    return (selects[1] as HTMLSelectElement).value;
+  }
+
+  /** 配置晚于组件挂载到达（App.tsx 异步 getConfig 的真实时序）：
+   *  目标语言必须跟随 store，而不是被挂载瞬间的兜底值钉死。 */
+  it("配置晚于挂载到达时，目标语言跟随配置更新", () => {
+    render();
+    expect(targetSelectValue(container)).toBe("zh");
+
+    const cfg = { target_lang: "ja" } as AppConfig;
+    act(() => {
+      useConfigStore.getState().setConfig(cfg);
+    });
+    expect(targetSelectValue(container)).toBe("ja");
+  });
+
+  /** 用户主动选择后跟随即停：store 后续刷新不得覆盖用户的选择。 */
+  it("用户选择目标语言后，配置刷新不覆盖该选择", () => {
+    render();
+    setSelect(container, 1, "ja");
+    act(() => {
+      useConfigStore.getState().setConfig({ target_lang: "en" } as AppConfig);
+    });
+    expect(targetSelectValue(container)).toBe("ja");
+  });
 
   it("输入文本点击翻译：调用 translate_text 并展示结果与来源标识", async () => {
     mockedTranslate.mockResolvedValue({

@@ -26,7 +26,11 @@ export function ManualTranslateWindow() {
   const [text, setText] = useState("");
   // 显式源语言是 DeepL 术语表生效的前提（自动检测路径不应用术语表）
   const [sourceLang, setSourceLang] = useState<string>("auto");
-  const [targetLang, setTargetLang] = useState<string>(config?.target_lang ?? "zh");
+  // 目标语言初值跟随配置 store：App.tsx 异步加载 getConfig，挂载瞬间
+  // store 可能还是 null —— 对 config 做一次性 useState 快照会把首次
+  // 打开恒钉在兜底值。用户主动选择后 targetLang 非空，跟随即停。
+  const [targetLangChoice, setTargetLangChoice] = useState<string | null>(null);
+  const targetLang = targetLangChoice ?? config?.target_lang ?? "zh";
   const [result, setResult] = useState<TranslationResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -97,7 +101,7 @@ export function ManualTranslateWindow() {
         <select
           id="manual-target-lang"
           value={targetLang}
-          onChange={(e) => setTargetLang(e.target.value)}
+          onChange={(e) => setTargetLangChoice(e.target.value)}
           className="input-field text-xs py-1.5 flex-1 min-w-0"
         >
           {SUPPORTED_LANGUAGES.map((lang) => (
