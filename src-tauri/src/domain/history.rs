@@ -9,7 +9,7 @@ use tokio::sync::Mutex;
 use crate::domain::config::{HISTORY_LIMIT_MAX, HISTORY_LIMIT_MIN};
 use crate::error::AppError;
 use crate::infra::database::Db;
-use crate::types::{HistoryQuery, StatsResult, TranslationRecord};
+use crate::types::{HistoryFilterOptions, HistoryQuery, StatsResult, TranslationRecord};
 pub struct HistoryRepository {
     db: Db,
 }
@@ -52,12 +52,11 @@ impl HistoryRepository {
         Ok(())
     }
 
-    /// 查询历史记录（支持 LIKE 子串搜索 + 分页 + starred_only 过滤）
+    /// 查询历史记录（LIKE 子串搜索 + 收藏/来源/语言对/翻译源过滤 + 分页）
     pub async fn query(&self, params: &HistoryQuery) -> Result<Vec<TranslationRecord>, AppError> {
         let conn = self.conn()?;
         let conn = conn.lock().await;
 
-        let starred_only = params.starred_only.unwrap_or(false);
         // limit/offset 来自前端，直接绑定 SQL：SQLite 里 LIMIT -1 等于
         // 不限制（一次拖回全部行），负 offset 也会被无声接受 —— 与
         // enforce_limit 的钳制口径对齐，在这里统一收口。
@@ -66,33 +65,91 @@ impl HistoryRepository {
 
         let records = if let Some(search) = &params.search {
             if search.trim().is_empty() {
-                query_all(&conn, limit, offset, starred_only)?
+                query_records(&conn, None, limit, offset, &filters(params))?
             } else {
-                query_like(&conn, search, limit, offset, starred_only)?
+                query_records(&conn, Some(search.trim()), limit, offset, &filters(params))?
             }
         } else {
-            query_all(&conn, limit, offset, starred_only)?
+            query_records(&conn, None, limit, offset, &filters(params))?
         };
 
         Ok(records)
     }
 
-    /// 获取记录总数（用于前端分页）
-    pub async fn count(&self, search: Option<&str>, starred_only: bool) -> Result<i64, AppError> {
+    /// 获取记录总数（用于前端分页；过滤条件与 query 完全同构）
+    pub async fn count(
+        &self,
+        search: Option<&str>,
+        starred_only: bool,
+        source_type: Option<&str>,
+        language_pair: Option<&str>,
+        provider: Option<&str>,
+    ) -> Result<i64, AppError> {
         let conn = self.conn()?;
         let conn = conn.lock().await;
 
         let count = if let Some(keyword) = search {
             if keyword.trim().is_empty() {
-                count_all(&conn, starred_only)?
+                count_records(
+                    &conn,
+                    None,
+                    starred_only,
+                    source_type,
+                    language_pair,
+                    provider,
+                )?
             } else {
-                count_like(&conn, keyword, starred_only)?
+                count_records(
+                    &conn,
+                    Some(keyword.trim()),
+                    starred_only,
+                    source_type,
+                    language_pair,
+                    provider,
+                )?
             }
         } else {
-            count_all(&conn, starred_only)?
+            count_records(
+                &conn,
+                None,
+                starred_only,
+                source_type,
+                language_pair,
+                provider,
+            )?
         };
 
         Ok(count)
+    }
+
+    /// 筛选下拉的可选项：库内实际出现过的语言对与翻译源（去重 + 字典序）。
+    /// 记录量大时仍是两个索引友好的 DISTINCT 扫描，与列表查询同一把锁，
+    /// 打开历史窗口时调一次即可。
+    pub async fn filter_options(&self) -> Result<HistoryFilterOptions, AppError> {
+        let conn = self.conn()?;
+        let conn = conn.lock().await;
+
+        let collect = |sql: &str| -> Result<Vec<String>, AppError> {
+            let mut stmt = conn
+                .prepare(sql)
+                .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+            Ok(rows)
+        };
+
+        let mut language_pairs =
+            collect("SELECT DISTINCT source_lang || '→' || target_lang FROM translation_records")?;
+        language_pairs.sort();
+        let mut providers = collect("SELECT DISTINCT provider FROM translation_records")?;
+        providers.sort();
+
+        Ok(HistoryFilterOptions {
+            language_pairs,
+            providers,
+        })
     }
 
     /// 切换收藏状态，返回新的收藏状态
@@ -285,7 +342,7 @@ impl HistoryRepository {
         let limit = limit.clamp(HISTORY_LIMIT_MIN, HISTORY_LIMIT_MAX);
         let conn = self.conn()?;
         let conn = conn.lock().await;
-        let total = count_all(&conn, false)?;
+        let total = count_records(&conn, None, false, None, None, None)?;
 
         if total <= limit {
             return Ok(0);
@@ -353,127 +410,133 @@ fn local_midnight_ms(now_ms: i64) -> i64 {
     day_start.unix_timestamp() * 1000
 }
 
-fn query_all(
+/// 筛选维度的统一收口：把 HistoryQuery 里的可选过滤条件展开成
+/// （片段, 绑定值）序列。query 与 count 共用同一构造 —— 两边的 WHERE
+/// 必须完全同构，否则分页总数与实际列表对不上。
+///
+/// 未知 source_type 按不过滤处理：直接调 IPC 的脏值不应把列表打空。
+fn filters(params: &HistoryQuery) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    if params.starred_only.unwrap_or(false) {
+        out.push(("is_starred = 1".to_string(), String::new()));
+    }
+    if let Some(src) = params.source_type.as_deref() {
+        if src == crate::types::RECORD_SOURCE_CLIPBOARD || src == crate::types::RECORD_SOURCE_MANUAL
+        {
+            out.push(("source = ?".to_string(), src.to_string()));
+        }
+    }
+    // 语言对按完整 "src→dst" 匹配：字符串拼接形式与写入侧 from_result
+    // 的两个字段一一对应，不做模糊匹配（"en" 不会命中 "en→zh"）
+    if let Some(pair) = &params.language_pair {
+        if let Some((src, dst)) = pair.split_once('→') {
+            if !src.is_empty() && !dst.is_empty() {
+                out.push(("source_lang = ?".to_string(), src.to_string()));
+                out.push(("target_lang = ?".to_string(), dst.to_string()));
+            }
+        }
+    }
+    if let Some(p) = &params.provider {
+        if !p.is_empty() {
+            out.push(("provider = ?".to_string(), p.clone()));
+        }
+    }
+    out
+}
+
+/// WHERE 子句组装：搜索关键词 + 筛选维度 → (sql, 位置参数)。
+fn where_clause(search: Option<&str>, filter: &[(String, String)]) -> (String, Vec<String>) {
+    let mut conditions: Vec<String> = Vec::new();
+    let mut args: Vec<String> = Vec::new();
+
+    if let Some(keyword) = search {
+        let pattern = format!(
+            "%{}%",
+            keyword
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        );
+        // LIKE 同时打原文与译文两列：一个条件占两个 ?，同一参数绑两次
+        conditions.push(
+            "(source_text LIKE ? ESCAPE '\\' OR translated_text LIKE ? ESCAPE '\\')".to_string(),
+        );
+        args.push(pattern.clone());
+        args.push(pattern);
+    }
+    for (clause, value) in filter {
+        conditions.push(clause.clone());
+        // 含 ? 的片段才带绑定值；字面量片段（is_starred = 1）无参数
+        if clause.contains('?') {
+            args.push(value.clone());
+        }
+    }
+
+    let sql = if conditions.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", conditions.join(" AND "))
+    };
+    (sql, args)
+}
+
+/// 记录查询的单一实现：搜索（None = 不过滤）+ 筛选维度 + 分页。
+/// 取代此前的 query_all/query_like 四分支组合 —— 每加一个筛选维度
+/// 分支数会翻倍，统一 WHERE 组装后维度是正交叠加的。
+fn query_records(
     conn: &Connection,
+    search: Option<&str>,
     limit: i64,
     offset: i64,
-    starred_only: bool,
+    filter: &[(String, String)],
 ) -> Result<Vec<TranslationRecord>, AppError> {
-    let sql = if starred_only {
+    let (where_sql, args) = where_clause(search, filter);
+    let sql = format!(
         r#"SELECT id, source_text, translated_text, source_lang, target_lang,
                   provider, created_at, duration_ms, is_starred, source
-           FROM translation_records
-           WHERE is_starred = 1
+           FROM translation_records{}
            ORDER BY created_at DESC, rowid DESC
-           LIMIT ?1 OFFSET ?2"#
-    } else {
-        r#"SELECT id, source_text, translated_text, source_lang, target_lang,
-                  provider, created_at, duration_ms, is_starred, source
-           FROM translation_records
-           ORDER BY created_at DESC, rowid DESC
-           LIMIT ?1 OFFSET ?2"#
-    };
+           LIMIT {} OFFSET {}"#,
+        where_sql, limit, offset
+    );
 
     let mut stmt = conn
-        .prepare(sql)
+        .prepare(&sql)
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
     let records = stmt
-        .query_map(rusqlite::params![limit, offset], map_row)?
+        .query_map(rusqlite::params_from_iter(args.iter()), map_row)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
     Ok(records)
 }
 
-/// LIKE 子串搜索（支持中文 / CJK 及任意字符，不依赖 FTS5 分词）
-fn query_like(
+/// 计数：与 query_records 完全同构的 WHERE（同一 where_clause 构造）。
+fn count_records(
     conn: &Connection,
-    search: &str,
-    limit: i64,
-    offset: i64,
+    search: Option<&str>,
     starred_only: bool,
-) -> Result<Vec<TranslationRecord>, AppError> {
-    let pattern = format!(
-        "%{}%",
-        search
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_")
-    );
-
-    let sql = if starred_only {
-        r#"SELECT id, source_text, translated_text, source_lang, target_lang,
-                  provider, created_at, duration_ms, is_starred, source
-           FROM translation_records
-           WHERE is_starred = 1
-             AND (source_text LIKE ?1 ESCAPE '\' OR translated_text LIKE ?1 ESCAPE '\')
-           ORDER BY created_at DESC, rowid DESC
-           LIMIT ?2 OFFSET ?3"#
-    } else {
-        r#"SELECT id, source_text, translated_text, source_lang, target_lang,
-                  provider, created_at, duration_ms, is_starred, source
-           FROM translation_records
-           WHERE source_text LIKE ?1 ESCAPE '\' OR translated_text LIKE ?1 ESCAPE '\'
-           ORDER BY created_at DESC, rowid DESC
-           LIMIT ?2 OFFSET ?3"#
+    source_type: Option<&str>,
+    language_pair: Option<&str>,
+    provider: Option<&str>,
+) -> Result<i64, AppError> {
+    let params = HistoryQuery {
+        search: None,
+        limit: 1,
+        offset: 0,
+        starred_only: Some(starred_only),
+        source_type: source_type.map(str::to_string),
+        language_pair: language_pair.map(str::to_string),
+        provider: provider.map(str::to_string),
     };
+    let (where_sql, args) = where_clause(search, &filters(&params));
+    let sql = format!("SELECT COUNT(*) FROM translation_records{}", where_sql);
 
-    let mut stmt = conn
-        .prepare(sql)
-        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
-
-    let records = stmt
-        .query_map(rusqlite::params![pattern, limit, offset], map_row)?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| AppError::DatabaseError(e.to_string()))?;
-
-    Ok(records)
-}
-
-fn count_all(conn: &Connection, starred_only: bool) -> Result<i64, AppError> {
-    if starred_only {
-        conn.query_row(
-            "SELECT COUNT(*) FROM translation_records WHERE is_starred = 1",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| AppError::DatabaseError(e.to_string()))
-    } else {
-        conn.query_row("SELECT COUNT(*) FROM translation_records", [], |row| {
-            row.get(0)
-        })
-        .map_err(|e| AppError::DatabaseError(e.to_string()))
-    }
-}
-
-fn count_like(conn: &Connection, search: &str, starred_only: bool) -> Result<i64, AppError> {
-    let pattern = format!(
-        "%{}%",
-        search
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_")
-    );
-
-    if starred_only {
-        conn.query_row(
-            r#"SELECT COUNT(*) FROM translation_records
-               WHERE is_starred = 1
-                 AND (source_text LIKE ?1 ESCAPE '\' OR translated_text LIKE ?1 ESCAPE '\')"#,
-            rusqlite::params![pattern],
-            |row| row.get(0),
-        )
-        .map_err(|e| AppError::DatabaseError(e.to_string()))
-    } else {
-        conn.query_row(
-            r#"SELECT COUNT(*) FROM translation_records
-               WHERE source_text LIKE ?1 ESCAPE '\' OR translated_text LIKE ?1 ESCAPE '\'"#,
-            rusqlite::params![pattern],
-            |row| row.get(0),
-        )
-        .map_err(|e| AppError::DatabaseError(e.to_string()))
-    }
+    conn.query_row(&sql, rusqlite::params_from_iter(args.iter()), |row| {
+        row.get(0)
+    })
+    .map_err(|e| AppError::DatabaseError(e.to_string()))
 }
 
 fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TranslationRecord> {
@@ -705,7 +768,7 @@ mod tests {
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, b.id);
-        assert_eq!(repo.count(None, false).await.unwrap(), 1);
+        assert_eq!(repo.count(None, false, None, None, None).await.unwrap(), 1);
     }
 
     #[tokio::test]
@@ -717,7 +780,7 @@ mod tests {
                 .unwrap();
         }
         repo.clear_all().await.unwrap();
-        assert_eq!(repo.count(None, false).await.unwrap(), 0);
+        assert_eq!(repo.count(None, false, None, None, None).await.unwrap(), 0);
         assert!(repo
             .query(&HistoryQuery {
                 limit: 10,
@@ -757,7 +820,7 @@ mod tests {
         assert!(remaining.contains(&ids[0]), "收藏记录永不自动删除");
         assert!(remaining.contains(&ids[3]), "最新的未收藏记录应保留");
         assert_eq!(
-            repo.count(None, false).await.unwrap(),
+            repo.count(None, false, None, None, None).await.unwrap(),
             2,
             "总数应降到 limit（收藏记录占一个名额）"
         );
@@ -768,7 +831,7 @@ mod tests {
         let repo = repo();
         repo.insert(&record_at(1_700_000_000_000)).await.unwrap();
         assert_eq!(repo.enforce_limit(10).await.unwrap(), 0);
-        assert_eq!(repo.count(None, false).await.unwrap(), 1);
+        assert_eq!(repo.count(None, false, None, None, None).await.unwrap(), 1);
     }
 
     // ── LIKE 搜索：转义与 CJK ───────────────────────────────────────────
@@ -886,8 +949,169 @@ mod tests {
             .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, starred.id);
-        assert_eq!(repo.count(None, true).await.unwrap(), 1);
-        assert_eq!(repo.count(None, false).await.unwrap(), 2);
+        assert_eq!(repo.count(None, true, None, None, None).await.unwrap(), 1);
+        assert_eq!(repo.count(None, false, None, None, None).await.unwrap(), 2);
+    }
+
+    // ── 筛选维度：来源 / 语言对 / 翻译源（历史筛选增强）───────────────
+
+    /// 三个筛选维度各自独立生效，且与搜索正交组合。
+    #[tokio::test]
+    async fn source_type_and_provider_filters_apply_to_query_and_count() {
+        let repo = repo();
+        let mut manual = record_at(1_700_000_000_000);
+        manual.source = crate::types::RECORD_SOURCE_MANUAL.to_string();
+        manual.provider = "deepl".to_string();
+        repo.insert(&manual).await.unwrap();
+        let mut clipboard = record_at(1_700_000_000_001);
+        clipboard.provider = "google".to_string();
+        repo.insert(&clipboard).await.unwrap();
+
+        // 来源过滤
+        let rows = repo
+            .query(&HistoryQuery {
+                limit: 10,
+                source_type: Some(crate::types::RECORD_SOURCE_MANUAL.to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1, "手动来源过滤必须只命中手动记录");
+        assert_eq!(rows[0].id, manual.id);
+        assert_eq!(
+            repo.count(
+                None,
+                false,
+                Some(crate::types::RECORD_SOURCE_MANUAL),
+                None,
+                None
+            )
+            .await
+            .unwrap(),
+            1
+        );
+
+        // 翻译源过滤
+        let rows = repo
+            .query(&HistoryQuery {
+                limit: 10,
+                provider: Some("google".to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, clipboard.id);
+        assert_eq!(
+            repo.count(None, false, None, None, Some("google"))
+                .await
+                .unwrap(),
+            1
+        );
+
+        // 与搜索正交：两条记录的原文都是 "hello"，叠加手动来源过滤后
+        // 仍应两条全中 —— 搜索与过滤各自独立生效
+        let rows = repo
+            .query(&HistoryQuery {
+                search: Some("hello".to_string()),
+                limit: 10,
+                source_type: Some(crate::types::RECORD_SOURCE_MANUAL.to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1, "搜索与来源过滤必须同时生效");
+        assert_eq!(rows[0].id, manual.id);
+
+        // 未知来源值按不过滤处理（脏值不打空列表）
+        let rows = repo
+            .query(&HistoryQuery {
+                limit: 10,
+                source_type: Some("bogus".to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2, "未知来源值不得过滤掉全部记录");
+    }
+
+    /// 语言对按完整 "src→dst" 精确匹配：单向命中，反向/近似不命中。
+    #[tokio::test]
+    async fn language_pair_filter_matches_exact_direction() {
+        let repo = repo();
+        let mut en_zh = record_at(1_700_000_000_000);
+        en_zh.source_lang = "en".to_string();
+        en_zh.target_lang = "zh".to_string();
+        repo.insert(&en_zh).await.unwrap();
+        let mut ja_zh = record_at(1_700_000_000_001);
+        ja_zh.source_lang = "ja".to_string();
+        repo.insert(&ja_zh).await.unwrap();
+
+        let rows = repo
+            .query(&HistoryQuery {
+                limit: 10,
+                language_pair: Some("en→zh".to_string()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, en_zh.id);
+        assert_eq!(
+            repo.count(None, false, None, Some("en→zh"), None)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            repo.count(None, false, None, Some("ja→zh"), None)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            repo.count(None, false, None, Some("zh→en"), None)
+                .await
+                .unwrap(),
+            0,
+            "反向语言对不得命中"
+        );
+        // 畸形语言对（无 →）按不过滤处理
+        assert_eq!(
+            repo.count(None, false, None, Some("en"), None)
+                .await
+                .unwrap(),
+            2,
+            "畸形语言对值不得过滤掉全部记录"
+        );
+    }
+
+    /// 筛选选项从库内实际数据派生：去重、字典序，空库返回空清单。
+    #[tokio::test]
+    async fn filter_options_derive_from_distinct_data() {
+        let repo = repo();
+        assert!(repo.filter_options().await.unwrap().providers.is_empty());
+
+        let mut b = record_at(1_700_000_000_000);
+        b.provider = "baidu".to_string();
+        b.source_lang = "ja".to_string();
+        repo.insert(&b).await.unwrap();
+        let mut g1 = record_at(1_700_000_000_001);
+        g1.provider = "google".to_string();
+        repo.insert(&g1).await.unwrap();
+        let mut g2 = record_at(1_700_000_000_002);
+        g2.provider = "google".to_string();
+        repo.insert(&g2).await.unwrap();
+
+        let opts = repo.filter_options().await.unwrap();
+        assert_eq!(
+            opts.providers,
+            vec!["baidu".to_string(), "google".to_string()]
+        );
+        assert_eq!(
+            opts.language_pairs,
+            vec!["en→zh".to_string(), "ja→zh".to_string()]
+        );
     }
 
     // ── 大数据量：分页与搜索的查询计划与耗时（计划 6.6 / 6.9）──────────
@@ -934,7 +1158,10 @@ mod tests {
     async fn ten_thousand_records_paginate_and_search_within_budget() {
         let repo = repo();
         let ids = seed_bulk(&repo, 10_000).await;
-        assert_eq!(repo.count(None, false).await.unwrap(), 10_000);
+        assert_eq!(
+            repo.count(None, false, None, None, None).await.unwrap(),
+            10_000
+        );
 
         // 查询计划必须命中 created_at 索引，而不是全表扫描后排序
         {
@@ -1006,7 +1233,12 @@ mod tests {
             .unwrap();
         let search_elapsed = start.elapsed();
         assert_eq!(hits.len(), 20, "搜索命中 100 条，首页取 20");
-        assert_eq!(repo.count(Some("机器学习"), false).await.unwrap(), 100);
+        assert_eq!(
+            repo.count(Some("机器学习"), false, None, None, None)
+                .await
+                .unwrap(),
+            100
+        );
         assert!(
             search_elapsed < std::time::Duration::from_millis(500),
             "1 万条下中文搜索耗时 {:?}，超出可接受范围",
@@ -1027,7 +1259,10 @@ mod tests {
 
         let deleted = repo.enforce_limit(200).await.unwrap();
         assert_eq!(deleted, 9_800);
-        assert_eq!(repo.count(None, false).await.unwrap(), 200);
+        assert_eq!(
+            repo.count(None, false, None, None, None).await.unwrap(),
+            200
+        );
 
         // 收藏的 5 条必须还在
         let starred = repo
