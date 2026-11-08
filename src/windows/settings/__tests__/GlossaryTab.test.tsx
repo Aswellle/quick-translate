@@ -108,7 +108,7 @@ describe("GlossaryTab", () => {
       key: keyof AppConfig,
       value: AppConfig[keyof AppConfig],
       feedback: "inline" | "toast" | null
-    ) => void
+    ) => Promise<boolean>
   >();
 
   beforeEach(() => {

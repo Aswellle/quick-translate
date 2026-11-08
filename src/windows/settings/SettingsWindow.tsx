@@ -296,7 +296,7 @@ export function SettingsWindow({
       key: K,
       value: AppConfig[K],
       feedback: "inline" | "toast" | null
-    ) => {
+    ): Promise<boolean> => {
       const previous = draftRef.current
         ? ((draftRef.current as unknown as Record<string, unknown>)[key as string])
         : undefined;
@@ -325,6 +325,7 @@ export function SettingsWindow({
             `${CONFIG_LABELS[key as string] ?? String(key)}${String(value) === "true" ? "已开启" : String(value) === "false" ? "已关闭" : "已生效"}`
           );
         }
+        return true;
       } catch (err) {
         // 持久化失败：草稿退回原值，界面与后端保持一致。
         // 快速连续写入同键时，迟到的失败不能把后一次乐观写入的新值打回去
@@ -356,6 +357,7 @@ export function SettingsWindow({
           .catch(() => {
             /* 对账失败：留给下一次 config-changed 或重开窗口兜底 */
           });
+        return false;
       } finally {
         inFlightKeysRef.current.delete(key as string);
       }
@@ -396,9 +398,7 @@ export function SettingsWindow({
   // 开关行的即时生效回调：反馈形态为 inline（按钮就近显示「已生效」，
   // 状态栏同步记一笔），不重复弹 toast
   const handleClipboardToggle = useCallback(
-    (enabled: boolean) => {
-      void applyConfig("clipboard_monitor_enabled", enabled, "inline");
-    },
+    (enabled: boolean) => applyConfig("clipboard_monitor_enabled", enabled, "inline"),
     [applyConfig]
   );
 
@@ -526,7 +526,7 @@ export function SettingsWindow({
         {activeTab === "glossary" && (
           <GlossaryTab
             draft={draft}
-            applyConfig={(key, value, feedback) => void applyConfig(key, value, feedback)}
+            applyConfig={applyConfig}
           />
         )}
         {activeTab === "about" && <AboutTab />}
@@ -698,7 +698,7 @@ function GeneralTab({
         <ToggleRow
           label="开机自启动"
           value={draft.auto_start}
-          onApply={(v) => void applyConfig("auto_start", v, "inline")}
+          onApply={(v) => applyConfig("auto_start", v, "inline")}
         />
         <ToggleRow
           label="剪贴板监控"
@@ -710,19 +710,19 @@ function GeneralTab({
           label="敏感内容过滤"
           hint="复制的内容疑似私钥、访问令牌或云服务凭证时，不自动发送给翻译服务（仅在本机判定，不消耗额度）。关闭后这些内容将照常发送"
           value={draft.sensitive_filter_enabled}
-          onApply={(v) => void applyConfig("sensitive_filter_enabled", v, "inline")}
+          onApply={(v) => applyConfig("sensitive_filter_enabled", v, "inline")}
         />
         <ToggleRow
           label="自动 Fallback"
           hint="主翻译源失败时自动切换备用"
           value={draft.fallback_enabled}
-          onApply={(v) => void applyConfig("fallback_enabled", v, "inline")}
+          onApply={(v) => applyConfig("fallback_enabled", v, "inline")}
         />
         <ToggleRow
           label="减少透明效果"
           hint="浮窗改用接近不透明的底色，并撤掉系统原生玻璃材质。系统级「降低透明度」偏好始终优先，此项用于系统偏好无法被读取的平台（如 macOS）"
           value={draft.reduce_transparency}
-          onApply={(v) => void applyConfig("reduce_transparency", v, "inline")}
+          onApply={(v) => applyConfig("reduce_transparency", v, "inline")}
         />
         <HistoryLimitRow value={draft.history_limit} onApply={(v) => void applyConfig("history_limit", v, "toast")} />
         <ExportDirRow
@@ -733,7 +733,7 @@ function GeneralTab({
           label="本地缓存"
           hint="翻译成功的结果会存到本机，断网时可回退显示。关闭后不再读写缓存；已有条目仍保留，可在下方单独清空"
           value={draft.cache_enabled}
-          onApply={(v) => void applyConfig("cache_enabled", v, "inline")}
+          onApply={(v) => applyConfig("cache_enabled", v, "inline")}
         />
         <ClearCacheRow onClear={() => setConfirmClearCache(true)} busy={clearingCache} />
       </SettingsSection>

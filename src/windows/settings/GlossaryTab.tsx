@@ -74,7 +74,7 @@ export function GlossaryTab({
   applyConfig,
 }: {
   draft: AppConfig;
-  applyConfig: (key: keyof AppConfig, value: AppConfig[keyof AppConfig], feedback: "inline" | "toast" | null) => void;
+  applyConfig: (key: keyof AppConfig, value: AppConfig[keyof AppConfig], feedback: "inline" | "toast" | null) => Promise<boolean>;
 }) {
   const [sourceLang, setSourceLang] = useState("en");
   const [targetLang, setTargetLang] = useState(

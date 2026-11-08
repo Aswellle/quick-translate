@@ -45,6 +45,12 @@ export function SettingsRow({
  * 状态提示紧贴按钮右侧的空白区域：11.5px / medium / 语义色
  * （成功绿、失败红）。此前「已保存」只出现在底部保存栏——用户盯着
  * 开关看时视线要跨过整屏去找结果。busy 期间开关禁用防连点。
+ *
+ * 反馈必须是**真实结果**而非切换瞬间的乐观文案：onApply 返回
+ * Promise<boolean>（或 boolean / void）时，生效成功才显示绿色
+ * 「已开启/已关闭」，失败显示红色「未生效，已还原」—— 持久化失败时
+ * 开关视觉上会弹回，若绿色「已开启」仍驻留，用户盯着看到的是两个
+ * 互相矛盾的反馈。onApply 返回 void 视为成功（调用方自担结果展示）。
  */
 export function ToggleRow({
   label,
@@ -55,7 +61,7 @@ export function ToggleRow({
   label: string;
   hint?: string;
   value: boolean;
-  onApply: (v: boolean) => void;
+  onApply: (v: boolean) => boolean | void | Promise<boolean | void>;
 }) {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<null | { ok: boolean; text: string }>(null);
@@ -65,16 +71,27 @@ export function ToggleRow({
   const apply = useCallback(
     (v: boolean) => {
       if (busy) return;
-      setBusy(true);
       if (timerRef.current) clearTimeout(timerRef.current);
-      setStatus({ ok: true, text: v ? "已开启" : "已关闭" });
-      try {
-        onApply(v);
+      setBusy(true);
+      const settle = (ok: boolean) => {
+        setStatus({
+          ok,
+          text: ok ? (v ? "已开启" : "已关闭") : "未生效，已还原",
+        });
         // 状态提示驻留 2.5s 后淡出（下一次切换会立即覆盖）
         timerRef.current = setTimeout(() => setStatus(null), 2500);
-      } finally {
         setBusy(false);
+      };
+      let result: boolean | void | Promise<boolean | void>;
+      try {
+        result = onApply(v);
+      } catch {
+        settle(false);
+        return;
       }
+      Promise.resolve(result)
+        .then((ok) => settle(ok !== false))
+        .catch(() => settle(false));
     },
     [busy, onApply]
   );
