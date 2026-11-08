@@ -82,13 +82,16 @@ pub async fn translate_text(
         .map(|g| g.fingerprint.clone())
         .unwrap_or_default();
     // 控制台术语库引用（百度/有道）：随请求读取，改配置立即生效。
-    let (baidu_use_term_base, youdao_vocab_id) = {
+    let (baidu_use_term_base, youdao_vocab_id, tencent_term_repo_ids) = {
         let cfg = state.config.read().await;
         (
             cfg.get("baidu_use_term_base")
                 .map(|v| v == "true")
                 .unwrap_or(false),
             cfg.get("youdao_vocab_id").filter(|v| !v.is_empty()),
+            crate::domain::translator::tencent::TencentProvider::parse_term_repo_ids(
+                &cfg.get("tencent_term_repo_ids").unwrap_or_default(),
+            ),
         )
     };
     let options = crate::domain::translator::TranslateOptions {
@@ -97,6 +100,7 @@ pub async fn translate_text(
         glossary_fingerprint: applied_glossary.as_ref().map(|g| g.fingerprint.clone()),
         baidu_use_term_base,
         youdao_vocab_id,
+        tencent_term_repo_ids,
     };
 
     // 调用翻译引擎（带上下文：显式源语言 + 已同步的 glossary）

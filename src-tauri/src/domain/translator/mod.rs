@@ -56,6 +56,9 @@ pub struct TranslateOptions {
     pub baidu_use_term_base: bool,
     /// 有道智云：控制台术语表 ID（`vocabId`，None/空 = 不使用）。
     pub youdao_vocab_id: Option<String>,
+    /// 腾讯云：术语库 ID 列表（`TermRepoIDList`，空 = 不使用）。
+    /// 术语内容在腾讯云控制台维护，2024-07 起 TextTranslate 支持该参数。
+    pub tencent_term_repo_ids: Vec<String>,
 }
 
 #[async_trait]

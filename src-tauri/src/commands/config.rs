@@ -153,6 +153,7 @@ fn validate_value(key: &str, value: &str) -> Result<(), AppError> {
             | "hotkey_open_manual"
             | "hotkey_toggle_monitor"
             | "youdao_vocab_id"
+            | "tencent_term_repo_ids"
     ) || BOOL_KEYS.contains(&key)
         || CREDENTIAL_KEYS.contains(&key);
     if !known {
@@ -208,6 +209,12 @@ fn validate_value(key: &str, value: &str) -> Result<(), AppError> {
         // 术语表 ID 由有道控制台生成；允许清空（= 不使用）
         "youdao_vocab_id" => {
             if value.chars().count() > 200 {
+                return Err(invalid());
+            }
+        }
+        // 腾讯云术语库 ID 列表（逗号分隔）；允许清空（= 不使用）
+        "tencent_term_repo_ids" => {
+            if value.chars().count() > 500 {
                 return Err(invalid());
             }
         }

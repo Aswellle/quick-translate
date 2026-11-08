@@ -234,6 +234,9 @@ pub struct AppConfig {
     pub baidu_use_term_base: bool,
     /// 有道智云控制台术语表 ID（请求参数 vocabId）。空串 = 不使用。
     pub youdao_vocab_id: String,
+    /// 腾讯云控制台术语库 ID 列表（逗号分隔；请求参数 TermRepoIDList）。
+    /// 空串 = 不使用。
+    pub tencent_term_repo_ids: String,
 }
 
 impl Default for AppConfig {
@@ -264,6 +267,7 @@ impl Default for AppConfig {
             glossary_enabled: true,
             baidu_use_term_base: false,
             youdao_vocab_id: String::new(),
+            tencent_term_repo_ids: String::new(),
         }
     }
 }

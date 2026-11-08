@@ -81,6 +81,12 @@ const KEY_DESCRIPTORS: &[KeyDescriptor] = &[
         set_string: Some(|c, v| c.youdao_vocab_id = v),
     },
     KeyDescriptor {
+        key: "tencent_term_repo_ids",
+        encrypted: false,
+        get_credential: None,
+        set_string: Some(|c, v| c.tencent_term_repo_ids = v),
+    },
+    KeyDescriptor {
         key: "deepl_api_key",
         encrypted: true,
         get_credential: Some(|c| &c.deepl_api_key),
@@ -225,6 +231,7 @@ impl ConfigService {
             "hotkey_open_manual" => Some(self.cache.hotkey_open_manual.clone()),
             "hotkey_toggle_monitor" => Some(self.cache.hotkey_toggle_monitor.clone()),
             "youdao_vocab_id" => Some(self.cache.youdao_vocab_id.clone()),
+            "tencent_term_repo_ids" => Some(self.cache.tencent_term_repo_ids.clone()),
             "auto_start" => Some(self.cache.auto_start.to_string()),
             "history_limit" => Some(self.cache.history_limit.to_string()),
             "fallback_enabled" => Some(self.cache.fallback_enabled.to_string()),
@@ -682,10 +689,14 @@ mod tests {
 
         assert_eq!(svc.get("baidu_use_term_base").as_deref(), Some("false"));
         assert_eq!(svc.get("youdao_vocab_id").as_deref(), Some(""));
+        assert_eq!(svc.get("tencent_term_repo_ids").as_deref(), Some(""));
 
         rt.block_on(async {
             svc.set("baidu_use_term_base", "true").await.unwrap();
             svc.set("youdao_vocab_id", "vocab-1").await.unwrap();
+            svc.set("tencent_term_repo_ids", "repo-1,repo-2")
+                .await
+                .unwrap();
         });
 
         let shared = svc.db.try_conn().unwrap();
@@ -694,6 +705,7 @@ mod tests {
         drop(conn);
         assert!(reloaded.baidu_use_term_base);
         assert_eq!(reloaded.youdao_vocab_id, "vocab-1");
+        assert_eq!(reloaded.tencent_term_repo_ids, "repo-1,repo-2");
     }
 }
 
@@ -870,6 +882,7 @@ fn read_field_for_test(config: &AppConfig, key: &str) -> String {
         "hotkey_open_manual" => config.hotkey_open_manual.clone(),
         "hotkey_toggle_monitor" => config.hotkey_toggle_monitor.clone(),
         "youdao_vocab_id" => config.youdao_vocab_id.clone(),
+        "tencent_term_repo_ids" => config.tencent_term_repo_ids.clone(),
         _ => String::new(),
     }
 }

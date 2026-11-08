@@ -441,6 +441,10 @@ async fn run_translation(app: &AppHandle, request: TranslationRequest) {
                 .map(|v| v == "true")
                 .unwrap_or(false),
             youdao_vocab_id: cfg.get("youdao_vocab_id").filter(|v| !v.is_empty()),
+            tencent_term_repo_ids:
+                crate::domain::translator::tencent::TencentProvider::parse_term_repo_ids(
+                    &cfg.get("tencent_term_repo_ids").unwrap_or_default(),
+                ),
             ..Default::default()
         }
     };

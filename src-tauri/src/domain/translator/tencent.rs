@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use super::TranslationProvider;
+use super::{TranslateOptions, TranslationProvider};
 use crate::error::AppError;
 use crate::infra::http_client::HttpClient;
 use crate::types::{ProviderInfo, TranslationResult};
@@ -59,6 +59,19 @@ impl TencentProvider {
             "ar" => "ar",
             other => other,
         }
+    }
+
+    /// 把配置里的逗号分隔术语库 ID 解析为列表（去空白、去空项、去重）。
+    /// 非法/超长项直接忽略 —— 术语库 ID 由腾讯云生成，应用不做格式猜测。
+    pub(crate) fn parse_term_repo_ids(raw: &str) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
+        raw.split(',')
+            .map(str::trim)
+            .filter(|id| !id.is_empty() && id.chars().count() <= 128)
+            .filter(|id| seen.insert((*id).to_string()))
+            .take(10)
+            .map(str::to_string)
+            .collect()
     }
 
     /// TC3-HMAC-SHA256 签名
@@ -127,6 +140,10 @@ struct TencentRequest {
     target: String,
     #[serde(rename = "ProjectId")]
     project_id: u32,
+    /// 术语库 ID 列表（2024-07 起 TextTranslate 支持）。空列表不序列化，
+    /// 保持既有请求形状不变。
+    #[serde(rename = "TermRepoIDList", skip_serializing_if = "Vec::is_empty")]
+    term_repo_id_list: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -160,6 +177,17 @@ impl TranslationProvider for TencentProvider {
         text: &str,
         target_lang: &str,
     ) -> Result<TranslationResult, AppError> {
+        self.translate_with_options(text, target_lang, &TranslateOptions::default())
+            .await
+    }
+
+    /// 腾讯云的术语库在控制台维护，API 通过 TermRepoIDList 引用。
+    async fn translate_with_options(
+        &self,
+        text: &str,
+        target_lang: &str,
+        options: &TranslateOptions,
+    ) -> Result<TranslationResult, AppError> {
         if self.secret_id.is_empty() || self.secret_key.is_empty() {
             return Err(AppError::AuthError {
                 provider: "tencent".into(),
@@ -178,6 +206,7 @@ impl TranslationProvider for TencentProvider {
             source: "auto".to_string(),
             target: target.to_string(),
             project_id: 0,
+            term_repo_id_list: options.tencent_term_repo_ids.clone(),
         };
         let payload =
             serde_json::to_string(&body).map_err(|e| AppError::NetworkError(e.to_string()))?;
@@ -420,5 +449,41 @@ mod tests {
     fn unknown_lang_codes_pass_through() {
         assert_eq!(TencentProvider::to_tencent_lang("th"), "th");
         assert_eq!(TencentProvider::to_tencent_lang("vi"), "vi");
+    }
+
+    #[test]
+    fn term_repo_ids_are_trimmed_deduplicated_and_capped() {
+        assert_eq!(
+            TencentProvider::parse_term_repo_ids(" repo-a, repo-b ,,repo-a, "),
+            vec!["repo-a", "repo-b"]
+        );
+        assert!(TencentProvider::parse_term_repo_ids("   ").is_empty());
+
+        let many = (0..15)
+            .map(|i| format!("repo-{}", i))
+            .collect::<Vec<_>>()
+            .join(",");
+        assert_eq!(TencentProvider::parse_term_repo_ids(&many).len(), 10);
+    }
+
+    /// 术语库为空时不得改变既有请求体；配置后按数组下发。
+    #[test]
+    fn term_repo_list_is_serialized_only_when_configured() {
+        let base = TencentRequest {
+            source_text: "hello".into(),
+            source: "auto".into(),
+            target: "zh".into(),
+            project_id: 0,
+            term_repo_id_list: Vec::new(),
+        };
+        let json = serde_json::to_string(&base).unwrap();
+        assert!(!json.contains("TermRepoIDList"));
+
+        let with_terms = TencentRequest {
+            term_repo_id_list: vec!["repo-1".into()],
+            ..base
+        };
+        let json = serde_json::to_string(&with_terms).unwrap();
+        assert!(json.contains(r#""TermRepoIDList":["repo-1"]"#));
     }
 }
