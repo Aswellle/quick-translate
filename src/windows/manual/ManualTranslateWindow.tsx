@@ -13,6 +13,7 @@ import {
 } from "@/lib/commands";
 import { ERROR_MESSAGES, PROVIDER_LABELS, SUPPORTED_LANGUAGES } from "@/lib/constants";
 import { CopyButton } from "@/components/CopyButton";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useConfigStore } from "@/stores/configStore";
 
 /** 单次翻译的文本长度上限。与 Rust `system::translation::request::MAX_TEXT_CHARS`
@@ -29,34 +30,46 @@ export function ManualTranslateWindow() {
   const [result, setResult] = useState<TranslationResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 敏感内容拦截待确认：后端过滤命中（未发送任何请求），等用户决定是否放行
+  const [pendingSensitive, setPendingSensitive] = useState(false);
 
   const charCount = [...text].length;
   const overLimit = charCount > MANUAL_MAX_CHARS;
   const canSubmit = text.trim().length > 0 && !overLimit && !busy;
 
-  const run = useCallback(async () => {
-    if (text.trim().length === 0 || overLimit || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const r = await translateText(
-        text.trim(),
-        targetLang,
-        sourceLang === "auto" ? undefined : sourceLang
-      );
-      setResult(r);
-    } catch (err) {
-      // 错误码契约（AppError::error_code ↔ ERROR_MESSAGES）：展示层
-      // 只用契约文案，不透传上游原始消息
-      const code = typeof err === "object" && err && "code" in err
-        ? String((err as AppError).code)
-        : "UNKNOWN";
-      setError(ERROR_MESSAGES[code] ?? ERROR_MESSAGES["UNKNOWN"]);
-      setResult(null);
-    } finally {
-      setBusy(false);
-    }
-  }, [text, targetLang, sourceLang, overLimit, busy]);
+  const run = useCallback(
+    async (force = false) => {
+      if (text.trim().length === 0 || overLimit || busy) return;
+      setBusy(true);
+      setError(null);
+      try {
+        const r = await translateText(
+          text.trim(),
+          targetLang,
+          sourceLang === "auto" ? undefined : sourceLang,
+          force || undefined
+        );
+        setResult(r);
+        setPendingSensitive(false);
+      } catch (err) {
+        // 错误码契约（AppError::error_code ↔ ERROR_MESSAGES）：展示层
+        // 只用契约文案，不透传上游原始消息。敏感内容拦截不进错误位 ——
+        // 它不是失败，是等确认：弹确认框，用户放行后带 force 重试。
+        const code = typeof err === "object" && err && "code" in err
+          ? String((err as AppError).code)
+          : "UNKNOWN";
+        if (code === "SENSITIVE_CONTENT_BLOCKED" && !force) {
+          setPendingSensitive(true);
+        } else {
+          setError(ERROR_MESSAGES[code] ?? ERROR_MESSAGES["UNKNOWN"]);
+        }
+        setResult(null);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [text, targetLang, sourceLang, overLimit, busy]
+  );
 
   return (
     <div className="flex flex-col h-full bg-[var(--surface-primary)] text-[var(--text-primary)]">
@@ -173,6 +186,17 @@ export function ManualTranslateWindow() {
             : "历史记录会标记为「手动」来源"}
         </span>
       </div>
+      {/* ── 敏感内容确认：后端过滤命中后的显式放行（与浮窗「仍然翻译」
+          同一知情语义；取消则什么都不发送） ── */}
+      {pendingSensitive && (
+        <ConfirmDialog
+          title="疑似敏感内容"
+          description="这段内容可能包含密钥、令牌或鉴权头等敏感信息，尚未发送。仍要把它发送到翻译服务吗？"
+          confirmLabel="仍要翻译"
+          onConfirm={() => void run(true)}
+          onCancel={() => setPendingSensitive(false)}
+        />
+      )}
     </div>
   );
 }

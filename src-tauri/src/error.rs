@@ -54,6 +54,16 @@ pub enum AppError {
     #[error("源语言与目标语言相同：{lang}")]
     SameLanguage { lang: String },
 
+    /// 手动翻译命中敏感内容过滤：过滤在任何网络请求之前完成，命中时返回
+    /// 本错误，前端确认后以 force 重试 —— 与浮窗「仍然翻译」同一知情语义。
+    #[error("{reason}")]
+    SensitiveContentBlocked {
+        /// 命中的规则代码（SensitiveRule::code），用于日志与诊断
+        rule: String,
+        /// 不含原文的规则解释（SensitiveRule::reason）
+        reason: String,
+    },
+
     // ---- 系统错误 ----
     #[error("剪贴板操作失败：{0}")]
     ClipboardError(String),
@@ -111,6 +121,7 @@ impl AppError {
             Self::EmptyText => "EMPTY_TEXT",
             Self::NonTextContent => "NON_TEXT_CONTENT",
             Self::SameLanguage { .. } => "SAME_LANGUAGE",
+            Self::SensitiveContentBlocked { .. } => "SENSITIVE_CONTENT_BLOCKED",
             Self::ClipboardError(_) => "CLIPBOARD_ERROR",
             Self::DatabaseError(_) => "DATABASE_ERROR",
             Self::StorageUnavailable => "STORAGE_UNAVAILABLE",

@@ -88,7 +88,7 @@ describe("ManualTranslateWindow", () => {
     });
 
     expect(mockedTranslate).toHaveBeenCalledTimes(1);
-    expect(mockedTranslate).toHaveBeenCalledWith("hello", "zh", undefined);
+    expect(mockedTranslate).toHaveBeenCalledWith("hello", "zh", undefined, undefined);
     expect(container.textContent).toContain("你好");
     expect(container.textContent).toContain("DeepL");
   });
@@ -109,7 +109,7 @@ describe("ManualTranslateWindow", () => {
     await act(async () => {
       submitButton(container).click();
     });
-    expect(mockedTranslate).toHaveBeenCalledWith("hello", "zh", "en");
+    expect(mockedTranslate).toHaveBeenCalledWith("hello", "zh", "en", undefined);
   });
 
   it("空文本不发起请求", async () => {

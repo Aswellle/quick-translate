@@ -210,13 +210,15 @@ export async function setConfigBatch(
  * 同一落盘管道；历史记录来源标为 manual。结果直接返回，不经事件。
  */
 /** 手动翻译（计划 Task 09/10）。
- *  `sourceLang` 省略 = 自动检测；显式源语言是 DeepL 术语表生效的前提。 */
+ *  `sourceLang` 省略 = 自动检测；显式源语言是 DeepL 术语表生效的前提。
+ *  `force` = 用户已确认敏感内容拦截提示后放行（后端过滤仍先执行）。 */
 export async function translateText(
   text: string,
   targetLang?: string,
-  sourceLang?: string
+  sourceLang?: string,
+  force?: boolean
 ): Promise<TranslationResult> {
-  return invoke("translate_text", { text, targetLang, sourceLang });
+  return invoke("translate_text", { text, targetLang, sourceLang, force });
 }
 
 // ---- 历史 Commands ----

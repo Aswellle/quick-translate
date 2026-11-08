@@ -20,6 +20,25 @@ pub async fn translate_filtered_text(app: AppHandle) -> Result<bool, AppError> {
     Ok(crate::system::translation::translate_filtered_text(&app).await)
 }
 
+/// 手动路径的敏感内容过滤判定（评审整改）：与剪贴板路径执行同一套规则，
+/// 且同样必须发生在任何网络请求之前。命中且未获用户确认 → Err；
+/// 用户显式确认（force）或过滤开关关闭 → 放行。纯逻辑，单测锁定
+/// 「先过滤」「确认放行」「开关尊重」三个语义。
+fn manual_filter_check(text: &str, enabled: bool, force: bool) -> Result<(), AppError> {
+    if force || !enabled {
+        return Ok(());
+    }
+    match crate::domain::clipboard_filter::classify(text) {
+        crate::domain::clipboard_filter::FilterDecision::Allow => Ok(()),
+        crate::domain::clipboard_filter::FilterDecision::BlockSensitive { rule } => {
+            Err(AppError::SensitiveContentBlocked {
+                rule: rule.code().to_string(),
+                reason: rule.reason().to_string(),
+            })
+        }
+    }
+}
+
 /// 前端手动触发翻译
 /// 用于：设置面板的"测试翻译"按钮
 /// 注意：返回值直接给前端，不通过 event
@@ -29,11 +48,37 @@ pub async fn translate_text(
     text: String,
     target_lang: Option<String>,
     source_lang: Option<String>,
+    force: Option<bool>,
 ) -> Result<TranslationResult, AppError> {
     // 参数验证
     let text = text.trim().to_string();
     if text.is_empty() {
         return Err(AppError::EmptyText);
+    }
+
+    // 敏感内容过滤：手动路径与剪贴板路径同一套规则，且都在任何网络请求
+    // （包括术语表同步）之前完成。命中时返回结构化错误，前端确认后以
+    // force=true 重试 —— 过滤已完成、用户显式知情，与浮窗「仍然翻译」
+    // 同一语义。被拦截的文本不记为「上一次翻译」。
+    let filter_enabled = state
+        .config
+        .read()
+        .await
+        .get("sensitive_filter_enabled")
+        .map(|v| v == "true")
+        .unwrap_or(true);
+    let force = force.unwrap_or(false);
+    if let Err(e) = manual_filter_check(&text, filter_enabled, force) {
+        tracing::info!(
+            event = "manual_translate_filtered",
+            rule = match &e {
+                AppError::SensitiveContentBlocked { rule, .. } => rule.as_str(),
+                _ => "unknown",
+            },
+            len = text.len(),
+            "[translate_text] 手动翻译命中敏感内容过滤，等待用户确认"
+        );
+        return Err(e);
     }
 
     // 显式源语言（可空 = 自动检测）。术语表只在这条路径上可能生效 ——
@@ -276,6 +321,46 @@ pub async fn get_provider_status(
 #[cfg(test)]
 mod tests {
     use super::to_snake_case;
+    use super::manual_filter_check;
+    use crate::error::AppError;
+
+    /// 手动路径与剪贴板路径共用同一套规则：命中即拦，且解释文案
+    /// 不回显原文（错误里只有规则代码与静态解释）。
+    #[test]
+    fn manual_filter_blocks_sensitive_content_before_any_network() {
+        let sample = "Authorization: Bearer sk-test-1234567890";
+        let err = manual_filter_check(sample, true, false).expect_err("必须被拦截");
+        match &err {
+            AppError::SensitiveContentBlocked { rule, reason } => {
+                assert_eq!(rule, "SENSITIVE_AUTH_HEADER");
+                assert!(!reason.contains(sample), "解释文案不得回显原文");
+                assert!(!reason.contains("sk-test"), "解释文案不得回显原文片段");
+            }
+            other => panic!("应为 SensitiveContentBlocked，实际: {:?}", other),
+        }
+        assert_eq!(err.error_code(), "SENSITIVE_CONTENT_BLOCKED");
+    }
+
+    /// 用户显式确认（force）后放行 —— 过滤已执行、知情由前端确认承担，
+    /// 与浮窗「仍然翻译」同一语义。
+    #[test]
+    fn manual_filter_allows_after_explicit_confirmation() {
+        let sample = "Authorization: Bearer sk-test-1234567890";
+        assert!(manual_filter_check(sample, true, true).is_ok());
+    }
+
+    /// 过滤开关关闭时手动路径同样不拦（与剪贴板门控开关语义一致）。
+    #[test]
+    fn manual_filter_respects_disabled_switch() {
+        let sample = "Authorization: Bearer sk-test-1234567890";
+        assert!(manual_filter_check(sample, false, false).is_ok());
+    }
+
+    /// 正常文本不受影响。
+    #[test]
+    fn manual_filter_allows_plain_text() {
+        assert!(manual_filter_check("Hello, world!", true, false).is_ok());
+    }
 
     /// 前端契约（SettingsWindow::providerStateLabel 的 switch 值）：
     /// 这组值一旦漂移，设置页的健康状态词表会整体静默消失。
