@@ -320,8 +320,8 @@ pub async fn get_provider_status(
 
 #[cfg(test)]
 mod tests {
-    use super::to_snake_case;
     use super::manual_filter_check;
+    use super::to_snake_case;
     use crate::error::AppError;
 
     /// 手动路径与剪贴板路径共用同一套规则：命中即拦，且解释文案
