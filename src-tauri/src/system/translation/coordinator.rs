@@ -451,20 +451,33 @@ async fn run_translation(app: &AppHandle, request: TranslationRequest) {
 
     // 控制台术语库引用（百度/有道）：配置随请求读取，改配置立即生效，
     // 不需要重建 provider。剪贴板路径没有显式源语言 → 不应用 DeepL glossary。
-    let options = {
+    // 同一请求上下文同时构造缓存作用域令牌 —— 查询与写入用同一把钥匙，
+    // 术语配置切换后旧上下文的缓存译文不会被端出来。
+    let (options, scope_token) = {
         let cfg = state.config.read().await;
-        crate::domain::translator::TranslateOptions {
-            baidu_use_term_base: cfg
-                .get("baidu_use_term_base")
-                .map(|v| v == "true")
-                .unwrap_or(false),
-            youdao_vocab_id: cfg.get("youdao_vocab_id").filter(|v| !v.is_empty()),
-            tencent_term_repo_ids:
-                crate::domain::translator::tencent::TencentProvider::parse_term_repo_ids(
-                    &cfg.get("tencent_term_repo_ids").unwrap_or_default(),
-                ),
+        let baidu_use_term_base = cfg
+            .get("baidu_use_term_base")
+            .map(|v| v == "true")
+            .unwrap_or(false);
+        let youdao_vocab_id = cfg.get("youdao_vocab_id").filter(|v| !v.is_empty());
+        let tencent_term_repo_ids =
+            crate::domain::translator::tencent::TencentProvider::parse_term_repo_ids(
+                &cfg.get("tencent_term_repo_ids").unwrap_or_default(),
+            );
+        let scope_token = crate::domain::cache::scope_token(
+            None,
+            "",
+            baidu_use_term_base,
+            youdao_vocab_id.as_deref(),
+            &tencent_term_repo_ids,
+        );
+        let options = crate::domain::translator::TranslateOptions {
+            baidu_use_term_base,
+            youdao_vocab_id,
+            tencent_term_repo_ids,
             ..Default::default()
-        }
+        };
+        (options, scope_token)
     };
 
     let outcome = state
@@ -508,7 +521,7 @@ async fn run_translation(app: &AppHandle, request: TranslationRequest) {
 
             // 落盘放在 emit 之后：它是 await，会开出新的交错窗口，
             // 不能让它插在闸门与 emit 之间。迟到结果也不会落盘。
-            persist_success(&state, &result, &request).await;
+            persist_success(&state, &result, &request, &scope_token).await;
         }
         // 源语言与目标语言相同：显示原文而非报错，与重构前保持一致
         Err(AppError::SameLanguage { lang }) => {
@@ -540,7 +553,7 @@ async fn run_translation(app: &AppHandle, request: TranslationRequest) {
                     &state.cache,
                     &request.text,
                     &request.target_lang,
-                    "",
+                    &scope_token,
                     request.truncated,
                 )
                 .await
@@ -597,6 +610,7 @@ async fn persist_success(
     state: &AppState,
     result: &TranslationResult,
     request: &TranslationRequest,
+    scope_token: &str,
 ) {
     let history_limit = state.config.read().await.cache_history_limit();
 
@@ -614,8 +628,9 @@ async fn persist_success(
             translated_text: result.translated_text.clone(),
             source_lang: result.detected_source_lang.clone(),
             provider: result.provider.clone(),
-            // 剪贴板路径没有显式源语言 → 不应用术语表（DeepL 限制）
-            glossary_fingerprint: String::new(),
+            // 与本次请求的查询同一把钥匙：剪贴板路径没有显式源语言、
+            // 不应用 DeepL glossary，令牌只含控制台术语库上下文
+            scope_token: scope_token.to_string(),
         },
     };
 

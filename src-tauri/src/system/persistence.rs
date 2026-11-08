@@ -46,8 +46,9 @@ pub struct OwnedCacheEntry {
     pub translated_text: String,
     pub source_lang: String,
     pub provider: String,
-    /// 本次实际应用的术语表指纹（空串 = 未应用），进入缓存键
-    pub glossary_fingerprint: String,
+    /// 本次请求的作用域令牌（空串 = 无作用域判别），进入缓存键，
+    /// 见 `domain::cache::scope_token`
+    pub scope_token: String,
 }
 
 impl OwnedCacheEntry {
@@ -58,7 +59,7 @@ impl OwnedCacheEntry {
             translated_text: &self.translated_text,
             source_lang: &self.source_lang,
             provider: &self.provider,
-            glossary_fingerprint: &self.glossary_fingerprint,
+            scope_token: &self.scope_token,
         }
     }
 }
@@ -324,7 +325,7 @@ mod tests {
                 translated_text: "译文".to_string(),
                 source_lang: "en".to_string(),
                 provider: "deepl".to_string(),
-                glossary_fingerprint: String::new(),
+                scope_token: String::new(),
             },
         }
     }

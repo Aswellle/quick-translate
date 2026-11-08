@@ -97,6 +97,16 @@ pub async fn translate_text(
             ),
         )
     };
+    // 缓存作用域令牌：显式源语言/术语指纹/控制台术语库上下文进键。
+    // 查询与写入用同一把钥匙 —— 用户切换语言或术语配置后，旧上下文的
+    // 缓存译文不会再被端出来（domain/cache.rs::scope_token）。
+    let scope_token = crate::domain::cache::scope_token(
+        source_lang.as_deref(),
+        &glossary_fingerprint,
+        baidu_use_term_base,
+        youdao_vocab_id.as_deref(),
+        &tencent_term_repo_ids,
+    );
     let options = crate::domain::translator::TranslateOptions {
         source_lang: source_lang.clone(),
         glossary_id: applied_glossary.as_ref().map(|g| g.glossary_id.clone()),
@@ -130,7 +140,7 @@ pub async fn translate_text(
                     &state.cache,
                     &text_to_translate,
                     &target,
-                    &glossary_fingerprint,
+                    &scope_token,
                     truncated,
                 )
                 .await
@@ -175,7 +185,7 @@ pub async fn translate_text(
             translated_text: result.translated_text.clone(),
             source_lang: result.detected_source_lang.clone(),
             provider: result.provider.clone(),
-            glossary_fingerprint,
+            scope_token,
         },
     };
     if !state.persistence.enqueue(job) {

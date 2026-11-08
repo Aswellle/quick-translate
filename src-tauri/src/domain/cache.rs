@@ -53,9 +53,9 @@ pub struct CacheEntry<'a> {
     pub translated_text: &'a str,
     pub source_lang: &'a str,
     pub provider: &'a str,
-    /// 本次翻译实际应用的术语表指纹（空串 = 未应用）。进入缓存键，
-    /// 术语变化后旧译文不会再被命中。
-    pub glossary_fingerprint: &'a str,
+    /// 本次请求的作用域令牌（空串 = 无作用域判别），进入缓存键，
+    /// 见 [`scope_token`]。
+    pub scope_token: &'a str,
 }
 
 pub struct TranslationCache {
@@ -109,16 +109,17 @@ impl TranslationCache {
         self.db.try_conn()
     }
 
-    /// 缓存键：归一化文本 + 目标语言 + 术语表指纹。
+    /// 缓存键：归一化文本 + 目标语言 + 作用域令牌。
     ///
     /// 用 `\u{1}` 分隔而不是直接拼接：否则 "ab"+"c" 与 "a"+"bc" 会撞成同一个键。
-    /// 分隔符取控制字符，正常文本里不可能出现。指纹为空（未应用术语表）
-    /// 时与引入术语表之前的键完全一致，既有缓存不失效。
-    fn key(text: &str, target_lang: &str, fingerprint: &str) -> String {
-        if fingerprint.is_empty() {
+    /// 分隔符取控制字符，正常文本里不可能出现。令牌为空（无显式源语言、
+    /// 无术语表、控制台术语库全关）时与引入作用域之前的键完全一致，
+    /// 既有缓存不失效。
+    fn key(text: &str, target_lang: &str, scope_token: &str) -> String {
+        if scope_token.is_empty() {
             format!("{}\u{1}{}", text, target_lang)
         } else {
-            format!("{}\u{1}{}\u{1}{}", text, target_lang, fingerprint)
+            format!("{}\u{1}{}\u{1}{}", text, target_lang, scope_token)
         }
     }
 
@@ -134,7 +135,7 @@ impl TranslationCache {
         &self,
         text: &str,
         target_lang: &str,
-        glossary_fingerprint: &str,
+        scope_token: &str,
     ) -> Result<Option<CachedTranslation>, AppError> {
         if !self.enabled.load(std::sync::atomic::Ordering::Relaxed) {
             return Ok(None);
@@ -147,7 +148,7 @@ impl TranslationCache {
             return Ok(None);
         };
 
-        let key = Self::key(text, target_lang, glossary_fingerprint);
+        let key = Self::key(text, target_lang, scope_token);
         let cutoff = now_unix_ms() - self.ttl.as_millis() as i64;
         let conn = conn.lock().await;
 
@@ -210,11 +211,7 @@ impl TranslationCache {
                  provider        = excluded.provider,
                  created_at      = excluded.created_at",
             rusqlite::params![
-                Self::key(
-                    entry.source_text,
-                    entry.target_lang,
-                    entry.glossary_fingerprint
-                ),
+                Self::key(entry.source_text, entry.target_lang, entry.scope_token),
                 entry.source_text,
                 entry.translated_text,
                 entry.source_lang,
@@ -310,6 +307,47 @@ pub fn should_fall_back_to_cache(err: &AppError) -> bool {
     matches!(err, AppError::AllProvidersFailed { .. })
 }
 
+/// 构造缓存键的作用域令牌：把「会改变同一段文本 + 目标语言之译文含义」
+/// 的请求上下文全部编进去。
+///
+/// 此前键里只有 DeepL 术语表指纹 —— 用户切换显式源语言、开关百度术语库、
+/// 改有道词汇表/腾讯术语库之后，旧上下文的缓存译文仍会被命中，用户配置
+/// 的术语上下文被静默忽略。现在这些维度全部进键：
+///
+/// - `src=<源语言>`：仅显式源语言进入。自动检测对同一段文本是确定性的，
+///   编入只会白白分裂缓存，不编。
+/// - `gl=<指纹>`：DeepL 术语表指纹（同步成功才会出现）。
+/// - `bd=1` / `yd=<词汇表ID>` / `tc=<术语库ID列表>`：控制台术语库引用。
+///
+/// 所有维度都不存在时令牌为空串，键退回「文本 + 目标语言」的旧形状 ——
+/// 既有缓存条目不失效。写入与查询必须用同一把钥匙（同一请求上下文
+/// 构造同一个令牌），这是跨上下文不串译的关键。
+pub fn scope_token(
+    source_lang: Option<&str>,
+    glossary_fingerprint: &str,
+    baidu_use_term_base: bool,
+    youdao_vocab_id: Option<&str>,
+    tencent_term_repo_ids: &[String],
+) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(src) = source_lang {
+        parts.push(format!("src={}", src));
+    }
+    if !glossary_fingerprint.is_empty() {
+        parts.push(format!("gl={}", glossary_fingerprint));
+    }
+    if baidu_use_term_base {
+        parts.push("bd=1".to_string());
+    }
+    if let Some(vocab) = youdao_vocab_id {
+        parts.push(format!("yd={}", vocab));
+    }
+    if !tencent_term_repo_ids.is_empty() {
+        parts.push(format!("tc={}", tencent_term_repo_ids.join(";")));
+    }
+    parts.join(",")
+}
+
 /// 查缓存并组装成一次正常的翻译结果。
 ///
 /// 回声条目过滤：缓存里可能存有回声守卫落地前的存量 `(A → A)` 条目，
@@ -322,10 +360,10 @@ pub async fn lookup_cached_result(
     cache: &TranslationCache,
     text: &str,
     target_lang: &str,
-    glossary_fingerprint: &str,
+    scope_token: &str,
     truncated: bool,
 ) -> Option<crate::types::TranslationResult> {
-    match cache.get(text, target_lang, glossary_fingerprint).await {
+    match cache.get(text, target_lang, scope_token).await {
         Ok(Some(hit)) => {
             if crate::domain::translator::is_echo_text(text, &hit.translated_text) {
                 tracing::info!(
@@ -398,7 +436,7 @@ mod tests {
             translated_text: translated,
             source_lang: "en",
             provider,
-            glossary_fingerprint: "",
+            scope_token: "",
         })
         .await
         .unwrap();
@@ -702,10 +740,11 @@ mod tests {
             .is_none());
     }
 
-    /// 术语表指纹进入缓存键：改了术语后，旧译文不会被新指纹命中；
-    /// 空指纹与引入术语表之前的键一致（既有缓存不失效）。
+    /// 作用域令牌进入缓存键：术语表/术语库/源语言任一维度变化后，
+    /// 旧上下文的译文不会被新上下文命中；空令牌与引入作用域之前的键一致
+    /// （既有缓存不失效）。
     #[tokio::test]
-    async fn glossary_fingerprint_separates_cache_entries() {
+    async fn scope_token_separates_cache_entries() {
         let c = fast();
         c.put(CacheEntry {
             source_text: "Apple",
@@ -713,14 +752,14 @@ mod tests {
             translated_text: "苹果",
             source_lang: "en",
             provider: "deepl",
-            glossary_fingerprint: "fp1",
+            scope_token: "gl=fp1",
         })
         .await
         .unwrap();
 
-        assert!(c.get("Apple", "zh", "fp1").await.unwrap().is_some());
+        assert!(c.get("Apple", "zh", "gl=fp1").await.unwrap().is_some());
         assert!(
-            c.get("Apple", "zh", "fp2").await.unwrap().is_none(),
+            c.get("Apple", "zh", "gl=fp2").await.unwrap().is_none(),
             "术语表变化后不得命中旧译文"
         );
         assert!(
@@ -728,9 +767,52 @@ mod tests {
             "未应用术语表的请求不得命中术语表译文"
         );
 
-        // 无指纹条目照旧可用
+        // 无令牌条目照旧可用
         put(&c, "hello", "zh", "你好", "deepl").await;
         assert!(c.get("hello", "zh", "").await.unwrap().is_some());
+    }
+
+    /// 令牌构造：各维度按固定顺序拼接，全部缺省时为空串（退回旧键形状）。
+    #[test]
+    fn scope_token_orders_all_context_dimensions() {
+        assert_eq!(scope_token(None, "", false, None, &[]), "");
+        assert_eq!(
+            scope_token(
+                Some("en"),
+                "fp1",
+                true,
+                Some("v1"),
+                &["r1".to_string(), "r2".to_string()]
+            ),
+            "src=en,gl=fp1,bd=1,yd=v1,tc=r1;r2"
+        );
+    }
+
+    /// 评审整改回归：控制台术语库上下文进键后，开关切换不会串用旧上下文
+    /// 的缓存译文。
+    #[tokio::test]
+    async fn term_context_change_never_serves_old_scope() {
+        let c = fast();
+        let with_terms = scope_token(None, "", true, None, &[]);
+        c.put(CacheEntry {
+            source_text: "Apple",
+            target_lang: "zh",
+            translated_text: "苹果",
+            source_lang: "en",
+            provider: "baidu",
+            scope_token: &with_terms,
+        })
+        .await
+        .unwrap();
+
+        assert!(
+            c.get("Apple", "zh", "").await.unwrap().is_none(),
+            "术语库关闭后的请求不得命中带术语上下文的条目"
+        );
+        assert!(
+            c.get("Apple", "zh", &with_terms).await.unwrap().is_some(),
+            "同一上下文内照常命中"
+        );
     }
 
     // ── 读写开关（配置键 cache_enabled）──────────────────────────────────
