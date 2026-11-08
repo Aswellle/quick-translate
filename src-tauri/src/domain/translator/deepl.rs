@@ -14,6 +14,30 @@ use crate::types::{ProviderInfo, TranslationResult};
 const DEEPL_FREE_API: &str = "https://api-free.deepl.com/v2/translate";
 const DEEPL_PRO_API: &str = "https://api.deepl.com/v2/translate";
 
+/// DeepL formality 支持的目标语言（应用内语言代码）。
+///
+/// 官方文档：formality 仅当目标语言为德/法/意/日/西/荷/波兰/葡/俄时
+/// 可用（语义是目标语言的敬语/尊称体系，日语=です・ます体）。本项目
+/// 支持的语言与之交集即此清单 —— 英文与中文目标传 formality 会被
+/// DeepL 以 400 拒绝，所以必须在请求侧按目标语言裁剪。
+pub const FORMALITY_TARGET_LANGS: &[&str] = &["de", "es", "fr", "it", "ja", "pt", "ru"];
+
+/// 风格 → DeepL formality 参数值。返回 None = 不下发：
+/// Natural（默认）保持请求形态与引入风格之前一致，目标语言不支持时
+/// 下发会被整个请求 400 拒绝（比忽略更糟）。
+fn formality_param(style: super::TranslationStyle, target_lang: &str) -> Option<&'static str> {
+    let value = match style {
+        super::TranslationStyle::Natural => return None,
+        super::TranslationStyle::Formal => "more",
+        super::TranslationStyle::Informal => "less",
+    };
+    if FORMALITY_TARGET_LANGS.contains(&target_lang) {
+        Some(value)
+    } else {
+        None
+    }
+}
+
 pub struct DeepLProvider {
     http_client: Arc<HttpClient>,
     api_key: String,
@@ -149,6 +173,12 @@ impl TranslationProvider for DeepLProvider {
         }
         if let Some(glossary_id) = options.glossary_id.as_deref() {
             params.push(("glossary_id", glossary_id));
+        }
+        // 风格（计划 Task 10）：formality 只对部分目标语言有意义，目标
+        // 不支持时不下发 —— 传了 DeepL 会以 400 拒绝整个请求。
+        // Natural（默认）不下发，请求形态与引入风格之前完全一致。
+        if let Some(formality) = formality_param(options.style, target_lang) {
+            params.push(("formality", formality));
         }
 
         let response = self
@@ -719,6 +749,101 @@ mod tests {
             "必须下发 glossary_id"
         );
         assert!(lower.contains("auth_key=testkey%3afx"), "认证走 form");
+    }
+
+    // ── 翻译风格（计划 Task 10 后半）────────────────────────────────────
+
+    /// formality 仅对支持的目标语言下发：正式 → more；请求形态其余部分
+    /// 与无风格时一致。
+    #[test]
+    fn formal_style_sends_formality_for_supported_target() {
+        let (url, server) = spawn_mock(
+            200,
+            r#"{"translations":[{"detected_source_language":"EN","text":"Guten Tag"}]}"#,
+        );
+        let provider = DeepLProvider::new(Arc::new(HttpClient::new()), "testkey:fx".to_string())
+            .with_translate_endpoint(format!("{}/v2/translate", url));
+
+        let options = TranslateOptions {
+            style: super::super::TranslationStyle::Formal,
+            ..Default::default()
+        };
+        let result = tauri::async_runtime::block_on(
+            provider.translate_with_options("hello", "de", &options),
+        );
+        assert!(result.is_ok(), "{:?}", result);
+
+        let lower = server.join().unwrap().to_lowercase();
+        assert!(lower.contains("formality=more"), "正式风格必须下发 more");
+    }
+
+    /// 非正式 → less；目标语言不支持（如中文）时不下发 —— 传了会被
+    /// DeepL 400 拒绝整个请求。
+    #[test]
+    fn formality_is_omitted_for_unsupported_target() {
+        let cases = [
+            (
+                super::super::TranslationStyle::Informal,
+                "zh",
+                false,
+                "less",
+            ),
+            (super::super::TranslationStyle::Formal, "zh", false, "more"),
+            (super::super::TranslationStyle::Formal, "en", false, "more"),
+            (super::super::TranslationStyle::Natural, "de", false, "more"),
+        ];
+        for (style, target, expect_present, needle) in cases {
+            // detected 语言统一用 FR：与四个目标语言都不同，避免触发
+            // SameLanguage 短路（那是另一条路径，与风格参数无关）
+            let (url, server) = spawn_mock(
+                200,
+                r#"{"translations":[{"detected_source_language":"FR","text":"x"}]}"#,
+            );
+            let provider =
+                DeepLProvider::new(Arc::new(HttpClient::new()), "testkey:fx".to_string())
+                    .with_translate_endpoint(format!("{}/v2/translate", url));
+            let options = TranslateOptions {
+                style,
+                ..Default::default()
+            };
+            let result = tauri::async_runtime::block_on(
+                provider.translate_with_options("hello", target, &options),
+            );
+            assert!(result.is_ok(), "{:?} {}", result, target);
+
+            let lower = server.join().unwrap().to_lowercase();
+            assert_eq!(
+                lower.contains(&format!("formality={}", needle)),
+                expect_present,
+                "style={:?} target={} 的 formality 下发判定错误",
+                style,
+                target
+            );
+        }
+    }
+
+    /// TranslationStyle::from_config 对脏值兜底为 Natural（与配置校验
+    /// 双保险，旧库残留值不应让请求侧报错）。
+    #[test]
+    fn style_from_config_falls_back_to_natural() {
+        use super::super::TranslationStyle;
+        assert_eq!(
+            TranslationStyle::from_config("formal"),
+            TranslationStyle::Formal
+        );
+        assert_eq!(
+            TranslationStyle::from_config("informal"),
+            TranslationStyle::Informal
+        );
+        assert_eq!(
+            TranslationStyle::from_config("natural"),
+            TranslationStyle::Natural
+        );
+        assert_eq!(
+            TranslationStyle::from_config("casual"),
+            TranslationStyle::Natural
+        );
+        assert_eq!(TranslationStyle::from_config(""), TranslationStyle::Natural);
     }
 
     /// 创建 glossary：请求体是 JSON（auth 走请求头），解析 glossary_id；

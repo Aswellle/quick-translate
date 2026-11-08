@@ -40,6 +40,42 @@ use youdao::YoudaoProvider;
 /// 被克隆出注册表 —— 这是「不持锁跨越网络 I/O」的前提（计划第 11 节）。
 /// 单次翻译请求的可选上下文（计划 Task 10）。
 ///
+/// 翻译风格（计划 Task 10 后半）。
+///
+/// 只有 DeepL 的原生 formality 能表达 formal/informal，其余 provider
+/// 通过 trait 默认实现直接忽略。Natural（默认）= 不下发任何风格参数。
+/// 口语/技术文档/商务/学术需要 AI 类 Provider 的 prompt 能力，在能力
+/// 落地前不提供对应变体 —— 不假装支持。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TranslationStyle {
+    #[default]
+    Natural,
+    Formal,
+    Informal,
+}
+
+impl TranslationStyle {
+    /// 配置字符串 → 风格。未知值按 Natural 处理（与配置校验双保险：
+    /// 旧库残留的脏值不应让请求侧报错）。
+    pub fn from_config(value: &str) -> Self {
+        match value {
+            "formal" => Self::Formal,
+            "informal" => Self::Informal,
+            _ => Self::Natural,
+        }
+    }
+
+    /// 风格 → 配置字符串（缓存作用域令牌的风格位；Natural 返回空串，
+    /// 令牌保持旧形状）。
+    pub fn as_config_value(self) -> &'static str {
+        match self {
+            Self::Natural => "",
+            Self::Formal => "formal",
+            Self::Informal => "informal",
+        }
+    }
+}
+
 /// 默认全空 = 与既有 `translate(text, target)` 行为完全一致；只有支持
 /// 原生 glossary 的 provider（当前 DeepL）会读取这些字段，其余 provider
 /// 通过 trait 默认实现直接忽略 —— 不改变它们已有的请求形态。
@@ -59,6 +95,9 @@ pub struct TranslateOptions {
     /// 腾讯云：术语库 ID 列表（`TermRepoIDList`，空 = 不使用）。
     /// 术语内容在腾讯云控制台维护，2024-07 起 TextTranslate 支持该参数。
     pub tencent_term_repo_ids: Vec<String>,
+    /// 翻译风格。只有 DeepL 读取；目标语言不支持 formality 时由
+    /// DeepL 请求侧自行忽略（见 deepl::FORMALITY_TARGET_LANGS）。
+    pub style: TranslationStyle,
 }
 
 #[async_trait]
