@@ -13,6 +13,12 @@ interface HistoryState {
   pageSize: number;
   expandedId: string | null;
   starredOnly: boolean;
+  /** 来源类型筛选：null = 全部 */
+  sourceFilter: "clipboard" | "manual" | null;
+  /** 语言对筛选："en→zh"；null = 全部 */
+  languagePairFilter: string | null;
+  /** 翻译源筛选（provider id）；null = 全部 */
+  providerFilter: string | null;
 
   // Actions
   setRecords: (records: TranslationRecord[], total: number) => void;
@@ -21,6 +27,9 @@ interface HistoryState {
   setPage: (page: number) => void;
   setExpanded: (id: string | null | ((prev: string | null) => string | null)) => void;
   setStarredOnly: (value: boolean) => void;
+  setSourceFilter: (value: "clipboard" | "manual" | null) => void;
+  setLanguagePairFilter: (value: string | null) => void;
+  setProviderFilter: (value: string | null) => void;
   clearAll: () => void;
   removeRecord: (id: string) => void;
   toggleStar: (id: string, newValue: boolean) => void;
@@ -35,6 +44,9 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
   pageSize: 50,
   expandedId: null,
   starredOnly: false,
+  sourceFilter: null,
+  languagePairFilter: null,
+  providerFilter: null,
 
   setRecords: (records, total) => {
     // 返回页为空且不是第一页时回退一页：总数在会话中变少（删除、FIFO
@@ -56,6 +68,10 @@ export const useHistoryStore = create<HistoryState>((set, get) => ({
         typeof expandedId === "function" ? expandedId(state.expandedId) : expandedId,
     })),
   setStarredOnly: (starredOnly) => set({ starredOnly, page: 0 }),
+  // 每个筛选维度变化都回第一页：筛选后的总数变小，停留原页可能越界
+  setSourceFilter: (sourceFilter) => set({ sourceFilter, page: 0 }),
+  setLanguagePairFilter: (languagePairFilter) => set({ languagePairFilter, page: 0 }),
+  setProviderFilter: (providerFilter) => set({ providerFilter, page: 0 }),
   clearAll: () => set({ records: [], total: 0, expandedId: null }),
   removeRecord: (id) =>
     set((state) => {
