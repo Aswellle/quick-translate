@@ -31,11 +31,15 @@ vi.mock("@/components/ToastManager", () => ({ toast: vi.fn() }));
 
 import {
   createGlossaryEntry,
+  deleteGlossaryEntry,
+  importGlossaryJson,
   listGlossaryEntries,
 } from "@/lib/commands";
 
 const mockedList = vi.mocked(listGlossaryEntries);
 const mockedCreate = vi.mocked(createGlossaryEntry);
+const mockedDelete = vi.mocked(deleteGlossaryEntry);
+const mockedImportJson = vi.mocked(importGlossaryJson);
 
 function config(provider: string): AppConfig {
   return {
@@ -315,5 +319,70 @@ describe("GlossaryTab", () => {
     });
     expect(container.textContent).toContain("该语言对还没有术语");
     expect(container.textContent).not.toContain("术语表读取失败");
+  });
+
+  // 破坏性操作守卫回归：删除与导入替换都是不可恢复动作，必须先确认；
+  // 与「清空该语言对」的确认标准对齐（历史窗口单条删除同款）。
+  it("单条删除先确认：取消不调用，确认才删除", async () => {
+    const entry: GlossaryEntry = {
+      id: 7,
+      source_lang: "en",
+      target_lang: "zh",
+      source_term: "Apple",
+      target_term: "苹果",
+      note: "",
+      case_sensitive: false,
+      created_at: 0,
+      updated_at: 0,
+    };
+    mockedList.mockResolvedValue([entry]);
+    mockedDelete.mockResolvedValue(true);
+    render();
+    await act(async () => {});
+
+    clickByText(container, "删除");
+    expect(container.textContent).toContain("删除这条术语？");
+    expect(mockedDelete).not.toHaveBeenCalled();
+
+    clickByText(container, "取消");
+    expect(mockedDelete).not.toHaveBeenCalled();
+
+    clickByText(container, "删除");
+    await act(async () => {
+      clickByText(container, "确认删除");
+    });
+    expect(mockedDelete).toHaveBeenCalledWith(7);
+  });
+
+  it("导入先确认再替换：确认后才读取文件内容", async () => {
+    mockedList.mockResolvedValue([]);
+    mockedImportJson.mockResolvedValue(2);
+    render();
+    await act(async () => {});
+
+    const input = container.querySelector(
+      'input[accept=".json,application/json"]'
+    ) as HTMLInputElement;
+    const file = new File(
+      ['[{"source_term":"A","target_term":"B"}]'],
+      "g.json",
+      { type: "application/json" }
+    );
+    Object.defineProperty(input, "files", { value: [file] });
+    act(() => {
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+
+    expect(container.textContent).toContain("导入并替换当前语言对的术语？");
+    expect(mockedImportJson).not.toHaveBeenCalled();
+
+    await act(async () => {
+      clickByText(container, "确认导入");
+    });
+    expect(mockedImportJson).toHaveBeenCalledWith(
+      "en",
+      "zh",
+      '[{"source_term":"A","target_term":"B"}]'
+    );
   });
 });

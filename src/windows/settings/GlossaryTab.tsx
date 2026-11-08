@@ -93,6 +93,10 @@ export function GlossaryTab({
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
+  // 破坏性操作守卫：单条删除与整批导入替换都在用户确认后才执行 ——
+  // 同一窗口里「清空该语言对」有二次确认，危害相同的这两个入口不能裸奔
+  const [pendingDelete, setPendingDelete] = useState<{ id: number; term: string } | null>(null);
+  const [pendingImport, setPendingImport] = useState<{ file: File; kind: "json" | "csv" } | null>(null);
 
   const jsonInputRef = useRef<HTMLInputElement>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
@@ -200,6 +204,36 @@ export function GlossaryTab({
     }
   };
 
+  /** 确认后执行单条删除；取消不产生任何调用 */
+  const confirmDelete = () => {
+    const target = pendingDelete;
+    setPendingDelete(null);
+    if (target) void remove(target.id);
+  };
+
+  /** 选完文件先确认再替换 —— 导入是整批覆盖，误选旧文件会静默清掉
+      当前语言对的全部条目且无法恢复 */
+  const importFile = (file: File, kind: "json" | "csv") => {
+    setPendingImport({ file, kind });
+  };
+
+  const confirmImport = async () => {
+    const pending = pendingImport;
+    setPendingImport(null);
+    if (!pending) return;
+    try {
+      const content = await pending.file.text();
+      const written =
+        pending.kind === "json"
+          ? await importGlossaryJson(sourceLang, targetLang, content)
+          : await importGlossaryCsv(sourceLang, targetLang, content);
+      toast(`已导入 ${written} 条术语（替换当前语言对）`, "success");
+      await reload();
+    } catch (err) {
+      toast(`导入失败：${errorMessage(err)}`, "error");
+    }
+  };
+
   const clearPair = async () => {
     setConfirmClear(false);
     try {
@@ -208,20 +242,6 @@ export function GlossaryTab({
       await reload();
     } catch (err) {
       toast(`清除失败：${errorMessage(err)}`, "error");
-    }
-  };
-
-  const importFile = async (file: File, kind: "json" | "csv") => {
-    try {
-      const content = await file.text();
-      const written =
-        kind === "json"
-          ? await importGlossaryJson(sourceLang, targetLang, content)
-          : await importGlossaryCsv(sourceLang, targetLang, content);
-      toast(`已导入 ${written} 条术语（替换当前语言对）`, "success");
-      await reload();
-    } catch (err) {
-      toast(`导入失败：${errorMessage(err)}`, "error");
     }
   };
 
@@ -295,6 +315,10 @@ export function GlossaryTab({
           value={sourceLang}
           onChange={(e) => {
             resetForm();
+            // 语言对切换让待确认的删除/导入失效：待导入文件是按旧语言对
+            // 选的，确认对话框却展示当前语言对 —— 确认会在新对上执行
+            setPendingDelete(null);
+            setPendingImport(null);
             setSourceLang(e.target.value);
           }}
           className="input-field text-xs py-1.5 flex-1 min-w-0"
@@ -310,6 +334,8 @@ export function GlossaryTab({
           value={targetLang}
           onChange={(e) => {
             resetForm();
+            setPendingDelete(null);
+            setPendingImport(null);
             setTargetLang(e.target.value);
           }}
           className="input-field text-xs py-1.5 flex-1 min-w-0"
@@ -440,7 +466,12 @@ export function GlossaryTab({
                     </button>
                     <button
                       type="button"
-                      onClick={() => void remove(entry.id)}
+                      onClick={() =>
+                        setPendingDelete({
+                          id: entry.id,
+                          term: `${entry.source_term} → ${entry.target_term}`,
+                        })
+                      }
                       className="text-[11px] px-2 py-0.5 rounded border border-[var(--border-primary)] hover:bg-[var(--hover-bg)] text-red-500"
                     >
                       删除
@@ -508,6 +539,26 @@ export function GlossaryTab({
           confirmLabel="确认清空"
           onConfirm={() => void clearPair()}
           onCancel={() => setConfirmClear(false)}
+        />
+      )}
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title="删除这条术语？"
+          description={`将删除「${pendingDelete.term}」，删除后无法恢复。`}
+          confirmLabel="确认删除"
+          onConfirm={confirmDelete}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
+
+      {pendingImport && (
+        <ConfirmDialog
+          title="导入并替换当前语言对的术语？"
+          description={`将用所选${pendingImport.kind.toUpperCase()} 文件整批替换 ${sourceLang} → ${targetLang} 的全部条目（当前 ${entries.length} 条），其他语言对不受影响。`}
+          confirmLabel="确认导入"
+          onConfirm={() => void confirmImport()}
+          onCancel={() => setPendingImport(null)}
         />
       )}
     </div>
