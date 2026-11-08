@@ -123,6 +123,11 @@ const BOOL_KEYS: &[&str] = &[
 /// 界面主题的合法取值
 const THEME_VALUES: &[&str] = &["system", "light", "dark"];
 
+/// 翻译风格取值（计划 Task 10）。natural = 不下发风格参数；
+/// formal/informal 映射 DeepL formality 的 more/less，且仅对支持的目标
+/// 语言生效 —— 不支持的翻译源在请求侧忽略，UI 如实标注。
+const TRANSLATION_STYLE_VALUES: &[&str] = &["natural", "formal", "informal"];
+
 /// 支持的目标语言（与前端 SUPPORTED_LANGUAGES 一致）
 const TARGET_LANGS: &[&str] = crate::types::SUPPORTED_LANGS;
 
@@ -147,6 +152,7 @@ fn validate_value(key: &str, value: &str) -> Result<(), AppError> {
         "provider"
             | "target_lang"
             | "theme"
+            | "translation_style"
             | "history_limit"
             | "export_dir"
             | "hotkey_translate_clipboard"
@@ -172,6 +178,11 @@ fn validate_value(key: &str, value: &str) -> Result<(), AppError> {
         }
         "theme" => {
             if !THEME_VALUES.contains(&value) {
+                return Err(invalid());
+            }
+        }
+        "translation_style" => {
+            if !TRANSLATION_STYLE_VALUES.contains(&value) {
                 return Err(invalid());
             }
         }
@@ -470,6 +481,9 @@ mod tests {
         assert!(validate_value("provider", "deepl").is_ok());
         assert!(validate_value("theme", "system").is_ok());
         assert!(validate_value("theme", "dark").is_ok());
+        assert!(validate_value("translation_style", "natural").is_ok());
+        assert!(validate_value("translation_style", "formal").is_ok());
+        assert!(validate_value("translation_style", "informal").is_ok());
         assert!(validate_value("auto_start", "true").is_ok());
         assert!(validate_value("fallback_enabled", "false").is_ok());
         assert!(validate_value("onboarding_completed", "true").is_ok());
@@ -499,6 +513,15 @@ mod tests {
         }
         assert!(validate_value("deepl_api_key", "some-key:fx").is_ok());
         assert!(validate_value("tencent_secret_id", "AKIDxx").is_ok());
+    }
+
+    #[test]
+    fn translation_style_rejects_unknown_values() {
+        // 口语/技术文档/商务/学术等需要 AI 类 Provider 的 prompt 能力，
+        // 在能力落地前不许写进配置（不假装支持）
+        assert!(err("translation_style", "casual").contains("非法"));
+        assert!(err("translation_style", "technical").contains("非法"));
+        assert!(err("translation_style", "").contains("非法"));
     }
 
     // ── export_dir 的形态约束 ───────────────────────────────────────────
