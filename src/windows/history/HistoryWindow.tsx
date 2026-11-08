@@ -379,7 +379,15 @@ export function HistoryWindow() {
           isLoading ? (
             <LoadingPlaceholder />
           ) : (
-            <EmptyState hasSearch={!!searchQuery} starredOnly={starredOnly} />
+            <EmptyState
+              hasSearch={!!searchQuery}
+              starredOnly={starredOnly}
+              hasFilter={
+                sourceFilter !== null ||
+                languagePairFilter !== null ||
+                providerFilter !== null
+              }
+            />
           )
         ) : (
           <>
@@ -485,10 +493,14 @@ function LoadingPlaceholder() {
 function EmptyState({
   hasSearch,
   starredOnly,
+  hasFilter,
 }: {
   hasSearch: boolean;
   starredOnly: boolean;
+  /** 来源/语言对/翻译源筛选激活中：空态是「筛选无结果」而非「没有记录」 */
+  hasFilter: boolean;
 }) {
+  const filtered = hasSearch || hasFilter;
   return (
     <div className="flex flex-col items-center justify-center h-full gap-3 text-[var(--text-secondary)] animate-fade-in">
       <div className="w-16 h-16 rounded-2xl bg-[var(--surface-tertiary)] dark:bg-[var(--surface-secondary)] flex items-center justify-center shadow-sm">
@@ -505,8 +517,8 @@ function EmptyState({
       </div>
       <div className="text-center space-y-1">
         <p className="text-[13px] font-medium text-[var(--text-secondary)]">
-          {hasSearch
-            ? "没有找到匹配的记录"
+          {filtered
+            ? "没有符合当前条件的记录"
             : starredOnly
             ? "暂无收藏记录"
             : "暂无翻译历史"}
@@ -514,7 +526,12 @@ function EmptyState({
         {hasSearch && (
           <p className="text-[12px] text-[var(--text-secondary)]">试试其他关键词</p>
         )}
-        {!hasSearch && !starredOnly && (
+        {!hasSearch && hasFilter && (
+          <p className="text-[12px] text-[var(--text-secondary)]">
+            试一下放宽筛选条件，或点「清除筛选」
+          </p>
+        )}
+        {!filtered && !starredOnly && (
           <p className="text-[12px] text-[var(--text-secondary)]">
             复制文字即翻译，记录会自动保存在这里
           </p>
