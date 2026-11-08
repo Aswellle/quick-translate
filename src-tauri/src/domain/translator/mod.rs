@@ -51,6 +51,11 @@ pub struct TranslateOptions {
     pub glossary_id: Option<String>,
     /// 本次实际应用的术语表指纹（缓存键用；None = 未应用术语表）。
     pub glossary_fingerprint: Option<String>,
+    /// 百度通用接口：使用控制台「我的术语库」（`needIntervene=1`）。
+    /// 术语内容由用户在百度控制台维护，应用只负责开关。
+    pub baidu_use_term_base: bool,
+    /// 有道智云：控制台术语表 ID（`vocabId`，None/空 = 不使用）。
+    pub youdao_vocab_id: Option<String>,
 }
 
 #[async_trait]

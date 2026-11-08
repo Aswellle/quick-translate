@@ -117,6 +117,7 @@ const BOOL_KEYS: &[&str] = &[
     "reduce_transparency",
     "cache_enabled",
     "glossary_enabled",
+    "baidu_use_term_base",
 ];
 
 /// 界面主题的合法取值
@@ -151,6 +152,7 @@ fn validate_value(key: &str, value: &str) -> Result<(), AppError> {
             | "hotkey_translate_clipboard"
             | "hotkey_open_manual"
             | "hotkey_toggle_monitor"
+            | "youdao_vocab_id"
     ) || BOOL_KEYS.contains(&key)
         || CREDENTIAL_KEYS.contains(&key);
     if !known {
@@ -200,6 +202,12 @@ fn validate_value(key: &str, value: &str) -> Result<(), AppError> {
         // 明显异常的长度，避免把任意大字符串写进配置
         "hotkey_translate_clipboard" | "hotkey_open_manual" | "hotkey_toggle_monitor" => {
             if value.chars().count() > 100 {
+                return Err(invalid());
+            }
+        }
+        // 术语表 ID 由有道控制台生成；允许清空（= 不使用）
+        "youdao_vocab_id" => {
+            if value.chars().count() > 200 {
                 return Err(invalid());
             }
         }

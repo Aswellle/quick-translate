@@ -29,7 +29,7 @@ struct KeyDescriptor {
 /// 布尔/整数键（auto_start / history_limit / fallback_enabled /
 /// onboarding_completed / clipboard_monitor_enabled /
 /// sensitive_filter_enabled / reduce_transparency / cache_enabled /
-/// glossary_enabled）
+/// glossary_enabled / baidu_use_term_base）
 /// 的解析各自带类型转换与钳制逻辑，留在 match 里，表只收字符串直存类键。
 const KEY_DESCRIPTORS: &[KeyDescriptor] = &[
     KeyDescriptor {
@@ -73,6 +73,12 @@ const KEY_DESCRIPTORS: &[KeyDescriptor] = &[
         encrypted: false,
         get_credential: None,
         set_string: Some(|c, v| c.hotkey_toggle_monitor = v),
+    },
+    KeyDescriptor {
+        key: "youdao_vocab_id",
+        encrypted: false,
+        get_credential: None,
+        set_string: Some(|c, v| c.youdao_vocab_id = v),
     },
     KeyDescriptor {
         key: "deepl_api_key",
@@ -215,6 +221,10 @@ impl ConfigService {
             "provider" => Some(self.cache.provider.clone()),
             "theme" => Some(self.cache.theme.clone()),
             "export_dir" => Some(self.cache.export_dir.clone()),
+            "hotkey_translate_clipboard" => Some(self.cache.hotkey_translate_clipboard.clone()),
+            "hotkey_open_manual" => Some(self.cache.hotkey_open_manual.clone()),
+            "hotkey_toggle_monitor" => Some(self.cache.hotkey_toggle_monitor.clone()),
+            "youdao_vocab_id" => Some(self.cache.youdao_vocab_id.clone()),
             "auto_start" => Some(self.cache.auto_start.to_string()),
             "history_limit" => Some(self.cache.history_limit.to_string()),
             "fallback_enabled" => Some(self.cache.fallback_enabled.to_string()),
@@ -224,6 +234,7 @@ impl ConfigService {
             "reduce_transparency" => Some(self.cache.reduce_transparency.to_string()),
             "cache_enabled" => Some(self.cache.cache_enabled.to_string()),
             "glossary_enabled" => Some(self.cache.glossary_enabled.to_string()),
+            "baidu_use_term_base" => Some(self.cache.baidu_use_term_base.to_string()),
             _ => None,
         }
     }
@@ -318,6 +329,7 @@ impl ConfigService {
             "reduce_transparency" => self.cache.reduce_transparency = value == "true",
             "cache_enabled" => self.cache.cache_enabled = value == "true",
             "glossary_enabled" => self.cache.glossary_enabled = value == "true",
+            "baidu_use_term_base" => self.cache.baidu_use_term_base = value == "true",
             _ => {}
         }
     }
@@ -422,6 +434,9 @@ fn load_config_from_db(conn: &Connection) -> Result<AppConfig, AppError> {
             }
             "glossary_enabled" => {
                 config.glossary_enabled = decode(&raw) == "true";
+            }
+            "baidu_use_term_base" => {
+                config.baidu_use_term_base = decode(&raw) == "true";
             }
             _ => {}
         }
@@ -654,6 +669,32 @@ mod tests {
         drop(conn);
         assert!(!reloaded.glossary_enabled);
     }
+
+    /// 控制台术语库引用键：布尔开关与字符串 ID 都走三条路径。
+    #[test]
+    fn console_term_base_keys_roundtrip() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let db = test_db();
+        let mut svc = fresh_service(db);
+
+        assert_eq!(svc.get("baidu_use_term_base").as_deref(), Some("false"));
+        assert_eq!(svc.get("youdao_vocab_id").as_deref(), Some(""));
+
+        rt.block_on(async {
+            svc.set("baidu_use_term_base", "true").await.unwrap();
+            svc.set("youdao_vocab_id", "vocab-1").await.unwrap();
+        });
+
+        let shared = svc.db.try_conn().unwrap();
+        let conn = shared.blocking_lock();
+        let reloaded = load_config_from_db(&conn).unwrap();
+        drop(conn);
+        assert!(reloaded.baidu_use_term_base);
+        assert_eq!(reloaded.youdao_vocab_id, "vocab-1");
+    }
 }
 
 #[cfg(test)]
@@ -828,6 +869,7 @@ fn read_field_for_test(config: &AppConfig, key: &str) -> String {
         "hotkey_translate_clipboard" => config.hotkey_translate_clipboard.clone(),
         "hotkey_open_manual" => config.hotkey_open_manual.clone(),
         "hotkey_toggle_monitor" => config.hotkey_toggle_monitor.clone(),
+        "youdao_vocab_id" => config.youdao_vocab_id.clone(),
         _ => String::new(),
     }
 }

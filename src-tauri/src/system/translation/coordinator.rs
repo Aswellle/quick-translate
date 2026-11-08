@@ -431,9 +431,23 @@ async fn run_translation(app: &AppHandle, request: TranslationRequest) {
         "[coordinator] 开始翻译"
     );
 
+    // 控制台术语库引用（百度/有道）：配置随请求读取，改配置立即生效，
+    // 不需要重建 provider。剪贴板路径没有显式源语言 → 不应用 DeepL glossary。
+    let options = {
+        let cfg = state.config.read().await;
+        crate::domain::translator::TranslateOptions {
+            baidu_use_term_base: cfg
+                .get("baidu_use_term_base")
+                .map(|v| v == "true")
+                .unwrap_or(false),
+            youdao_vocab_id: cfg.get("youdao_vocab_id").filter(|v| !v.is_empty()),
+            ..Default::default()
+        }
+    };
+
     let outcome = state
         .translator
-        .translate(&request.text, &request.target_lang)
+        .translate_with_options(&request.text, &request.target_lang, &options)
         .await;
 
     // 网络组件的结论由**翻译源的整体健康**给出，而不是让界面从「刚才翻译

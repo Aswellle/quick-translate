@@ -81,10 +81,22 @@ pub async fn translate_text(
         .as_ref()
         .map(|g| g.fingerprint.clone())
         .unwrap_or_default();
+    // 控制台术语库引用（百度/有道）：随请求读取，改配置立即生效。
+    let (baidu_use_term_base, youdao_vocab_id) = {
+        let cfg = state.config.read().await;
+        (
+            cfg.get("baidu_use_term_base")
+                .map(|v| v == "true")
+                .unwrap_or(false),
+            cfg.get("youdao_vocab_id").filter(|v| !v.is_empty()),
+        )
+    };
     let options = crate::domain::translator::TranslateOptions {
         source_lang: source_lang.clone(),
         glossary_id: applied_glossary.as_ref().map(|g| g.glossary_id.clone()),
         glossary_fingerprint: applied_glossary.as_ref().map(|g| g.fingerprint.clone()),
+        baidu_use_term_base,
+        youdao_vocab_id,
     };
 
     // 调用翻译引擎（带上下文：显式源语言 + 已同步的 glossary）

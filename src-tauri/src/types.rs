@@ -229,6 +229,11 @@ pub struct AppConfig {
     /// 只有支持原生 glossary 的 Provider 会真正生效（当前为 DeepL），
     /// 其余 Provider 在设置页如实标记为不支持。
     pub glossary_enabled: bool,
+    /// 百度通用接口：使用控制台「我的术语库」（请求参数 needIntervene=1）。
+    /// 术语内容只能在百度控制台维护，应用只负责开关。
+    pub baidu_use_term_base: bool,
+    /// 有道智云控制台术语表 ID（请求参数 vocabId）。空串 = 不使用。
+    pub youdao_vocab_id: String,
 }
 
 impl Default for AppConfig {
@@ -257,6 +262,8 @@ impl Default for AppConfig {
             hotkey_open_manual: "CmdOrControl+Alt+M".to_string(),
             hotkey_toggle_monitor: "CmdOrControl+Alt+P".to_string(),
             glossary_enabled: true,
+            baidu_use_term_base: false,
+            youdao_vocab_id: String::new(),
         }
     }
 }

@@ -632,6 +632,7 @@ mod tests {
             source_lang: Some("en".to_string()),
             glossary_id: Some("glossary-123".to_string()),
             glossary_fingerprint: Some("fp".to_string()),
+            ..Default::default()
         };
         let result = tauri::async_runtime::block_on(
             provider.translate_with_options("hello", "zh", &options),
