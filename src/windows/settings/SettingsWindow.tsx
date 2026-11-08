@@ -250,6 +250,10 @@ export function SettingsWindow({
     hotkey_toggle_monitor: "暂停/恢复监控快捷键",
     hotkey_toggle_popup: "显示/隐藏浮窗快捷键",
     hotkey_retranslate_last: "重新翻译快捷键",
+    glossary_enabled: "术语表",
+    baidu_use_term_base: "百度控制台术语库",
+    youdao_vocab_id: "有道词汇表ID",
+    tencent_term_repo_ids: "腾讯云术语库ID",
   };
 
   /** 凭证字段在加载时已被清空；这里还原哪些键属于凭证（即时生效模型下
