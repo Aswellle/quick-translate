@@ -150,6 +150,7 @@ export function ManualTranslateWindow() {
               void run();
             }
           }}
+          aria-label="要翻译的文本"
           placeholder="输入或粘贴要翻译的文本（Ctrl+Enter 翻译）"
           rows={5}
           className="input-field w-full font-normal text-[13px] leading-relaxed resize-none"
@@ -161,12 +162,16 @@ export function ManualTranslateWindow() {
       {(result || error) && (
         <div className="px-4 mt-2 min-h-0 overflow-y-auto">
           {error ? (
-            <p className="px-3 py-2.5 text-[13px] font-medium text-[var(--popup-text-primary)] leading-relaxed rounded-lg bg-[var(--surface-secondary)]">
+            <p
+              role="alert"
+              className="px-3 py-2.5 text-[13px] font-medium text-[var(--popup-text-primary)] leading-relaxed rounded-lg bg-[var(--surface-secondary)]"
+            >
               {error}
             </p>
           ) : (
             result && (
               <>
+                {/* 翻译完成对键盘与读屏用户不可见 —— 结果以 role=status 播报 */}
                 <div className="px-1 pb-1.5 flex items-center gap-2">
                   <span className="text-[11px] font-semibold text-[var(--text-secondary)] tracking-wide uppercase">
                     {result.provider === "cache"
@@ -179,7 +184,10 @@ export function ManualTranslateWindow() {
                     </span>
                   )}
                 </div>
-                <div className="px-3 py-2.5 text-[13.5px] font-medium leading-[1.8] text-[var(--popup-text-primary)] rounded-lg bg-[var(--surface-secondary)] whitespace-pre-wrap break-words selectable">
+                <div
+                  role="status"
+                  className="px-3 py-2.5 text-[13.5px] font-medium leading-[1.8] text-[var(--popup-text-primary)] rounded-lg bg-[var(--surface-secondary)] whitespace-pre-wrap break-words selectable"
+                >
                   {result.translated_text}
                 </div>
                 <div className="pt-1.5 flex justify-end">
