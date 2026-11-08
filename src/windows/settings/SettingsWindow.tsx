@@ -265,13 +265,13 @@ export function SettingsWindow({
   // 在途持久化的键：乐观写入的 IPC 未决期间，外部真值（config-changed
   // 广播 / 失败后的对账）不得覆盖它 —— 否则迟到的旧值会把乐观更新打回去，
   // 后端却以乐观值为准，界面就此与后端漂移
-  const inFlightKeysRef = useRef<Set<string>>(new Set());
+  const inFlightKeysRef = useRef<Map<string, number>>(new Map());
 
   // 后端真值落到本地：草稿与全局 store 各合并一次（凭证字段与
   // auto_start 由 mergeExternalConfig 统一跳过 —— 前者是掩码占位符，
   // 后者的权威在注册表，载荷里的配置库副本可能落后）
   const applyBackendTruth = useCallback((truth: Partial<AppConfig>) => {
-    const skip = (k: string) => inFlightKeysRef.current.has(k);
+    const skip = (k: string) => (inFlightKeysRef.current.get(k) ?? 0) > 0;
     setDraft((prev) => {
       if (!prev) return prev;
       const { merged, changed } = mergeExternalConfig(prev, truth, skip);
@@ -312,7 +312,11 @@ export function SettingsWindow({
         delete next[providerId];
         return next;
       });
-      inFlightKeysRef.current.add(key as string);
+      // 同键并发写入按引用计数：第一次 settle 的删除不能把仍在途的
+      // 第二次写入摘出守卫 —— 否则第一次写入触发的 config-changed 广播
+      // 会把第二次的乐观值打回
+      const n = (inFlightKeysRef.current.get(key as string) ?? 0) + 1;
+      inFlightKeysRef.current.set(key as string, n);
       try {
         await setConfigBatch([[key as string, String(value)]]);
         // 主题即时广播（其余键的后端副作用在 set_config 管线内已处理）
@@ -359,7 +363,12 @@ export function SettingsWindow({
           });
         return false;
       } finally {
-        inFlightKeysRef.current.delete(key as string);
+        const n = (inFlightKeysRef.current.get(key as string) ?? 1) - 1;
+        if (n <= 0) {
+          inFlightKeysRef.current.delete(key as string);
+        } else {
+          inFlightKeysRef.current.set(key as string, n);
+        }
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
