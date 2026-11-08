@@ -241,6 +241,20 @@ export function GlossaryTab({
           <p className={`text-[11px] leading-relaxed ${noteInfo.className}`}>
             {noteInfo.text}
           </p>
+          {draft.provider === "baidu" && (
+            <ToggleRow
+              label="使用百度控制台术语库"
+              hint="请求参数 needIntervene=1；术语在百度控制台「我的术语库」维护，提交后约 10 分钟生效"
+              value={draft.baidu_use_term_base}
+              onApply={(v) => applyConfig("baidu_use_term_base", v, "inline")}
+            />
+          )}
+          {draft.provider === "youdao" && (
+            <VocabIdRow
+              value={draft.youdao_vocab_id}
+              onCommit={(v) => applyConfig("youdao_vocab_id", v, "toast")}
+            />
+          )}
         </div>
       </div>
 
@@ -454,6 +468,50 @@ export function GlossaryTab({
           onCancel={() => setConfirmClear(false)}
         />
       )}
+    </div>
+  );
+}
+
+/** 有道控制台术语表 ID：失焦提交（与凭证字段同一即时生效模型）。 */
+function VocabIdRow({
+  value,
+  onCommit,
+}: {
+  value: string;
+  onCommit: (v: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  return (
+    <div className="flex items-start justify-between gap-3">
+      <div className="min-w-0">
+        <p className="text-[13px] font-medium text-[var(--text-primary)]">
+          控制台术语表 ID
+        </p>
+        <p className="text-[11px] text-[var(--text-secondary)] mt-0.5 leading-snug">
+          有道控制台上传术语表后取得的 out_id（请求参数 vocabId）；留空不使用。
+        </p>
+      </div>
+      <input
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => {
+          if (draft !== value) onCommit(draft.trim());
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.currentTarget.blur();
+          }
+        }}
+        placeholder="vocabId"
+        className="input-field text-xs py-1.5 w-44 shrink-0"
+        aria-label="有道术语表 ID"
+        spellCheck={false}
+      />
     </div>
   );
 }

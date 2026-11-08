@@ -78,6 +78,10 @@ export interface AppConfig {
   hotkey_toggle_monitor: string;
   /** 术语表总开关（按语言对管理；只对支持原生 glossary 的 Provider 生效） */
   glossary_enabled: boolean;
+  /** 百度：使用控制台「我的术语库」（needIntervene=1） */
+  baidu_use_term_base: boolean;
+  /** 有道：控制台术语表 ID（vocabId，空串 = 不使用） */
+  youdao_vocab_id: string;
 }
 
 /** 单个全局快捷键的注册状态（Rust `system::hotkeys::HotkeyStatus`） */

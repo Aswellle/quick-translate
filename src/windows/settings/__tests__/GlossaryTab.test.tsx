@@ -62,6 +62,8 @@ function config(provider: string): AppConfig {
     hotkey_open_manual: "CmdOrControl+Alt+M",
     hotkey_toggle_monitor: "CmdOrControl+Alt+P",
     glossary_enabled: true,
+    baidu_use_term_base: false,
+    youdao_vocab_id: "",
   };
 }
 
@@ -93,9 +95,17 @@ function clickByText(container: HTMLElement, text: string) {
 describe("GlossaryTab", () => {
   let container: HTMLElement;
   let root: Root;
+  const applyConfig = vi.fn<
+    (
+      key: keyof AppConfig,
+      value: AppConfig[keyof AppConfig],
+      feedback: "inline" | "toast" | null
+    ) => void
+  >();
 
   beforeEach(() => {
     vi.clearAllMocks();
+    applyConfig.mockClear();
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -104,7 +114,7 @@ describe("GlossaryTab", () => {
   function render(provider = "deepl") {
     act(() => {
       root.render(
-        <GlossaryTab draft={config(provider)} applyConfig={() => {}} />
+        <GlossaryTab draft={config(provider)} applyConfig={applyConfig} />
       );
     });
   }
@@ -172,5 +182,22 @@ describe("GlossaryTab", () => {
     render("google");
     await act(async () => {});
     expect(container.textContent).toContain("不支持术语表");
+  });
+
+  it("百度翻译源提供控制台术语库开关", async () => {
+    mockedList.mockResolvedValue([]);
+    render("baidu");
+    await act(async () => {});
+    // 第一个开关是「启用术语表」，第二个是百度控制台术语库
+    const switches = container.querySelectorAll('[role="switch"]');
+    expect(switches.length).toBeGreaterThanOrEqual(2);
+    act(() => {
+      (switches[1] as HTMLButtonElement).click();
+    });
+    expect(applyConfig).toHaveBeenCalledWith(
+      "baidu_use_term_base",
+      true,
+      "inline"
+    );
   });
 });
