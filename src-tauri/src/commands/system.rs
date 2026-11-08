@@ -732,18 +732,27 @@ pub async fn open_onboarding_window(app: AppHandle) -> Result<(), AppError> {
     }
 
     // 创建居中的向导窗口
-    match tauri::WebviewWindowBuilder::new(
-        &app,
-        "onboarding",
-        tauri::WebviewUrl::App("index.html#onboarding".into()),
-    )
-    .title("QuickTranslate 设置向导")
-    .additional_browser_args(crate::system::BROWSER_ARGS)
-    .inner_size(480.0, 600.0)
-    .min_inner_size(400.0, 500.0)
-    .resizable(true)
-    .center()
-    .build()
+    let builder = match crate::isolated_webview_dir() {
+        Some(dir) => tauri::WebviewWindowBuilder::new(
+            &app,
+            "onboarding",
+            tauri::WebviewUrl::App("index.html#onboarding".into()),
+        )
+        .data_directory(dir),
+        None => tauri::WebviewWindowBuilder::new(
+            &app,
+            "onboarding",
+            tauri::WebviewUrl::App("index.html#onboarding".into()),
+        ),
+    };
+    match builder
+        .title("QuickTranslate 设置向导")
+        .additional_browser_args(crate::system::BROWSER_ARGS)
+        .inner_size(480.0, 600.0)
+        .min_inner_size(400.0, 500.0)
+        .resizable(true)
+        .center()
+        .build()
     {
         Ok(window) => {
             let _ = window.show();

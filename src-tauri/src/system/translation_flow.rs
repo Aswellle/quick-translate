@@ -139,28 +139,38 @@ fn build_popup_window(
 ) -> tauri::Result<WebviewWindow> {
     log_material_decision();
 
-    let window =
-        WebviewWindowBuilder::new(app, POPUP_LABEL, WebviewUrl::App("index.html#popup".into()))
-            .title("QuickTranslate")
-            .additional_browser_args(crate::system::BROWSER_ARGS)
-            .decorations(false)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            // 非激活窗口（Windows 上即 WS_EX_NOACTIVATE）：显示时不抢焦点，
-            // 不把用户从正在编辑的地方带走（Phase 8b / 计划第 19 节）
-            .focusable(false)
-            // 始终隐藏建窗：见上方注释，可见性由末尾的 show() 决定
-            .visible(false)
-            .resizable(false)
-            // 透明背景：CSS 的圆角与阴影需要它才能真正透出桌面，
-            // 也是系统级材质生效的前提（见 popup_effects）
-            .transparent(true)
-            // 材质声明进 builder，由 build_internal 投递到主线程队列，
-            // 排在下面那次 show() 之前
-            .effects(popup_effects())
-            .inner_size(POPUP_LOGICAL_W, POPUP_LOGICAL_H)
-            .position(position.0, position.1)
-            .build()?;
+    // e2e 隔离：设置 QUICKTRANSLATE_APP_DATA_DIR 时 WebView2 用户数据
+    // 落到隔离目录（未启用时 data_directory 不设，行为不变）
+    let builder = match crate::isolated_webview_dir() {
+        Some(dir) => {
+            WebviewWindowBuilder::new(app, POPUP_LABEL, WebviewUrl::App("index.html#popup".into()))
+                .data_directory(dir)
+        }
+        None => {
+            WebviewWindowBuilder::new(app, POPUP_LABEL, WebviewUrl::App("index.html#popup".into()))
+        }
+    };
+    let window = builder
+        .title("QuickTranslate")
+        .additional_browser_args(crate::system::BROWSER_ARGS)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
+        // 非激活窗口（Windows 上即 WS_EX_NOACTIVATE）：显示时不抢焦点，
+        // 不把用户从正在编辑的地方带走（Phase 8b / 计划第 19 节）
+        .focusable(false)
+        // 始终隐藏建窗：见上方注释，可见性由末尾的 show() 决定
+        .visible(false)
+        .resizable(false)
+        // 透明背景：CSS 的圆角与阴影需要它才能真正透出桌面，
+        // 也是系统级材质生效的前提（见 popup_effects）
+        .transparent(true)
+        // 材质声明进 builder，由 build_internal 投递到主线程队列，
+        // 排在下面那次 show() 之前
+        .effects(popup_effects())
+        .inner_size(POPUP_LOGICAL_W, POPUP_LOGICAL_H)
+        .position(position.0, position.1)
+        .build()?;
 
     if visible {
         let _ = window.show();

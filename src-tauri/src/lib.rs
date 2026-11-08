@@ -98,16 +98,31 @@ pub fn run() {
         .setup(|app| {
             let app_handle = app.handle().clone();
 
+            // ── 数据目录解析（e2e/开发隔离）─────────────────────────────────
+            // 设置 QUICKTRANSLATE_APP_DATA_DIR 时，应用数据（SQLite/日志/
+            // 密钥/配置）与 WebView2 用户数据全部落在指定目录 —— 测试进程
+            // 与真实用户数据彻底隔离；不设置时行为与从前完全一致。
+            let isolated_root = isolated_data_root();
+
             // ── Step 0: WebView2 用户数据目录清理 ─────────────────────────────
             // 必须在任何 webview 进程创建之前执行（否则缓存文件被锁定删不掉）。
             // EBWebView 下 GPU/磁盘缓存无上限累积（Tauri#8145 / WebView2Feedback#4410），
             // 长期使用可膨胀至数 GB；这些目录全部可再生，删除无损。
-            if let Ok(local_data_dir) = app.path().app_local_data_dir() {
-                cleanup_webview_cache(local_data_dir.join("EBWebView"));
-            }
+            let ebwebview_dir = match &isolated_root {
+                Some(root) => root.join("EBWebView"),
+                None => app
+                    .path()
+                    .app_local_data_dir()
+                    .expect("无法获取 Local Data 目录")
+                    .join("EBWebView"),
+            };
+            cleanup_webview_cache(&ebwebview_dir);
 
             // ── Step 1: 初始化基础设施层 ──────────────────────────────────────
-            let app_data_dir = app.path().app_data_dir().expect("无法获取 App Data 目录");
+            let app_data_dir = match &isolated_root {
+                Some(root) => root.clone(),
+                None => app.path().app_data_dir().expect("无法获取 App Data 目录"),
+            };
 
             // 日志系统需要 app_data_dir，在此初始化
             init_logging(&app_data_dir);
@@ -406,11 +421,45 @@ pub fn run() {
         .expect("QuickTranslate 启动失败");
 }
 
+/// e2e/开发隔离根目录：环境变量 QUICKTRANSLATE_APP_DATA_DIR 非空时返回
+/// Some(目录)，应用数据（SQLite/日志/密钥/配置）与 WebView2 用户数据都
+/// 落在其下；None = 正常路径，行为与从前一致。测试进程绝不能碰真实
+/// 用户数据 —— 这一个开关就是隔离的全部。
+pub(crate) fn isolated_data_root() -> Option<PathBuf> {
+    resolve_isolated_root(std::env::var("QUICKTRANSLATE_APP_DATA_DIR").ok())
+}
+
+/// 纯函数形态（便于测试）：非空白值 → 归一化的目录路径。
+fn resolve_isolated_root(env_value: Option<String>) -> Option<PathBuf> {
+    let trimmed = env_value?.trim().to_string();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(&trimmed);
+    if let Err(e) = std::fs::create_dir_all(&path) {
+        // 目录建不出来就退回正常路径 —— 隔离失败不该让应用起不来
+        tracing::warn!(
+            event = "isolated_data_dir_create_failed",
+            "[e2e] 隔离数据目录创建失败，回退正常路径: {}",
+            e
+        );
+        return None;
+    }
+    Some(path)
+}
+
+/// WebView2 用户数据目录：隔离模式下落在隔离根下（与 setup 的清理目标
+/// 一致），否则 None（用 Tauri 默认位置）。窗口构建点用它决定是否调用
+/// `data_directory`。
+pub(crate) fn isolated_webview_dir() -> Option<PathBuf> {
+    isolated_data_root().map(|root| root.join("EBWebView"))
+}
+
 /// 删除 WebView2 用户数据目录下可再生的缓存子目录（磁盘体积控制）。
 ///
 /// 必须在任何 webview 创建之前调用；删除失败（文件被占用）只告警不阻塞启动。
 /// 保留 `Default/` 根目录下的 profile 数据（Local Storage 等），只清纯缓存。
-fn cleanup_webview_cache(ebwebview_dir: PathBuf) {
+fn cleanup_webview_cache(ebwebview_dir: &Path) {
     const VOLATILE_DIRS: &[&str] = &[
         "GrShaderCache",
         "ShaderCache",
@@ -476,4 +525,22 @@ fn init_logging(app_data_dir: &Path) {
         .with(file_layer);
 
     tracing::subscriber::set_global_default(subscriber).expect("日志系统初始化失败");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 隔离目录解析：非空值归一化为路径，空白值与未设置退回正常路径。
+    /// （env 的全局性使直接 set_var 在并行测试里会互相污染 —— 覆盖面
+    /// 由纯函数形态承担。）
+    #[test]
+    fn resolve_isolated_root_normalizes_and_falls_back() {
+        assert_eq!(
+            resolve_isolated_root(Some("  D:/tmp/qt-e2e  ".to_string())),
+            Some(PathBuf::from("D:/tmp/qt-e2e"))
+        );
+        assert_eq!(resolve_isolated_root(Some("   ".to_string())), None);
+        assert_eq!(resolve_isolated_root(None), None);
+    }
 }
