@@ -4,12 +4,23 @@
 - Branch: main
 - Base commit: b64b04e（Merge pull request #80）
 - App version: 0.9.0
-- Current task: 全局快捷键（完成，待实机验证）；Task 10 术语表（数据层 + DeepL 同步 + 管理 UI 完成，真实 API 未验证）；下一步 opt-in 真实凭证验证或 Task 11 收尾
+- Current task: 全局快捷键（完成，待实机验证）；Task 10 术语表（数据层 + DeepL 同步 + 百度/有道控制台引用 + 管理 UI 完成，真实 API 未验证）；下一步腾讯参数复核或真实凭证验证
 - Working tree: 干净
 - 执行依据: docs/QUICK_TRANSLATE_AI_AGENT_DEVELOPMENT_PLAN.md（2026-11-07 修订）
 - 测试清单: docs/TEST_INVENTORY.md
 
 ## Completed
+
+### 2026-11-08 — 百度/有道控制台术语库引用
+- Changes:
+  - `TranslateOptions` 增加 `baidu_use_term_base` / `youdao_vocab_id`；配置随请求读取，改配置立即生效，不重建 provider。
+  - 百度开启后追加 `needIntervene=1`（官方接入文档的「我的术语库」开关）；有道配置后追加 `vocabId`。默认请求形状完全不变。
+  - 配置键贯通读取/缓存/重载与命令校验；剪贴板与手动路径都传入。
+  - 术语表页按当前翻译源显示入口：百度开关、有道 vocabId 输入（失焦提交）；**腾讯云参数名未从官方 API 参考确认，不提供配置，只保留说明**。
+- Tests: cargo test --lib **404 passed**（+3）；fmt/clippy PASS；vitest **87/87**（+1）；tsc/build PASS
+- Commit: 990bd05 / c907902
+- 未验证：真实百度/有道请求中的术语库效果（需真实凭证与已开通术语库的账号）。
+
 
 ### 2026-11-08 — Task 10 术语表：DeepL 同步、缓存指纹与管理 UI
 - Changes:
@@ -202,6 +213,6 @@
   - Required manual test: 显式 opt-in 的真实凭证测试
 
 ## Next task
-- Task 10 剩余：腾讯/百度/有道的「引用控制台术语库/开关」入口（参数细节先复核）；DeepL 真实凭证 contract test（opt-in）。
+- Task 10 剩余：腾讯云术语库参数名从官方 API 参考复核后再提供配置；百度/有道/DeepL 术语库效果的 opt-in 真实凭证验证。
 - 全局快捷键与术语表实机验证（Windows 优先）；macOS 未验证项继续保留。
-- 阻塞项：Task 08 剩余（供应商目录分类/AI 类目）待要求 19 解禁；腾讯/百度/有道术语表参数细节待复核。
+- 阻塞项：Task 08 剩余（供应商目录分类/AI 类目）待要求 19 解禁；腾讯云术语库参数待复核。
