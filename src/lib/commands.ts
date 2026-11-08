@@ -76,6 +76,7 @@ export interface AppConfig {
   hotkey_translate_clipboard: string;
   hotkey_open_manual: string;
   hotkey_toggle_monitor: string;
+  hotkey_toggle_popup: string;
   /** 术语表总开关（按语言对管理；只对支持原生 glossary 的 Provider 生效） */
   glossary_enabled: boolean;
   /** 百度：使用控制台「我的术语库」（needIntervene=1） */

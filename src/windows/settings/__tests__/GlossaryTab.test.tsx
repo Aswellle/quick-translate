@@ -61,6 +61,7 @@ function config(provider: string): AppConfig {
     hotkey_translate_clipboard: "CmdOrControl+Alt+T",
     hotkey_open_manual: "CmdOrControl+Alt+M",
     hotkey_toggle_monitor: "CmdOrControl+Alt+P",
+    hotkey_toggle_popup: "CmdOrControl+Alt+H",
     glossary_enabled: true,
     baidu_use_term_base: false,
     youdao_vocab_id: "",

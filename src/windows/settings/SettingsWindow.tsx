@@ -248,6 +248,7 @@ export function SettingsWindow({
     hotkey_translate_clipboard: "翻译剪贴板快捷键",
     hotkey_open_manual: "打开手动翻译快捷键",
     hotkey_toggle_monitor: "暂停/恢复监控快捷键",
+    hotkey_toggle_popup: "显示/隐藏浮窗快捷键",
   };
 
   /** 凭证字段在加载时已被清空；这里还原哪些键属于凭证（即时生效模型下

@@ -11,6 +11,7 @@ export const HOTKEY_CONFIG_KEYS: Record<string, keyof AppConfig> = {
   translate_clipboard: "hotkey_translate_clipboard",
   open_manual: "hotkey_open_manual",
   toggle_monitor: "hotkey_toggle_monitor",
+  toggle_popup: "hotkey_toggle_popup",
 };
 
 /** 纯修饰键：单独按下不构成快捷键 */
