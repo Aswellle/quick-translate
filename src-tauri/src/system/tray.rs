@@ -7,6 +7,7 @@ use tauri::{
     AppHandle, Manager, WebviewUrl, WebviewWindowBuilder,
 };
 
+use crate::commands::config::emit_config_changed;
 use crate::error::AppError;
 use crate::runtime::{ComponentState, RuntimeHealth, RuntimeStatusSnapshot};
 use crate::state::AppState;
@@ -253,6 +254,12 @@ fn build_menu(
     .map_err(|e| AppError::WindowError(e.to_string()))?;
 
     // ---- 主菜单 ----
+    // 手动翻译入口（计划 Task 09）：产品不局限于剪贴板自动触发。
+    // 打开独立小窗，与剪贴板路径共用同一翻译核心；popup 若在显示，
+    // 由 popup_watch 的前台轮询自然关闭（被动窗失焦即退场），无需在此处理。
+    let manual_item = MenuItem::with_id(app, "manual_translate", "手动翻译…", true, None::<&str>)
+        .map_err(|e| AppError::WindowError(e.to_string()))?;
+
     let history_item = MenuItem::with_id(app, "history", "翻译历史", true, None::<&str>)
         .map_err(|e| AppError::WindowError(e.to_string()))?;
 
@@ -284,6 +291,7 @@ fn build_menu(
     items.push(&provider_submenu);
     items.push(&provider_config_item);
     items.push(&lang_submenu);
+    items.push(&manual_item);
     items.push(&history_item);
     items.push(&settings_item);
     items.push(&clipboard_item);
@@ -346,6 +354,7 @@ fn handle_menu_event(app: &AppHandle, event_id: &str) {
     match event_id {
         "settings" => open_settings_window(app),
         "provider_config" => open_provider_settings(app),
+        "manual_translate" => open_manual_translate_window(app),
         "history" => open_history_window(app),
         "quit" => {
             tracing::info!("用户退出应用");
@@ -439,6 +448,33 @@ fn open_settings_at(app: &AppHandle, tab: Option<&str>) {
     }
 }
 
+/// 打开手动翻译小窗（计划 Task 09）。独立窗口而非复用 popup：popup 的
+/// 被动交互模型（无焦点、失焦即关）与文本输入天然冲突。窗口随关闭
+/// 隐藏而非销毁，上次的输入与结果保留 —— 连续翻译几段内容时不用重打。
+pub(crate) fn open_manual_translate_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("manual") {
+        super::window_util::show_and_focus(&window);
+        return;
+    }
+    match WebviewWindowBuilder::new(app, "manual", WebviewUrl::App("index.html#manual".into()))
+        .title("QuickTranslate 手动翻译")
+        .additional_browser_args(crate::system::BROWSER_ARGS)
+        .inner_size(440.0, 480.0)
+        .min_inner_size(380.0, 360.0)
+        .resizable(true)
+        .center()
+        .build()
+    {
+        Ok(w) => {
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
+        Err(e) => {
+            tracing::error!("打开手动翻译窗口失败: {}", e);
+        }
+    }
+}
+
 fn open_history_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("history") {
         super::window_util::show_and_focus(&window);
@@ -495,6 +531,8 @@ fn switch_provider(app: AppHandle, provider_id: String) {
         }
         tracing::info!("已切换翻译源: {}", provider_id);
         refresh_menu(&app_for_menu).await;
+        // 设置窗口 hide 而非销毁，广播后它的草稿才能跟上托盘的修改
+        emit_config_changed(&app_for_menu, &state.config.read().await.get_all());
     });
 }
 
@@ -516,6 +554,7 @@ fn switch_target_lang(app: AppHandle, lang_code: String) {
         }
         tracing::info!("已切换目标语言: {}", lang_code);
         refresh_menu(&app_for_menu).await;
+        emit_config_changed(&app_for_menu, &state.config.read().await.get_all());
     });
 }
 
@@ -562,6 +601,7 @@ fn toggle_clipboard_monitor(app: AppHandle) {
         }
 
         refresh_menu(&app_for_menu).await;
+        emit_config_changed(&app_for_menu, &state.config.read().await.get_all());
     });
 }
 

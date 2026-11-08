@@ -17,34 +17,49 @@ import {
   getStats,
   getStatsRange,
   chooseExportDir,
+  clearTranslationCache,
   openUrl,
   getProviderStatus,
   getRuntimeStatus,
   getRuntimeDiagnostics,
   onRuntimeStatusChanged,
+  getHotkeyStatus,
   type AppConfig,
   type StatsResult,
   type ProviderStatus,
+  type HotkeyStatus,
   type RuntimeStatusSnapshot,
   type RuntimeDiagnostics,
 } from "@/lib/commands";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { useVisibleRefresh } from "@/hooks/useVisibleRefresh";
 import { toast } from "@/components/ToastManager";
 import { SUPPORTED_LANGUAGES, PROVIDERS, ERROR_MESSAGES, EVENTS } from "@/lib/constants";
+import { CREDENTIAL_KEYS, mergeExternalConfig, mayRollBackToPrevious } from "@/lib/configSync";
+import {
+  HOTKEY_CONFIG_KEYS,
+  acceleratorFromKeyEvent,
+  formatAccelerator,
+  isMacPlatform,
+} from "@/lib/hotkeys";
+import { providerStateLabel, STATE_TONE_CLASS } from "@/lib/providerState";
 import { useConfigStore } from "@/stores/configStore";
 import { TrendChart, ProviderChart } from "./StatsDashboard";
 import { applyTheme } from "@/hooks/useTheme";
 import { AboutTab } from "./AboutTab";
+import { GlossaryTab } from "./GlossaryTab";
+import { SettingsRow, ToggleRow } from "./SettingsControls";
+// 既有测试从 SettingsWindow 导入 ToggleRow，保持出口不变
+export { ToggleRow } from "./SettingsControls";
 
-// 需要特殊处理的凭证字段：getConfig() 返回 masked 值，不能直接写回
-const CREDENTIAL_KEYS = PROVIDERS
-  .filter((p) => p.requiresApiKey)
-  .flatMap((p) => p.credentialFields.map((f) => f.key));
+type TabId = "general" | "provider" | "glossary" | "about";
 
-type TabId = "general" | "provider" | "about";
-
-export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provider" | "about" }) {
+export function SettingsWindow({
+  initialTab,
+}: {
+  initialTab?: "general" | "provider" | "glossary" | "about";
+}) {
   const { setConfig } = useConfigStore();
   // activeTab 的同步镜像：事件 handler 经 ref 转发后读的是最新值，
   // 不必为它重订监听
@@ -73,6 +88,21 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
   // 诊断计数不主动广播，随状态变化时一并刷新。
   const [runtimeSnapshot, setRuntimeSnapshot] = useState<RuntimeStatusSnapshot | null>(null);
   const [runtimeDiag, setRuntimeDiag] = useState<RuntimeDiagnostics | null>(null);
+  // 全局快捷键注册状态（计划 Task 11）：配置值、实际生效值、失败原因。
+  // 只在打开面板/改动快捷键后刷新 —— 注册状态不主动广播。
+  const [hotkeyStatus, setHotkeyStatus] = useState<HotkeyStatus[]>([]);
+
+  const refreshHotkeyStatus = useCallback(() => {
+    getHotkeyStatus()
+      .then(setHotkeyStatus)
+      .catch(() => {
+        /* 状态拉取失败不影响其余设置 */
+      });
+  }, []);
+
+  useEffect(() => {
+    refreshHotkeyStatus();
+  }, [refreshHotkeyStatus]);
 
   useEffect(() => {
     let cancelled = false;
@@ -131,7 +161,12 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
     import("@tauri-apps/api/event")
       .then(({ listen }) =>
         listen<{ tab: string }>("settings-navigate", (e) => {
-          if (e.payload.tab === "provider" || e.payload.tab === "general" || e.payload.tab === "about") {
+          if (
+            e.payload.tab === "provider" ||
+            e.payload.tab === "general" ||
+            e.payload.tab === "glossary" ||
+            e.payload.tab === "about"
+          ) {
             setActiveTab(e.payload.tab);
             // 同值 Tab 的 setActiveTab 是 React bail-out，effect 不会重跑；
             // 显式刷一次统计，托盘重新打开设置时仪表盘才是当下数据
@@ -206,14 +241,46 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
     history_limit: "历史记录上限",
     fallback_enabled: "自动 Fallback",
     clipboard_monitor_enabled: "剪贴板监控",
+    sensitive_filter_enabled: "敏感内容过滤",
     reduce_transparency: "减少透明效果",
     export_dir: "导出保存位置",
+    cache_enabled: "本地缓存",
+    hotkey_translate_clipboard: "翻译剪贴板快捷键",
+    hotkey_open_manual: "打开手动翻译快捷键",
+    hotkey_toggle_monitor: "暂停/恢复监控快捷键",
+    hotkey_toggle_popup: "显示/隐藏浮窗快捷键",
+    hotkey_retranslate_last: "重新翻译快捷键",
+    glossary_enabled: "术语表",
+    baidu_use_term_base: "百度控制台术语库",
+    youdao_vocab_id: "有道词汇表ID",
+    tencent_term_repo_ids: "腾讯云术语库ID",
   };
 
   /** 凭证字段在加载时已被清空；这里还原哪些键属于凭证（即时生效模型下
       同样走单键持久化，只是不做 toast——测试连接按钮的反馈已足够） */
   const isCredentialKey = (key: string) =>
     (CREDENTIAL_KEYS as string[]).includes(key);
+
+  // 在途持久化的键：乐观写入的 IPC 未决期间，外部真值（config-changed
+  // 广播 / 失败后的对账）不得覆盖它 —— 否则迟到的旧值会把乐观更新打回去，
+  // 后端却以乐观值为准，界面就此与后端漂移
+  const inFlightKeysRef = useRef<Set<string>>(new Set());
+
+  // 后端真值落到本地：草稿与全局 store 各合并一次（凭证字段与
+  // auto_start 由 mergeExternalConfig 统一跳过 —— 前者是掩码占位符，
+  // 后者的权威在注册表，载荷里的配置库副本可能落后）
+  const applyBackendTruth = useCallback((truth: Partial<AppConfig>) => {
+    const skip = (k: string) => inFlightKeysRef.current.has(k);
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const { merged, changed } = mergeExternalConfig(prev, truth, skip);
+      return changed ? merged : prev;
+    });
+    const { config, setConfig: setStore } = useConfigStore.getState();
+    if (!config) return;
+    const { merged, changed } = mergeExternalConfig(config, truth, skip);
+    if (changed) setStore(merged);
+  }, []);
 
   /**
    * 即时生效的统一入口：本地草稿更新 + 单键持久化 + 后端副作用。
@@ -244,6 +311,7 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
         delete next[providerId];
         return next;
       });
+      inFlightKeysRef.current.add(key as string);
       try {
         await setConfigBatch([[key as string, String(value)]]);
         // 主题即时广播（其余键的后端副作用在 set_config 管线内已处理）
@@ -257,10 +325,22 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
           );
         }
       } catch (err) {
-        // 持久化失败：草稿退回原值，界面与后端保持一致
-        setDraft((prev) =>
-          prev ? { ...prev, [key]: previous as AppConfig[K] } : prev
-        );
+        // 持久化失败：草稿退回原值，界面与后端保持一致。
+        // 快速连续写入同键时，迟到的失败不能把后一次乐观写入的新值打回去
+        // （后端以后一次为准）—— 只有草稿仍持有本次写入的值才允许就地回滚。
+        // 回滚后仍对账一次后端真值：连续两次都失败时，previous 本身可能
+        // 是从未持久化过的乐观值；「已保存但副作用失败」时后端还可能是新值。
+        if (
+          draftRef.current &&
+          mayRollBackToPrevious(
+            (draftRef.current as unknown as Record<string, unknown>)[key as string],
+            value
+          )
+        ) {
+          setDraft((prev) =>
+            prev ? { ...prev, [key]: previous as AppConfig[K] } : prev
+          );
+        }
         setSaveStatus("err");
         setSaveStatusText(
           `${CONFIG_LABELS[key as string] ?? String(key)}生效失败：已还原`
@@ -270,11 +350,35 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
           "error"
         );
         console.error("[SettingsWindow] 配置生效失败:", key, err);
+        getConfig()
+          .then((truth) => applyBackendTruth(truth))
+          .catch(() => {
+            /* 对账失败：留给下一次 config-changed 或重开窗口兜底 */
+          });
+      } finally {
+        inFlightKeysRef.current.delete(key as string);
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     []
   );
+
+  /** 快捷键改动：走同一条即时生效管线；无论成败都刷新注册状态
+   *  （失败时状态里带着真实冲突原因，旧快捷键仍然可用）。 */
+  const applyHotkey = useCallback(
+    async (key: keyof AppConfig, accelerator: string) => {
+      await applyConfig(key, accelerator, "toast");
+      refreshHotkeyStatus();
+    },
+    [applyConfig, refreshHotkeyStatus]
+  );
+
+  // config-changed：托盘切翻译源/切语言、开关剪贴板监控是绕过本窗口的
+  // 带外写入；设置窗口 hide 而非销毁、草稿不会重载，不合并的话重开窗口
+  // 看到的还是打开时的旧值
+  useTauriEvent<AppConfig>("config-changed", (event) => {
+    applyBackendTruth(event.payload);
+  });
 
   // draft 的同步镜像：applyConfig 的回滚分支要读「改动前」的值
   const draftRef = useRef<AppConfig | null>(null);
@@ -298,8 +402,7 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
   );
 
   // 测试翻译源
-  const handleTest = useCallback(async (providerId: string) => {
-    setTestingId(providerId);
+  const handleTest = useCallback(async (providerId: string) => {    setTestingId(providerId);
     setTestResults((prev) => ({ ...prev, [providerId]: null }));
     try {
       // 凭证已在输入框 blur 时逐字段持久化（见 CredentialField），
@@ -365,7 +468,7 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
           role="tablist"
           aria-label="设置分组"
         >
-          {(["general", "provider", "about"] as TabId[]).map((tab) => (
+          {(["general", "provider", "glossary", "about"] as TabId[]).map((tab) => (
             <button
               key={tab}
               role="tab"
@@ -378,7 +481,13 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
                   : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]",
               ].join(" ")}
             >
-              {tab === "general" ? "常规" : tab === "provider" ? "翻译源" : "关于"}
+              {tab === "general"
+                ? "常规"
+                : tab === "provider"
+                  ? "翻译源"
+                  : tab === "glossary"
+                    ? "术语表"
+                    : "关于"}
             </button>
           ))}
         </div>
@@ -387,7 +496,20 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
       {/* ── 内容区（Tab 切换 150ms 淡入，消除硬切感）── */}
       <div key={activeTab} className="flex-1 overflow-y-auto px-6 py-5 animate-fade-in">
         {activeTab === "general" && (
-          <GeneralTab draft={draft} onChange={updateDraft} applyConfig={(key, value, feedback) => void applyConfig(key, value, feedback)} onClipboardToggle={handleClipboardToggle} stats={stats} statsLoading={statsLoading} runtimeSnapshot={runtimeSnapshot} runtimeDiag={runtimeDiag} providerStatus={providerStatus} onNavigate={setActiveTab} />
+          <GeneralTab
+            draft={draft}
+            onChange={updateDraft}
+            applyConfig={(key, value, feedback) => void applyConfig(key, value, feedback)}
+            onClipboardToggle={handleClipboardToggle}
+            stats={stats}
+            statsLoading={statsLoading}
+            runtimeSnapshot={runtimeSnapshot}
+            runtimeDiag={runtimeDiag}
+            providerStatus={providerStatus}
+            hotkeyStatus={hotkeyStatus}
+            onApplyHotkey={applyHotkey}
+            onNavigate={setActiveTab}
+          />
         )}
         {activeTab === "provider" && (
           <ProviderTab
@@ -398,6 +520,12 @@ export function SettingsWindow({ initialTab }: { initialTab?: "general" | "provi
             testResults={testResults}
             providerStatus={providerStatus}
             maskedCredentials={maskedCredentials}
+          />
+        )}
+        {activeTab === "glossary" && (
+          <GlossaryTab
+            draft={draft}
+            applyConfig={(key, value, feedback) => void applyConfig(key, value, feedback)}
           />
         )}
         {activeTab === "about" && <AboutTab />}
@@ -455,6 +583,8 @@ function GeneralTab({
   runtimeSnapshot,
   runtimeDiag,
   providerStatus,
+  hotkeyStatus,
+  onApplyHotkey,
   onNavigate,
 }: {
   draft: AppConfig;
@@ -471,8 +601,26 @@ function GeneralTab({
   runtimeSnapshot: RuntimeStatusSnapshot | null;
   runtimeDiag: RuntimeDiagnostics | null;
   providerStatus: Record<string, ProviderStatus>;
+  hotkeyStatus: HotkeyStatus[];
+  onApplyHotkey: (key: keyof AppConfig, accelerator: string) => Promise<void>;
   onNavigate: (tab: TabId) => void;
 }) {
+  // ── 清空翻译缓存（历史与缓存独立管理，计划 3.3）──────────────────────
+  const [confirmClearCache, setConfirmClearCache] = useState(false);
+  const [clearingCache, setClearingCache] = useState(false);
+  const handleClearCacheConfirm = useCallback(async () => {
+    setConfirmClearCache(false);
+    setClearingCache(true);
+    try {
+      const deleted = await clearTranslationCache();
+      toast(deleted > 0 ? `已清除 ${deleted} 条缓存` : "缓存本来就是空的", "success");
+    } catch {
+      toast("清空缓存失败，请重试", "error");
+    } finally {
+      setClearingCache(false);
+    }
+  }, []);
+
   return (
     <div className="space-y-4">
       {/* ── 顶部仪表盘：先回答「现在怎么样」，再让用户去调参数 ──
@@ -535,9 +683,15 @@ function GeneralTab({
         />
         <ToggleRow
           label="剪贴板监控"
-          hint="选中文本并复制后自动弹出翻译"
+          hint="复制后自动弹出翻译。开启即表示应用持续读取本机剪贴板：内容仅在本机判定与展示，发起翻译时发送给所选服务商，疑似凭证先经本地拦截（见下一项）"
           value={draft.clipboard_monitor_enabled}
           onApply={onClipboardToggle}
+        />
+        <ToggleRow
+          label="敏感内容过滤"
+          hint="复制的内容疑似私钥、访问令牌或云服务凭证时，不自动发送给翻译服务（仅在本机判定，不消耗额度）。关闭后这些内容将照常发送"
+          value={draft.sensitive_filter_enabled}
+          onApply={(v) => void applyConfig("sensitive_filter_enabled", v, "inline")}
         />
         <ToggleRow
           label="自动 Fallback"
@@ -556,7 +710,40 @@ function GeneralTab({
           value={draft.export_dir}
           onChange={(v) => void applyConfig("export_dir", v, "toast")}
         />
+        <ToggleRow
+          label="本地缓存"
+          hint="翻译成功的结果会存到本机，断网时可回退显示。关闭后不再读写缓存；已有条目仍保留，可在下方单独清空"
+          value={draft.cache_enabled}
+          onApply={(v) => void applyConfig("cache_enabled", v, "inline")}
+        />
+        <ClearCacheRow onClear={() => setConfirmClearCache(true)} busy={clearingCache} />
       </SettingsSection>
+
+      {/* 全局快捷键（计划 Task 11）：注册失败只影响该动作，应用照常运行；
+          状态如实显示配置值、实际生效值与冲突原因 */}
+      <SettingsSection label="快捷键">
+        <p className="text-[11px] leading-relaxed text-[var(--text-tertiary)] px-1 -mt-1 pb-1">
+          在任意应用中都可触发。点击「修改」后按下组合键；Esc 取消，Backspace 清除并禁用该动作。
+        </p>
+        {hotkeyStatus.length === 0 ? (
+          <p className="text-[12px] text-[var(--text-tertiary)] px-1 py-2">正在读取注册状态…</p>
+        ) : (
+          hotkeyStatus.map((status) => (
+            <HotkeyRow key={status.action} status={status} onApply={onApplyHotkey} />
+          ))
+        )}
+      </SettingsSection>
+
+      {/* 清空缓存确认（计划 3.3：用户数据清理必须二次确认并说明影响范围） */}
+      {confirmClearCache && (
+        <ConfirmDialog
+          title="清空翻译缓存？"
+          description="将删除全部离线翻译缓存（含原文与译文），历史记录不受影响。断网时已译内容将无法再从缓存回退显示。"
+          confirmLabel="确认清空"
+          onConfirm={handleClearCacheConfirm}
+          onCancel={() => setConfirmClearCache(false)}
+        />
+      )}
 
       {/* 运行状态（计划第 33/50 节）：消费 Runtime 层快照与诊断计数 */}
       <RuntimeStatusSection snapshot={runtimeSnapshot} diag={runtimeDiag} />
@@ -1082,6 +1269,8 @@ function RuntimeStatusSection({
               {diag.translation_failure_count > 0 && `（失败 ${diag.translation_failure_count}）`}
               {diag.fallback_count > 0 && ` · 兜底切换 ${diag.fallback_count} 次`}
               {diag.echo_count > 0 && ` · 回声拦截 ${diag.echo_count} 次`}
+              {diag.clipboard_filtered_count > 0 && ` · 敏感拦截 ${diag.clipboard_filtered_count} 次`}
+              {diag.persistence_dropped_count > 0 && ` · 落盘丢弃 ${diag.persistence_dropped_count} 条`}
               {diag.clipboard_restart_count > 0 && ` · 剪贴板自愈 ${diag.clipboard_restart_count} 次`}
             </p>
           )}
@@ -1224,48 +1413,7 @@ function ProviderTab({
   );
 }
 
-/**
- * 运行时状态的展示词表（计划第 28/51 节）。
- * 用户不需要看到开发者的 Open/HalfOpen 术语 ——
- * 「暂时不可用」「认证失败」这类话配上「将自动恢复」就够了。
- */
-function providerStateLabel(
-  status: ProviderStatus | undefined,
-  hasCredentials: boolean
-): { text: string; tone: "ok" | "warn" | "err" | "muted" } | null {
-  if (!status || !hasCredentials) {
-    return hasCredentials ? null : { text: "未配置", tone: "muted" };
-  }
-  switch (status.health_state) {
-    case "healthy":
-      return { text: "正常", tone: "ok" };
-    case "half_open":
-      return { text: "正在恢复…", tone: "warn" };
-    case "open":
-    case "degraded": {
-      // 用最近一次错误的类别细分「暂时不可用」的原因
-      switch (status.last_error_class) {
-        case "auth":
-          return { text: "认证失败，请检查凭证", tone: "err" };
-        case "quota":
-          return { text: "额度已用尽", tone: "err" };
-        case "rate_limit":
-          return { text: "请求过于频繁，稍后自动恢复", tone: "warn" };
-        default:
-          return { text: "暂时不可用，将自动恢复", tone: "warn" };
-      }
-    }
-    default:
-      return null;
-  }
-}
-
-const STATE_TONE_CLASS: Record<string, string> = {
-  ok: "text-green-500",
-  warn: "text-amber-500",
-  err: "text-red-500",
-  muted: "text-[var(--text-secondary)]",
-};
+// ── 运行时状态展示：词表与色调映射见 lib/providerState.ts ──
 
 /**
  * 单个凭证字段：输入纯本地、blur 时提交。
@@ -1275,7 +1423,7 @@ const STATE_TONE_CLASS: Record<string, string> = {
  * 留空失焦不提交 —— 「留空 = 保持已配置值不变」的语义由后端掩码过滤
  * 与本组件共同保证。
  */
-function CredentialField({
+export function CredentialField({
   field,
   value,
   configured,
@@ -1287,35 +1435,77 @@ function CredentialField({
   onCommit: (v: string) => void;
 }) {
   const [editValue, setEditValue] = useState<string | null>(null);
+  // 密钥核对：password 框看不到已粘贴内容，「显示/隐藏」切换解决只能靠
+  // 测试按钮盲验的问题。切换按钮不抢焦点（mousedown preventDefault）——
+  // blur 即提交，焦点被抢走会把半截密钥当成完整凭证提交出去。
+  const [reveal, setReveal] = useState(false);
+  const isSecret = field.type === "password";
 
   return (
     <div>
       <label className="text-[12px] font-medium text-[var(--text-secondary)] mb-1 block">
         {field.label}
       </label>
-      <input
-        type={field.type}
-        value={editValue ?? ""}
-        onChange={(e) => setEditValue(e.target.value)}
-        onBlur={() => {
-          if (editValue !== null) {
-            const trimmed = editValue.trim();
-            if (trimmed) onCommit(trimmed);
-            setEditValue(null);
+      <div className="relative">
+        <input
+          type={isSecret && !reveal ? "password" : "text"}
+          value={editValue ?? ""}
+          onChange={(e) => setEditValue(e.target.value)}
+          onBlur={() => {
+            if (editValue !== null) {
+              const trimmed = editValue.trim();
+              if (trimmed) onCommit(trimmed);
+              setEditValue(null);
+            }
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+          }}
+          placeholder={
+            configured
+              ? "已配置（留空保持不变，输入新值覆盖）"
+              : field.placeholder
           }
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-        }}
-        placeholder={
-          configured
-            ? "已配置（留空保持不变，输入新值覆盖）"
-            : field.placeholder
-        }
-        className="input-field w-full font-mono text-xs"
-        autoComplete="off"
-        spellCheck={false}
-      />
+          className={[
+            "input-field w-full font-mono text-xs",
+            isSecret ? "pr-9" : "",
+          ].join(" ")}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        {isSecret && (
+          <button
+            type="button"
+            aria-label={reveal ? "隐藏密钥" : "显示密钥"}
+            aria-pressed={reveal}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => setReveal((v) => !v)}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors"
+          >
+            {reveal ? (
+              <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path
+                  d="M2.5 2.5l11 11M6.6 6.7a2 2 0 002.8 2.8M4.4 4.5C2.9 5.7 1.5 8 1.5 8s2.5 4.5 6.5 4.5c1 0 1.9-.3 2.7-.7m1.6-1.2C13.7 9.6 14.5 8 14.5 8S12 3.5 8 3.5c-.7 0-1.4.1-2 .3"
+                  stroke="currentColor"
+                  strokeWidth="1.3"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            ) : (
+              <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path
+                  d="M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"
+                  stroke="currentColor"
+                  strokeWidth="1.3"
+                  strokeLinejoin="round"
+                />
+                <circle cx="8" cy="8" r="2" stroke="currentColor" strokeWidth="1.3" />
+              </svg>
+            )}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -1480,6 +1670,104 @@ function ProviderCard({
 
 // ──────────── 通用子组件 ────────────
 
+/**
+ * 一行全局快捷键：展示配置值、实际生效值与注册错误；点「修改」进入录制。
+ *
+ * 录制用 window 的捕获阶段监听而不是按钮 onKeyDown：macOS 的 WKWebView
+ * 点击按钮不保证给焦点，依赖焦点会时灵时不灵。录制期间拦下所有按键
+ * （preventDefault + stopPropagation），不触发页面内其它快捷键。
+ */
+function HotkeyRow({
+  status,
+  onApply,
+}: {
+  status: HotkeyStatus;
+  onApply: (key: keyof AppConfig, accelerator: string) => Promise<void>;
+}) {
+  const [recording, setRecording] = useState(false);
+  const [hint, setHint] = useState<string | null>(null);
+  const isMac = useMemo(() => isMacPlatform(), []);
+  const configKey = HOTKEY_CONFIG_KEYS[status.action];
+
+  useEffect(() => {
+    if (!recording || !configKey) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === "Escape") {
+        setRecording(false);
+        setHint(null);
+        return;
+      }
+      const noModifier =
+        !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
+      if ((event.key === "Backspace" || event.key === "Delete") && noModifier) {
+        setRecording(false);
+        setHint(null);
+        void onApply(configKey, "");
+        return;
+      }
+      const accelerator = acceleratorFromKeyEvent(event);
+      if (!accelerator) {
+        setHint("需要 Ctrl/⌘、Alt 等修饰键与一个普通键组合");
+        return;
+      }
+      setRecording(false);
+      setHint(null);
+      void onApply(configKey, accelerator);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [recording, configKey, onApply]);
+
+  if (!configKey) return null;
+
+  const display = status.configured
+    ? formatAccelerator(status.configured, isMac)
+    : "未设置";
+  const stateText = status.error
+    ? `注册失败：${status.error}`
+    : status.configured === ""
+      ? "已禁用"
+      : status.active === status.configured
+        ? "已注册"
+        : status.active
+          ? `当前仍生效：${formatAccelerator(status.active, isMac)}（新值未生效）`
+          : "未注册（可能已被其他应用占用）";
+
+  return (
+    <div className="flex items-start justify-between gap-3 px-3 py-2.5">
+      <div className="min-w-0">
+        <div className="text-[13px] text-[var(--text-primary)]">{status.label}</div>
+        <div
+          className={[
+            "text-[11px] mt-0.5 leading-relaxed",
+            status.error ? "text-red-500" : "text-[var(--text-tertiary)]",
+          ].join(" ")}
+        >
+          {recording ? "请按下组合键…（Esc 取消，Backspace 清除）" : stateText}
+        </div>
+        {hint && <div className="text-[11px] mt-0.5 text-orange-500">{hint}</div>}
+      </div>
+      <div className="flex items-center gap-2 shrink-0">
+        <kbd className="px-2 py-1 rounded-md bg-[var(--surface-secondary)] border border-[var(--border-primary)] text-[11px] font-mono text-[var(--text-secondary)]">
+          {display}
+        </kbd>
+        <button
+          type="button"
+          onClick={() => {
+            setHint(null);
+            setRecording((v) => !v);
+          }}
+          className="text-[12px] font-medium px-3 py-1 rounded-lg border border-[var(--border-primary)] hover:bg-[var(--hover-bg)] transition-colors text-[var(--text-primary)]"
+        >
+          {recording ? "取消" : "修改"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function SettingsSection({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="space-y-2">
@@ -1493,135 +1781,25 @@ function SettingsSection({ label, children }: { label: string; children: React.R
   );
 }
 
-function SettingsRow({
-  label,
-  hint,
-  htmlFor,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  /** 传入时 label 渲染为 <label htmlFor>，控件可被标签点击聚焦、屏幕
-      阅读器可正确关联 —— 纯开关行（Toggle 自带 role=switch）无需传入 */
-  htmlFor?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="px-4 py-3 flex items-center justify-between gap-4">
-      <div className="flex-1 min-w-0">
-        {htmlFor ? (
-          <label
-            htmlFor={htmlFor}
-            className="text-[13px] font-medium text-[var(--text-primary)] block cursor-pointer"
-          >
-            {label}
-          </label>
-        ) : (
-          <p className="text-[13px] font-medium text-[var(--text-primary)]">{label}</p>
-        )}
-        {hint && <p className="text-[12px] text-[var(--text-secondary)] mt-0.5 leading-snug">{hint}</p>}
-      </div>
-      <div className="shrink-0">{children}</div>
-    </div>
-  );
-}
-
 /**
- * 开关行：Toggle + 就近的生效状态提示。
- *
- * 状态提示紧贴按钮右侧的空白区域：11.5px / medium / 语义色
- * （成功绿、失败红）。此前「已保存」只出现在底部保存栏——用户盯着
- * 开关看时视线要跨过整屏去找结果。busy 期间开关禁用防连点。
+ * 清空翻译缓存操作行：确认对话框的触发入口。
+ * 执行与反馈在父组件（handleClearCacheConfirm），本行只负责发起。
  */
-export function ToggleRow({
-  label,
-  hint,
-  value,
-  onApply,
-}: {
-  label: string;
-  hint?: string;
-  value: boolean;
-  onApply: (v: boolean) => void;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState<null | { ok: boolean; text: string }>(null);
-  // 显示自己最近一次的结果：连续切换时新结果覆盖旧结果
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const apply = useCallback(
-    (v: boolean) => {
-      if (busy) return;
-      setBusy(true);
-      if (timerRef.current) clearTimeout(timerRef.current);
-      setStatus({ ok: true, text: v ? "已开启" : "已关闭" });
-      try {
-        onApply(v);
-        // 状态提示驻留 2.5s 后淡出（下一次切换会立即覆盖）
-        timerRef.current = setTimeout(() => setStatus(null), 2500);
-      } finally {
-        setBusy(false);
-      }
-    },
-    [busy, onApply]
-  );
-
+function ClearCacheRow({ onClear, busy }: { onClear: () => void; busy: boolean }) {
   return (
-    <SettingsRow label={label} hint={hint}>
-      <div className="flex items-center gap-2.5">
-        {status && (
-          <span
-            role="status"
-            className={[
-              "text-[11.5px] font-medium animate-fade-in",
-              status.ok
-                ? "text-green-600 dark:text-green-500"
-                : "text-red-500",
-            ].join(" ")}
-          >
-            {status.text}
-          </span>
-        )}
-        <Toggle value={value} onChange={apply} busy={busy} />
-      </div>
+    <SettingsRow
+      label="清空翻译缓存"
+      hint="删除全部离线缓存（含原文与译文）；历史记录不受影响"
+    >
+      <button
+        type="button"
+        onClick={onClear}
+        disabled={busy}
+        className="px-3 py-1.5 rounded-lg text-[12px] font-medium border border-[var(--border-secondary)] text-[var(--text-primary)] hover:bg-[var(--surface-secondary)] transition-colors active:scale-95 disabled:opacity-50 disabled:pointer-events-none"
+      >
+        清空
+      </button>
     </SettingsRow>
   );
 }
 
-// macOS 风格的 Toggle 开关
-function Toggle({
-  value,
-  onChange,
-  busy = false,
-}: {
-  value: boolean;
-  onChange: (v: boolean) => void;
-  busy?: boolean;
-}) {
-  return (
-    <button
-      onClick={() => onChange(!value)}
-      disabled={busy}
-      role="switch"
-      aria-checked={value}
-      className={[
-        "relative w-9 h-5 rounded-full transition-colors duration-200",
-        value ? "bg-[var(--system-blue)]" : "bg-[var(--surface-tertiary)]",
-      ].join(" ")}
-      style={{
-        boxShadow: value
-          ? "0 0 0 0 rgba(0, 122, 255, 0)"
-          : "inset 0 0 0 1px rgba(0,0,0,0.08)",
-      }}
-    >
-      <span
-        className={[
-          "absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full",
-          "transition-transform duration-200",
-          "shadow-[0_1px_3px_rgba(0,0,0,0.2)]",
-          value ? "translate-x-4" : "translate-x-0",
-        ].join(" ")}
-      />
-    </button>
-  );
-}

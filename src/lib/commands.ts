@@ -32,6 +32,8 @@ export interface TranslationRecord {
   created_at: number;
   duration_ms: number | null;
   is_starred: boolean;
+  /** 请求来源："clipboard"（自动触发）| "manual"（手动发起）；v7 前的历史统一为 clipboard */
+  source: "clipboard" | "manual";
 }
 
 export interface StatsResult {
@@ -62,10 +64,40 @@ export interface AppConfig {
   fallback_enabled: boolean;
   onboarding_completed: boolean;
   clipboard_monitor_enabled: boolean;
+  /** 剪贴板敏感内容过滤（默认开启；关闭后疑似凭证不再被本地拦截） */
+  sensitive_filter_enabled: boolean;
   /** 应用内「减少透明效果」开关。与系统偏好媒体查询是叠加关系 */
   reduce_transparency: boolean;
   /** 历史导出的默认保存目录；空串 = 每次导出弹原生保存对话框 */
   export_dir: string;
+  /** 本地翻译缓存开关（默认开启；关闭只暂停读写，已有条目保留） */
+  cache_enabled: boolean;
+  /** 全局快捷键加速键（空串 = 禁用该动作） */
+  hotkey_translate_clipboard: string;
+  hotkey_open_manual: string;
+  hotkey_toggle_monitor: string;
+  hotkey_toggle_popup: string;
+  hotkey_retranslate_last: string;
+  /** 术语表总开关（按语言对管理；只对支持原生 glossary 的 Provider 生效） */
+  glossary_enabled: boolean;
+  /** 百度：使用控制台「我的术语库」（needIntervene=1） */
+  baidu_use_term_base: boolean;
+  /** 有道：控制台术语表 ID（vocabId，空串 = 不使用） */
+  youdao_vocab_id: string;
+  /** 腾讯云：控制台术语库 ID 列表（逗号分隔，TermRepoIDList；空串 = 不使用） */
+  tencent_term_repo_ids: string;
+}
+
+/** 单个全局快捷键的注册状态（Rust `system::hotkeys::HotkeyStatus`） */
+export interface HotkeyStatus {
+  action: string;
+  label: string;
+  /** 配置里保存的值（空串 = 已禁用） */
+  configured: string;
+  /** 当前真正注册成功的值；注册失败时保留旧值 */
+  active: string | null;
+  /** 最近一次注册失败的原因（如被其他应用占用） */
+  error: string | null;
 }
 
 export interface HistoryQuery {
@@ -114,6 +146,10 @@ export interface RuntimeDiagnostics {
   fallback_count: number;
   /** 回声守卫拦下「译文=原文」的次数 */
   echo_count: number;
+  /** 敏感内容过滤拦下自动翻译的次数（原文不记录） */
+  clipboard_filtered_count: number;
+  /** 持久化队列满导致历史/缓存写入被丢弃的次数 */
+  persistence_dropped_count: number;
 }
 
 export async function getRuntimeDiagnostics(): Promise<RuntimeDiagnostics> {
@@ -147,6 +183,16 @@ export async function validateProvider(providerId: string): Promise<boolean> {
   return invoke("validate_provider", { providerId });
 }
 
+/**
+ * 手动覆盖敏感过滤：翻译最近一条被拦截的剪贴板内容。
+ *
+ * 只能消费后端暂存的那一条（不接受文本参数）—— 前端无法借此把任意
+ * 内容塞进翻译链路。返回 false 表示没有待覆盖的内容。
+ */
+export async function translateFilteredText(): Promise<boolean> {
+  return invoke("translate_filtered_text");
+}
+
 // ---- 配置 Commands ----
 
 export async function getConfig(): Promise<AppConfig> {
@@ -157,6 +203,22 @@ export async function setConfigBatch(
   updates: [string, string][]
 ): Promise<void> {
   return invoke("set_config_batch", { updates });
+}
+
+/**
+ * 手动触发翻译（计划 Task 09）：与剪贴板路径共用同一翻译引擎、
+ * 同一落盘管道；历史记录来源标为 manual。结果直接返回，不经事件。
+ */
+/** 手动翻译（计划 Task 09/10）。
+ *  `sourceLang` 省略 = 自动检测；显式源语言是 DeepL 术语表生效的前提。
+ *  `force` = 用户已确认敏感内容拦截提示后放行（后端过滤仍先执行）。 */
+export async function translateText(
+  text: string,
+  targetLang?: string,
+  sourceLang?: string,
+  force?: boolean
+): Promise<TranslationResult> {
+  return invoke("translate_text", { text, targetLang, sourceLang, force });
 }
 
 // ---- 历史 Commands ----
@@ -176,6 +238,16 @@ export async function countHistory(
 
 export async function clearHistory(): Promise<void> {
   return invoke("clear_history");
+}
+
+/**
+ * 清空翻译缓存，返回删除的条数。
+ *
+ * 与「清空历史」互相独立 —— 缓存条目含原文与译文，用户必须能单独
+ * 清除它而不动历史记录。
+ */
+export async function clearTranslationCache(): Promise<number> {
+  return invoke("clear_translation_cache");
 }
 
 export async function deleteHistoryRecord(id: string): Promise<void> {
@@ -315,6 +387,98 @@ export async function getAutostart(): Promise<boolean> {
 /** 当前应用版本号（tauri.conf.json 的 version） */
 export async function getAppVersion(): Promise<string> {
   return invoke("get_app_version");
+}
+
+// ---- 全局快捷键 ----
+
+/** 各动作的快捷键注册状态（配置值 / 实际生效值 / 失败原因） */
+export async function getHotkeyStatus(): Promise<HotkeyStatus[]> {
+  return invoke("get_hotkey_status");
+}
+
+// ---- 术语表（按语言对管理，计划 Task 10） ----
+
+export interface GlossaryEntry {
+  id: number;
+  source_lang: string;
+  target_lang: string;
+  source_term: string;
+  target_term: string;
+  note: string;
+  case_sensitive: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface GlossaryEntryInput {
+  source_lang: string;
+  target_lang: string;
+  source_term: string;
+  target_term: string;
+  note?: string;
+  case_sensitive?: boolean;
+}
+
+export async function listGlossaryEntries(
+  sourceLang: string,
+  targetLang: string
+): Promise<GlossaryEntry[]> {
+  return invoke("list_glossary_entries", { sourceLang, targetLang });
+}
+
+export async function createGlossaryEntry(
+  input: GlossaryEntryInput
+): Promise<GlossaryEntry> {
+  return invoke("create_glossary_entry", { input });
+}
+
+export async function updateGlossaryEntry(
+  id: number,
+  input: GlossaryEntryInput
+): Promise<GlossaryEntry> {
+  return invoke("update_glossary_entry", { id, input });
+}
+
+export async function deleteGlossaryEntry(id: number): Promise<boolean> {
+  return invoke("delete_glossary_entry", { id });
+}
+
+export async function clearGlossary(
+  sourceLang: string,
+  targetLang: string
+): Promise<number> {
+  return invoke("clear_glossary", { sourceLang, targetLang });
+}
+
+/** 导入 JSON/CSV：替换当前语言对的条目（整批校验通过才落库） */
+export async function importGlossaryJson(
+  sourceLang: string,
+  targetLang: string,
+  content: string
+): Promise<number> {
+  return invoke("import_glossary_json", { sourceLang, targetLang, content });
+}
+
+export async function importGlossaryCsv(
+  sourceLang: string,
+  targetLang: string,
+  content: string
+): Promise<number> {
+  return invoke("import_glossary_csv", { sourceLang, targetLang, content });
+}
+
+export async function exportGlossaryJson(
+  sourceLang: string,
+  targetLang: string
+): Promise<string> {
+  return invoke("export_glossary_json", { sourceLang, targetLang });
+}
+
+export async function exportGlossaryCsv(
+  sourceLang: string,
+  targetLang: string
+): Promise<string> {
+  return invoke("export_glossary_csv", { sourceLang, targetLang });
 }
 
 // ---- 系统浏览器打开链接 ----

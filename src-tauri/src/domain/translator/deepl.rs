@@ -2,11 +2,11 @@
 // DeepL Free API 翻译源实现
 
 use async_trait::async_trait;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
 
-use super::TranslationProvider;
+use super::{TranslateOptions, TranslationProvider};
 use crate::error::AppError;
 use crate::infra::http_client::HttpClient;
 use crate::types::{ProviderInfo, TranslationResult};
@@ -19,6 +19,8 @@ pub struct DeepLProvider {
     api_key: String,
     #[cfg(test)]
     usage_endpoint_override: Option<String>,
+    #[cfg(test)]
+    translate_endpoint_override: Option<String>,
 }
 
 impl DeepLProvider {
@@ -28,6 +30,8 @@ impl DeepLProvider {
             api_key,
             #[cfg(test)]
             usage_endpoint_override: None,
+            #[cfg(test)]
+            translate_endpoint_override: None,
         }
     }
 
@@ -37,6 +41,16 @@ impl DeepLProvider {
             DEEPL_FREE_API
         } else {
             DEEPL_PRO_API
+        }
+    }
+
+    /// 按 API Key 判定 API 主机（Free 与 Pro 是不同域名）。
+    /// 术语表同步（不在 provider 实例内）也用它，避免两处各判一次。
+    pub(crate) fn api_base(api_key: &str) -> &'static str {
+        if api_key.ends_with(":fx") {
+            "https://api-free.deepl.com"
+        } else {
+            "https://api.deepl.com"
         }
     }
 
@@ -54,7 +68,7 @@ impl DeepLProvider {
     /// DeepL 官方代码表（developers.deepl.com）：ZH 为简体（历史代码）、
     /// **ZH-HANT 为繁体**。此前 zh-tw 被映射成 "ZH"，繁体目标被静默
     /// 替换成简体 —— 现按官方代码表显式区分。
-    fn to_deepl_lang(lang: &str) -> String {
+    pub(crate) fn to_deepl_lang(lang: &str) -> String {
         match lang {
             "zh" => "ZH".to_string(),
             "zh-tw" => "ZH-HANT".to_string(),
@@ -68,6 +82,20 @@ impl DeepLProvider {
     fn with_usage_endpoint(mut self, url: String) -> Self {
         self.usage_endpoint_override = Some(url);
         self
+    }
+
+    #[cfg(test)]
+    fn with_translate_endpoint(mut self, url: String) -> Self {
+        self.translate_endpoint_override = Some(url);
+        self
+    }
+
+    fn translate_endpoint(&self) -> String {
+        #[cfg(test)]
+        if let Some(url) = &self.translate_endpoint_override {
+            return url.clone();
+        }
+        self.endpoint().to_string()
     }
 }
 
@@ -89,6 +117,18 @@ impl TranslationProvider for DeepLProvider {
         text: &str,
         target_lang: &str,
     ) -> Result<TranslationResult, AppError> {
+        self.translate_with_options(text, target_lang, &TranslateOptions::default())
+            .await
+    }
+
+    /// DeepL 是唯一读取请求上下文的 provider：显式源语言与 glossary_id
+    /// 都通过 form 参数下发。其余 provider 用 trait 默认实现忽略上下文。
+    async fn translate_with_options(
+        &self,
+        text: &str,
+        target_lang: &str,
+        options: &TranslateOptions,
+    ) -> Result<TranslationResult, AppError> {
         if self.api_key.is_empty() {
             return Err(AppError::AuthError {
                 provider: "deepl".to_string(),
@@ -97,17 +137,24 @@ impl TranslationProvider for DeepLProvider {
 
         let start = Instant::now();
         let target = Self::to_deepl_lang(target_lang);
+        let source = options.source_lang.as_deref().map(Self::to_deepl_lang);
 
-        let params = [
+        let mut params: Vec<(&str, &str)> = vec![
             ("auth_key", self.api_key.as_str()),
             ("text", text),
             ("target_lang", &target),
         ];
+        if let Some(source) = source.as_deref() {
+            params.push(("source_lang", source));
+        }
+        if let Some(glossary_id) = options.glossary_id.as_deref() {
+            params.push(("glossary_id", glossary_id));
+        }
 
         let response = self
             .http_client
             .client()
-            .post(self.endpoint())
+            .post(self.translate_endpoint())
             .form(&params)
             .send()
             .await
@@ -228,6 +275,255 @@ impl TranslationProvider for DeepLProvider {
 
     fn validation_uses_translation(&self) -> bool {
         false
+    }
+}
+
+// ── 术语表 API（计划 Task 10）──────────────────────────────────────────
+//
+// 独立于 provider 实例：同步发生在翻译请求之前，由 system::glossary_sync
+// 调用。认证方式与 v3 文档一致（Authorization: DeepL-Auth-Key），请求体
+// 为 JSON。v2 glossary 没有编辑接口 —— 条目变化 = 删旧建新。
+
+#[derive(Serialize)]
+struct CreateGlossaryRequest<'a> {
+    name: &'a str,
+    source_lang: String,
+    target_lang: String,
+    entries: &'a str,
+    entries_format: &'a str,
+}
+
+#[derive(Deserialize)]
+struct GlossaryResponse {
+    glossary_id: String,
+    #[serde(default)]
+    ready: bool,
+}
+
+fn glossary_url(api_key: &str) -> String {
+    format!("{}/v2/glossaries", DeepLProvider::api_base(api_key))
+}
+
+fn auth_header(api_key: &str) -> String {
+    format!("DeepL-Auth-Key {}", api_key)
+}
+
+fn map_glossary_status(response: reqwest::Response, status: u16) -> AppError {
+    match status {
+        403 => AppError::AuthError {
+            provider: "deepl".to_string(),
+        },
+        429 => AppError::RateLimit {
+            provider: "deepl".to_string(),
+            retry_after_secs: super::parse_retry_after_secs(response.headers()),
+        },
+        456 => AppError::QuotaExhausted {
+            provider: "deepl".to_string(),
+        },
+        code => {
+            // 与 translate 路径相同的脱敏规则：状态码进错误分类，
+            // 响应体不进入常规日志（QT-011）
+            AppError::ProviderRejected {
+                provider: "deepl".to_string(),
+                status: code,
+            }
+        }
+    }
+}
+
+/// DeepL glossary 同步动作（创建/删除，含就绪轮询）的硬超时。
+///
+/// 同步内联在翻译关键路径上（`prepare_deepl_glossary` 在翻译发起前完成），
+/// 此前只有单次 HTTP 的 5s 客户端超时，创建 + 轮询叠加最坏可拖住翻译
+/// 半分钟以上。现在每个同步动作整体受此时限约束，超时返回错误，由调用方
+/// 降级为「本次不应用术语表」—— 同步永远不会把翻译开头拖过可感知时限。
+pub const GLOSSARY_SYNC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// 创建 glossary，返回 glossary_id（已就绪）。
+///
+/// `entries_tsv` 每行 `原文\t译文`。创建后若 `ready=false`，最多轮询 5 次
+/// （200ms 间隔，合计约 1s）；仍未就绪返回错误，由调用方降级为「本次不
+/// 应用术语表」—— 不阻塞翻译主链路。整个创建动作受
+/// [`GLOSSARY_SYNC_TIMEOUT`] 硬超时约束，超时同样按失败降级。
+pub async fn create_glossary(
+    client: &HttpClient,
+    api_key: &str,
+    name: &str,
+    source_lang: &str,
+    target_lang: &str,
+    entries_tsv: &str,
+) -> Result<String, AppError> {
+    if api_key.is_empty() {
+        return Err(AppError::AuthError {
+            provider: "deepl".to_string(),
+        });
+    }
+    create_glossary_at(
+        &glossary_url(api_key),
+        client,
+        api_key,
+        name,
+        source_lang,
+        target_lang,
+        entries_tsv,
+        GLOSSARY_SYNC_TIMEOUT,
+    )
+    .await
+}
+
+/// 可指定 glossary 端点根 URL（测试用 mock server；生产传官方地址）。
+/// 整个创建动作（请求 + 就绪轮询）受 `sync_timeout` 硬超时约束。
+// 请求参数 + 超时上限：形状由 DeepL v2 接口与测试 mock 双方固定，不值得为
+// 过 clippy 再抽一层参数结构。
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn create_glossary_at(
+    url: &str,
+    client: &HttpClient,
+    api_key: &str,
+    name: &str,
+    source_lang: &str,
+    target_lang: &str,
+    entries_tsv: &str,
+    sync_timeout: std::time::Duration,
+) -> Result<String, AppError> {
+    tokio::time::timeout(
+        sync_timeout,
+        create_glossary_request(
+            url,
+            client,
+            api_key,
+            name,
+            source_lang,
+            target_lang,
+            entries_tsv,
+        ),
+    )
+    .await
+    .map_err(|_| AppError::Timeout {
+        timeout_secs: sync_timeout.as_secs(),
+    })?
+}
+
+async fn create_glossary_request(
+    url: &str,
+    client: &HttpClient,
+    api_key: &str,
+    name: &str,
+    source_lang: &str,
+    target_lang: &str,
+    entries_tsv: &str,
+) -> Result<String, AppError> {
+    let body = CreateGlossaryRequest {
+        name,
+        source_lang: DeepLProvider::to_deepl_lang(source_lang),
+        target_lang: DeepLProvider::to_deepl_lang(target_lang),
+        entries: entries_tsv,
+        entries_format: "tsv",
+    };
+
+    let response = client
+        .client()
+        .post(url)
+        .header("Authorization", auth_header(api_key))
+        .json(&body)
+        .send()
+        .await
+        .map_err(AppError::from)?;
+
+    let status = response.status().as_u16();
+    if status != 200 && status != 201 {
+        return Err(map_glossary_status(response, status));
+    }
+    let created: GlossaryResponse = response
+        .json()
+        .await
+        .map_err(|e| AppError::NetworkError(format!("DeepL 术语表响应解析失败: {}", e)))?;
+
+    let mut ready = created.ready;
+    let mut glossary_id = created.glossary_id;
+    for _ in 0..5 {
+        if ready {
+            return Ok(glossary_id);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let response = client
+            .client()
+            .get(format!("{}/{}", url, glossary_id))
+            .header("Authorization", auth_header(api_key))
+            .send()
+            .await
+            .map_err(AppError::from)?;
+        let status = response.status().as_u16();
+        if status != 200 {
+            return Err(map_glossary_status(response, status));
+        }
+        let info: GlossaryResponse = response
+            .json()
+            .await
+            .map_err(|e| AppError::NetworkError(format!("DeepL 术语表响应解析失败: {}", e)))?;
+        ready = info.ready;
+        glossary_id = info.glossary_id;
+    }
+
+    Err(AppError::NetworkError("DeepL 术语表尚未就绪".to_string()))
+}
+
+/// 删除 glossary。404 视为已删除（幂等）；其他失败交给调用方记日志。
+/// 整个删除动作同样受 [`GLOSSARY_SYNC_TIMEOUT`] 硬超时约束。
+pub async fn delete_glossary(
+    client: &HttpClient,
+    api_key: &str,
+    glossary_id: &str,
+) -> Result<(), AppError> {
+    if api_key.is_empty() {
+        return Err(AppError::AuthError {
+            provider: "deepl".to_string(),
+        });
+    }
+    delete_glossary_at(
+        &glossary_url(api_key),
+        client,
+        api_key,
+        glossary_id,
+        GLOSSARY_SYNC_TIMEOUT,
+    )
+    .await
+}
+
+pub(crate) async fn delete_glossary_at(
+    url: &str,
+    client: &HttpClient,
+    api_key: &str,
+    glossary_id: &str,
+    sync_timeout: std::time::Duration,
+) -> Result<(), AppError> {
+    tokio::time::timeout(
+        sync_timeout,
+        delete_glossary_request(url, client, api_key, glossary_id),
+    )
+    .await
+    .map_err(|_| AppError::Timeout {
+        timeout_secs: sync_timeout.as_secs(),
+    })?
+}
+
+async fn delete_glossary_request(
+    url: &str,
+    client: &HttpClient,
+    api_key: &str,
+    glossary_id: &str,
+) -> Result<(), AppError> {
+    let response = client
+        .client()
+        .delete(format!("{}/{}", url, glossary_id))
+        .header("Authorization", auth_header(api_key))
+        .send()
+        .await
+        .map_err(AppError::from)?;
+    let status = response.status().as_u16();
+    match status {
+        200 | 204 | 404 => Ok(()),
+        _ => Err(map_glossary_status(response, status)),
     }
 }
 
@@ -385,5 +681,118 @@ mod tests {
     #[test]
     fn unknown_lang_codes_pass_through_uppercased() {
         assert_eq!(DeepLProvider::to_deepl_lang("th"), "TH");
+    }
+
+    // ── 术语表上下文（计划 Task 10）────────────────────────────────────
+
+    /// 显式源语言与 glossary_id 必须进入翻译请求的 form；默认调用不带它们。
+    #[test]
+    fn translate_options_send_source_lang_and_glossary_id() {
+        let (url, server) = spawn_mock(
+            200,
+            r#"{"translations":[{"detected_source_language":"EN","text":"你好"}]}"#,
+        );
+        let provider = DeepLProvider::new(Arc::new(HttpClient::new()), "testkey:fx".to_string())
+            .with_translate_endpoint(format!("{}/v2/translate", url));
+
+        let options = TranslateOptions {
+            source_lang: Some("en".to_string()),
+            glossary_id: Some("glossary-123".to_string()),
+            glossary_fingerprint: Some("fp".to_string()),
+            ..Default::default()
+        };
+        let result = tauri::async_runtime::block_on(
+            provider.translate_with_options("hello", "zh", &options),
+        );
+        assert!(result.is_ok(), "{:?}", result);
+
+        let request = server.join().unwrap();
+        assert!(
+            request.starts_with("POST /v2/translate"),
+            "实际请求: {}",
+            request.lines().next().unwrap_or("")
+        );
+        let lower = request.to_lowercase();
+        assert!(lower.contains("source_lang=en"), "必须显式下发源语言");
+        assert!(
+            lower.contains("glossary_id=glossary-123"),
+            "必须下发 glossary_id"
+        );
+        assert!(lower.contains("auth_key=testkey%3afx"), "认证走 form");
+    }
+
+    /// 创建 glossary：请求体是 JSON（auth 走请求头），解析 glossary_id；
+    /// ready=true 时不再轮询。
+    #[test]
+    fn create_glossary_posts_entries_and_returns_id() {
+        let (url, server) = spawn_mock(201, r#"{"glossary_id":"g-1","ready":true,"name":"n"}"#);
+        let client = HttpClient::new();
+
+        let result = tauri::async_runtime::block_on(create_glossary_at(
+            &format!("{}/v2/glossaries", url),
+            &client,
+            "testkey:fx",
+            "qt-en-zh",
+            "en",
+            "zh",
+            "Apple\t苹果",
+            GLOSSARY_SYNC_TIMEOUT,
+        ));
+        assert_eq!(result.unwrap(), "g-1");
+
+        let request = server.join().unwrap();
+        assert!(request.starts_with("POST /v2/glossaries"));
+        let lower = request.to_lowercase();
+        assert!(lower.contains("authorization: deepl-auth-key testkey:fx"));
+        assert!(lower.contains("\"entries_format\":\"tsv\""), "{}", request);
+        assert!(lower.contains("\"source_lang\":\"en\""), "{}", request);
+        assert!(lower.contains("\"target_lang\":\"zh\""), "{}", request);
+        assert!(lower.contains("apple\\t"), "条目必须进请求体");
+    }
+
+    /// 同步硬超时（评审整改）：服务端拖延应答时，创建动作必须在期限之内
+    /// 以 Timeout 失败返回，而不是叠加轮询把翻译关键路径挂住。
+    #[test]
+    fn create_glossary_times_out_when_server_is_slow() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("test server accept");
+            let mut buf = [0u8; 8192];
+            let _ = stream.read(&mut buf);
+            thread::sleep(std::time::Duration::from_secs(1));
+            let body = r#"{"glossary_id":"g-slow","ready":true,"name":"n"}"#;
+            let response = format!(
+                "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+        });
+
+        let started = std::time::Instant::now();
+        let result = tauri::async_runtime::block_on(create_glossary_at(
+            &format!("http://{}/v2/glossaries", addr),
+            &HttpClient::new(),
+            "testkey:fx",
+            "qt-en-zh",
+            "en",
+            "zh",
+            "Apple\t苹果",
+            std::time::Duration::from_millis(150),
+        ));
+        let elapsed = started.elapsed();
+
+        assert!(
+            matches!(result, Err(AppError::Timeout { .. })),
+            "慢速服务必须在期限内超时，实际: {:?}",
+            result
+        );
+        assert!(
+            elapsed < std::time::Duration::from_millis(900),
+            "超时必须及时返回（服务端拖延 1s，期限 150ms），实际耗时 {:?}",
+            elapsed
+        );
+        server.join().unwrap();
     }
 }

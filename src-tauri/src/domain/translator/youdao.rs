@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
-use super::TranslationProvider;
+use super::{TranslateOptions, TranslationProvider};
 use crate::error::AppError;
 use crate::infra::http_client::HttpClient;
 use crate::types::{ProviderInfo, TranslationResult};
@@ -71,6 +71,33 @@ impl YoudaoProvider {
         h.update(sign_str.as_bytes());
         hex::encode(h.finalize())
     }
+
+    /// 组装请求参数（纯函数，便于测试可选 vocabId）。
+    fn build_params<'a>(
+        text: &'a str,
+        target: &'a str,
+        app_key: &'a str,
+        salt: &'a str,
+        sign: &'a str,
+        curtime: &'a str,
+        vocab_id: Option<&'a str>,
+    ) -> Vec<(&'a str, &'a str)> {
+        let mut params = vec![
+            ("q", text),
+            ("from", "auto"),
+            ("to", target),
+            ("appKey", app_key),
+            ("salt", salt),
+            ("sign", sign),
+            ("signType", "v3"),
+            ("curtime", curtime),
+        ];
+        if let Some(vocab_id) = vocab_id {
+            // 官方文档：用户指定的术语表 ID（控制台 vocab 的 out_id）
+            params.push(("vocabId", vocab_id));
+        }
+        params
+    }
 }
 
 #[derive(Deserialize)]
@@ -89,6 +116,17 @@ impl TranslationProvider for YoudaoProvider {
         text: &str,
         target_lang: &str,
     ) -> Result<TranslationResult, AppError> {
+        self.translate_with_options(text, target_lang, &TranslateOptions::default())
+            .await
+    }
+
+    /// 有道智云的术语表是控制台上传的 vocab，API 通过 `vocabId` 引用。
+    async fn translate_with_options(
+        &self,
+        text: &str,
+        target_lang: &str,
+        options: &TranslateOptions,
+    ) -> Result<TranslationResult, AppError> {
         if self.app_key.is_empty() || self.app_secret.is_empty() {
             return Err(AppError::AuthError {
                 provider: "youdao".into(),
@@ -105,16 +143,20 @@ impl TranslationProvider for YoudaoProvider {
             .to_string();
         let sign = self.sign(text, &curtime, &salt);
 
-        let params = [
-            ("q", text),
-            ("from", "auto"),
-            ("to", target),
-            ("appKey", &self.app_key),
-            ("salt", &salt),
-            ("sign", &sign),
-            ("signType", "v3"),
-            ("curtime", &curtime),
-        ];
+        let vocab_id = options
+            .youdao_vocab_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty());
+        let params = Self::build_params(
+            text,
+            target,
+            &self.app_key,
+            &salt,
+            &sign,
+            &curtime,
+            vocab_id,
+        );
 
         let response = self
             .http_client
@@ -220,5 +262,32 @@ impl TranslationProvider for YoudaoProvider {
             Err(AppError::AuthError { .. }) => Ok(false),
             Err(e) => Err(e),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vocab_id_is_sent_only_when_configured() {
+        let base =
+            YoudaoProvider::build_params("hello", "zh-CHS", "key", "salt", "sign", "1", None);
+        assert!(!base.iter().any(|(k, _)| *k == "vocabId"));
+        assert_eq!(base.len(), 8, "默认请求形状保持不变");
+
+        let with_vocab = YoudaoProvider::build_params(
+            "hello",
+            "zh-CHS",
+            "key",
+            "salt",
+            "sign",
+            "1",
+            Some("vocab-out-1"),
+        );
+        assert_eq!(with_vocab.len(), base.len() + 1);
+        assert!(with_vocab
+            .iter()
+            .any(|(k, v)| *k == "vocabId" && *v == "vocab-out-1"));
     }
 }

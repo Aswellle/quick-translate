@@ -27,11 +27,13 @@ use std::sync::Mutex;
 use tauri::async_runtime::JoinHandle;
 use tauri::{AppHandle, Manager};
 
+use crate::domain::cache::{lookup_cached_result, should_fall_back_to_cache};
+use crate::domain::clipboard_filter::{self, FilterDecision, SensitiveRule};
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::system::persistence::{OwnedCacheEntry, PersistJob};
 use crate::system::translation_flow;
-use crate::types::{TranslationRecord, TranslationResult};
+use crate::types::{ToastPayload, TranslationRecord, TranslationResult};
 
 use super::request::{RequestGeneration, RequestId, TranslationRequest};
 
@@ -39,6 +41,16 @@ struct Inner {
     generation: RequestGeneration,
     /// 在途任务的唯一取消入口。旧代码无条件覆盖它，是上面那条竞态的成因。
     in_flight: Option<JoinHandle<()>>,
+    /// 最近一次被敏感过滤拦截的内容及其光标锚点（「仍然翻译」手动覆盖的
+    /// 数据源）。
+    ///
+    /// 只活在内存里：它是用户刚刚复制的东西，生命周期与那次复制意图一致
+    /// —— 下一次复制（supersede）或手动覆盖取走后即清空。绝不落盘、
+    /// 绝不进日志、绝不出现在任何事件里。
+    last_filtered: Option<(String, (f64, f64))>,
+    /// 最近一次**通过过滤并实际发起**的翻译原文（快捷键「重新翻译上一次」
+    /// 的数据源）。只活在内存里，不落盘、不进日志；被拦截的内容不会记入。
+    last_text: Option<String>,
 }
 
 /// 浮窗 show 流程的跨请求互斥锁。
@@ -77,6 +89,8 @@ impl TranslationCoordinator {
             inner: Mutex::new(Inner {
                 generation: RequestGeneration::default(),
                 in_flight: None,
+                last_filtered: None,
+                last_text: None,
             }),
         }
     }
@@ -88,14 +102,47 @@ impl TranslationCoordinator {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// 记住最近一次实际发起的翻译原文（只用于「重新翻译上一次」）。
+    /// 被敏感过滤拦截的内容不会调用本方法。
+    pub fn remember_text(&self, text: &str) {
+        self.lock().last_text = Some(text.to_string());
+    }
+
+    /// 取最近一次翻译原文；None = 本次进程还没有成功发起过翻译。
+    pub fn last_text(&self) -> Option<String> {
+        self.lock().last_text.clone()
+    }
+
     /// 开启一代新请求，并中止上一代的在途任务。返回新请求 id。
+    ///
+    /// 同时清空被拦截内容的暂存：用户复制了新东西，上一条被拦截内容的
+    /// 「仍然翻译」入口就该消失 —— 手动覆盖只对「刚刚被拦的那条」有效。
     pub fn supersede(&self) -> RequestId {
         let mut inner = self.lock();
         let id = inner.generation.begin();
+        inner.last_filtered = None;
         if let Some(handle) = inner.in_flight.take() {
             handle.abort();
         }
         id
+    }
+
+    /// 记录一次被过滤拦截的内容。
+    ///
+    /// 与 [`Self::install`] 同样的竞态约束：拦截判定发生在锁外，记录时刻
+    /// 该请求可能已被更新的复制取代 —— 只有仍是当前代才记录。
+    pub fn store_filtered(&self, id: RequestId, text: String, cursor: (f64, f64)) -> bool {
+        let mut inner = self.lock();
+        if !inner.generation.is_current(id) {
+            return false;
+        }
+        inner.last_filtered = Some((text, cursor));
+        true
+    }
+
+    /// 取走被拦截内容（读后即清）。手动覆盖路径的唯一数据源。
+    pub fn take_filtered(&self) -> Option<(String, (f64, f64))> {
+        self.lock().last_filtered.take()
     }
 
     /// 安装任务句柄。
@@ -198,6 +245,21 @@ impl Default for TranslationCoordinator {
     }
 }
 
+/// 自动翻译入口的过滤门控：开关开启且命中规则时返回拦截原因。
+///
+/// 抽成纯函数是为了让「过滤发生在任何网络请求之前」这条产品约束可测
+/// —— 它没有任何 I/O，`execute_at_position` 在 supersede / 建窗 /
+/// 启动翻译任务之前调用它，早退路径上不存在能发出请求的代码。
+fn filter_gate(text: &str, enabled: bool) -> Option<SensitiveRule> {
+    if !enabled {
+        return None;
+    }
+    match clipboard_filter::classify(text) {
+        FilterDecision::BlockSensitive { rule } => Some(rule),
+        FilterDecision::Allow => None,
+    }
+}
+
 /// 在指定光标位置执行翻译（剪贴板监控的唯一入口）。
 ///
 /// 名字与签名与重构前 `translation_flow::execute_at_position` 一致，
@@ -206,8 +268,91 @@ pub async fn execute_at_position(app: &AppHandle, cursor_x: f64, cursor_y: f64, 
     let state = app.state::<AppState>();
     let coordinator = state.coordinator.clone();
 
+    // ── 敏感内容过滤：必须发生在任何网络请求 / UI 动作之前 ─────────────
+    //
+    // 放在 supersede 之前的语义：被拦截的内容不打断进行中的翻译、
+    // 不显示浮窗、不产生任何请求。拦截反馈用 toast —— 一句不含原文的
+    // 解释（计划 3.2 第 9 条「可解释反馈」）；原文不出现在事件、日志、
+    // 历史里的任何地方。
+    //
+    // 拦截时仍要开一代「占位代」：手动覆盖接口按「当前代」校验，且
+    // 被拦内容要暂存到 coordinator 供 take_filtered() 取走。这一代不
+    // 安装任务、不发事件，仅承载拦截结果。
+    let filter_enabled = state
+        .config
+        .read()
+        .await
+        .get("sensitive_filter_enabled")
+        .map(|v| v == "true")
+        .unwrap_or(true);
+    if let Some(rule) = filter_gate(&text, filter_enabled) {
+        let len = text.len();
+        let id = coordinator.supersede();
+        coordinator.store_filtered(id, text, (cursor_x, cursor_y));
+        state.runtime.record_clipboard_filtered();
+        crate::commands::system::emit_toast(
+            app,
+            ToastPayload::warning_with_action(rule.reason(), "translate_filtered", "仍然翻译"),
+        );
+        tracing::info!(
+            event = "clipboard_filtered_sensitive",
+            rule = rule.code(),
+            len = len,
+            "[coordinator] 命中敏感内容过滤，已拦截（不翻译、不记录原文）"
+        );
+        return;
+    }
+
+    // 通过过滤、即将实际发起 —— 记为「上一次翻译」，供快捷键重试。
+    coordinator.remember_text(&text);
+
     // 先开新一代：上一代的任务被就地 abort，其迟到结果也会因 id 不匹配被丢弃
     let id = coordinator.supersede();
+    dispatch_at_position(app, &state, id, cursor_x, cursor_y, text).await;
+}
+
+/// 手动覆盖：翻译最近一条被敏感过滤拦截的内容。
+///
+/// 唯一的调用方是用户在前端的显式点击（`translate_filtered_text` 命令）
+/// —— 这是「手动覆盖必须由用户主动触发」的产品约束在代码里的落点：
+/// 没有任何自动路径会调用本函数。
+///
+/// 被拦截内容取走即清：覆盖只给一次机会，重复调用返回 `None`。
+pub async fn translate_filtered_text(app: &AppHandle) -> bool {
+    let state = app.state::<AppState>();
+    let coordinator = state.coordinator.clone();
+
+    let Some((text, (cursor_x, cursor_y))) = coordinator.take_filtered() else {
+        return false;
+    };
+
+    // 手动覆盖就是一次正常翻译：开新代、走同一套 show/loading/结果闸门。
+    // 过滤开关在此**不生效** —— 用户已显式授权发送这段内容。
+    let id = coordinator.supersede();
+    tracing::info!(
+        event = "clipboard_filter_overridden",
+        request_id = %id,
+        len = text.len(),
+        "[coordinator] 用户手动覆盖敏感过滤，继续翻译（原文不记录）"
+    );
+    dispatch_at_position(app, &state, id, cursor_x, cursor_y, text).await;
+    true
+}
+
+/// 一次翻译的完整派发：建窗 → loading → 启动任务 → 安装句柄。
+///
+/// 自动路径（execute_at_position）与手动覆盖共用本函数 —— 两者只在
+/// 「是否过了过滤器」上不同，之后的编排必须完全一致，否则覆盖路径会
+/// 悄悄绕过代际闸门或 show 协议。
+async fn dispatch_at_position(
+    app: &AppHandle,
+    state: &AppState,
+    id: RequestId,
+    cursor_x: f64,
+    cursor_y: f64,
+    text: String,
+) {
+    let coordinator = state.coordinator.clone();
 
     if text.trim().is_empty() {
         translation_flow::emit_error(app, "EMPTY_TEXT", "未检测到选中文本", &id.full());
@@ -231,8 +376,7 @@ pub async fn execute_at_position(app: &AppHandle, cursor_x: f64, cursor_y: f64, 
     //
     // 浮窗建不起来（WebView2 异常等）是真实的故障模式，上报给运行时层，
     // 让界面能如实显示，而不是让用户面对一个「什么都没发生」的复制操作。
-    let show = state
-        .coordinator
+    let show = coordinator
         .commit_popup_show(
             id,
             translation_flow::show_popup_window(app, &position),
@@ -305,9 +449,40 @@ async fn run_translation(app: &AppHandle, request: TranslationRequest) {
         "[coordinator] 开始翻译"
     );
 
+    // 控制台术语库引用（百度/有道）：配置随请求读取，改配置立即生效，
+    // 不需要重建 provider。剪贴板路径没有显式源语言 → 不应用 DeepL glossary。
+    // 同一请求上下文同时构造缓存作用域令牌 —— 查询与写入用同一把钥匙，
+    // 术语配置切换后旧上下文的缓存译文不会被端出来。
+    let (options, scope_token) = {
+        let cfg = state.config.read().await;
+        let baidu_use_term_base = cfg
+            .get("baidu_use_term_base")
+            .map(|v| v == "true")
+            .unwrap_or(false);
+        let youdao_vocab_id = cfg.get("youdao_vocab_id").filter(|v| !v.is_empty());
+        let tencent_term_repo_ids =
+            crate::domain::translator::tencent::TencentProvider::parse_term_repo_ids(
+                &cfg.get("tencent_term_repo_ids").unwrap_or_default(),
+            );
+        let scope_token = crate::domain::cache::scope_token(
+            None,
+            "",
+            baidu_use_term_base,
+            youdao_vocab_id.as_deref(),
+            &tencent_term_repo_ids,
+        );
+        let options = crate::domain::translator::TranslateOptions {
+            baidu_use_term_base,
+            youdao_vocab_id,
+            tencent_term_repo_ids,
+            ..Default::default()
+        };
+        (options, scope_token)
+    };
+
     let outcome = state
         .translator
-        .translate(&request.text, &request.target_lang)
+        .translate_with_options(&request.text, &request.target_lang, &options)
         .await;
 
     // 网络组件的结论由**翻译源的整体健康**给出，而不是让界面从「刚才翻译
@@ -346,7 +521,7 @@ async fn run_translation(app: &AppHandle, request: TranslationRequest) {
 
             // 落盘放在 emit 之后：它是 await，会开出新的交错窗口，
             // 不能让它插在闸门与 emit 之间。迟到结果也不会落盘。
-            persist_success(&state, &result, &request).await;
+            persist_success(&state, &result, &request, &scope_token).await;
         }
         // 源语言与目标语言相同：显示原文而非报错，与重构前保持一致
         Err(AppError::SameLanguage { lang }) => {
@@ -374,7 +549,15 @@ async fn run_translation(app: &AppHandle, request: TranslationRequest) {
             // 任何新文本」是做不到的承诺。能做的是——译过的内容仍然显示得出来。
             // 这是整条链路里唯一读缓存的地方，因此在线时结果永远是新鲜的。
             if should_fall_back_to_cache(&e) {
-                if let Some(cached) = lookup_cache(&state, &request).await {
+                if let Some(cached) = lookup_cached_result(
+                    &state.cache,
+                    &request.text,
+                    &request.target_lang,
+                    &scope_token,
+                    request.truncated,
+                )
+                .await
+                {
                     if coordinator.run_if_current(id, || {
                         translation_flow::emit_result(app, &cached, &id.full());
                     }) {
@@ -415,56 +598,9 @@ fn log_stale_result(id: RequestId) {
     );
 }
 
-/// 缓存来源的 provider 标识。
-///
-/// 前端 `PROVIDER_LABELS` 里对应「本地缓存」。复用 provider 字段而不是给
-/// `TranslationResult` 加一个 `from_cache` 标志：既有的 SameLanguage 路径
-/// 已经在用非 provider 取值（"none"），说明这个字段本就是「来源」而非
-/// 「翻译商」，加字段会连带改动前端类型与组件。
-const CACHE_PROVIDER: &str = "cache";
-
-/// 是否该回退到本地缓存。
-///
-/// 只在「所有翻译源都用不了」时回退 —— 那才是信号。Permanent 不回退：
-/// 换谁都一样，缓存里也不会有更对的东西；SameLanguage 根本不是失败。
-/// 这两种情况把真实原因告诉用户，比递一个来源不明的旧译文有用。
-fn should_fall_back_to_cache(err: &AppError) -> bool {
-    matches!(err, AppError::AllProvidersFailed { .. })
-}
-
-/// 查缓存并组装成一次正常的翻译结果。
-///
-/// 回声条目过滤：缓存里可能存有历史版本写入的 `(A → A)` 条目（回声守卫
-/// 落地前的存量数据），离线回退把它们当译文端出去就是「翻译结果是原文」。
-/// 读取侧统一拒掉，存量毒化数据无需迁移即可失效。
-async fn lookup_cache(state: &AppState, request: &TranslationRequest) -> Option<TranslationResult> {
-    match state.cache.get(&request.text, &request.target_lang).await {
-        Ok(Some(hit)) => {
-            if crate::domain::translator::is_echo_text(&request.text, &hit.translated_text) {
-                tracing::info!(
-                    event = "cache_entry_rejected_as_echo",
-                    "[coordinator] 缓存命中了与原文相同的内容，按未命中处理"
-                );
-                return None;
-            }
-            Some(TranslationResult {
-                source_text: request.text.clone(),
-                translated_text: hit.translated_text,
-                detected_source_lang: hit.source_lang,
-                target_lang: request.target_lang.clone(),
-                provider: CACHE_PROVIDER.to_string(),
-                duration_ms: 0,
-                truncated: request.truncated,
-            })
-        }
-        Ok(None) => None,
-        Err(e) => {
-            // 缓存读失败不该把主链路也带下水 —— 它本来只是最后一根稻草
-            tracing::warn!("[coordinator] 读取本地缓存失败: {}", e);
-            None
-        }
-    }
-}
+// 缓存回退（should_fall_back_to_cache / lookup_cached_result / CACHE_PROVIDER）
+// 移到 domain/cache.rs：手动翻译路径（commands/translate.rs）与 coordinator
+// 共用同一套「全部翻译源失败 → 查本地缓存」的语义。
 
 /// 成功的翻译落盘：交给有界队列 + 单 worker（计划第 24 节）。
 ///
@@ -474,11 +610,17 @@ async fn persist_success(
     state: &AppState,
     result: &TranslationResult,
     request: &TranslationRequest,
+    scope_token: &str,
 ) {
     let history_limit = state.config.read().await.cache_history_limit();
 
     let job = PersistJob {
-        record: TranslationRecord::from_result(result, &request.text, &request.target_lang),
+        record: TranslationRecord::from_result(
+            result,
+            &request.text,
+            &request.target_lang,
+            crate::types::RECORD_SOURCE_CLIPBOARD,
+        ),
         history_limit,
         cache_entry: OwnedCacheEntry {
             source_text: request.text.clone(),
@@ -486,6 +628,9 @@ async fn persist_success(
             translated_text: result.translated_text.clone(),
             source_lang: result.detected_source_lang.clone(),
             provider: result.provider.clone(),
+            // 与本次请求的查询同一把钥匙：剪贴板路径没有显式源语言、
+            // 不应用 DeepL glossary，令牌只含控制台术语库上下文
+            scope_token: scope_token.to_string(),
         },
     };
 
@@ -639,6 +784,20 @@ mod tests {
     // ── 缓存回退的判定（计划第 15/16 节）────────────────────────────────
 
     /// 只有「所有翻译源都用不了」才回退缓存 —— 那才是离线的信号。
+    #[test]
+    fn remember_text_keeps_the_latest_and_survives_supersede() {
+        let c = TranslationCoordinator::new();
+        assert_eq!(c.last_text(), None);
+
+        c.remember_text("first");
+        c.remember_text("second");
+        assert_eq!(c.last_text().as_deref(), Some("second"));
+
+        // 新请求不该清掉「上一次翻译」—— 关闭浮窗后仍可重试
+        let _ = c.supersede();
+        assert_eq!(c.last_text().as_deref(), Some("second"));
+    }
+
     /// 其他失败把真实原因告诉用户，比递一个来源不明的旧译文有用。
     #[test]
     fn cache_fallback_is_only_for_total_provider_failure() {
@@ -659,6 +818,92 @@ mod tests {
         ] {
             assert!(!should_fall_back_to_cache(&err), "{:?} 不该回退缓存", err);
         }
+    }
+
+    // ── 敏感过滤门控（顺序契约：早于任何 I/O）──────────────────────────
+
+    /// 合成的 AWS Key ID 形态（AKIA + 16 位大写字母数字）。
+    fn aws_key_sample() -> String {
+        format!("AKIA{}", "X7".repeat(8))
+    }
+
+    /// 开关关闭时一律放行 —— 用户明确选择承担风险。
+    #[test]
+    fn filter_gate_is_bypassed_when_disabled() {
+        assert_eq!(
+            filter_gate(aws_key_sample().as_str(), false),
+            None,
+            "关闭过滤后敏感内容也必须放行"
+        );
+    }
+
+    /// 开启时命中高置信度凭证形态。
+    #[test]
+    fn filter_gate_blocks_sensitive_text_when_enabled() {
+        assert_eq!(
+            filter_gate(aws_key_sample().as_str(), true),
+            Some(SensitiveRule::AwsAccessKeyId)
+        );
+    }
+
+    /// 普通文本不受影响 —— 过滤不能伤害主链路的日常使用。
+    #[test]
+    fn filter_gate_allows_normal_text() {
+        assert_eq!(filter_gate("Hello, world. 一段普通文本。", true), None);
+        assert_eq!(filter_gate("", true), None);
+    }
+
+    // ── 敏感过滤暂存（手动覆盖的数据源）────────────────────────────────
+
+    /// 拦截内容按请求代暂存：当前代可以写入，过期代不行。
+    #[test]
+    fn filtered_text_is_stored_only_for_the_current_generation() {
+        let c = TranslationCoordinator::new();
+        let a = c.supersede();
+
+        assert!(c.store_filtered(a, "secret".to_string(), (10.0, 20.0)));
+        assert_eq!(c.take_filtered().map(|(t, _)| t).as_deref(), Some("secret"));
+
+        let b = c.supersede();
+        assert!(
+            !c.store_filtered(a, "stale".to_string(), (0.0, 0.0)),
+            "过期请求不得写入暂存"
+        );
+        assert!(c.take_filtered().is_none());
+        assert!(c.store_filtered(b, "fresh".to_string(), (1.0, 2.0)));
+    }
+
+    /// 取走即清：手动覆盖只给一次机会，重复调用返回 None。
+    #[test]
+    fn filtered_text_is_consumed_once() {
+        let c = TranslationCoordinator::new();
+        let a = c.supersede();
+        c.store_filtered(a, "secret".to_string(), (0.0, 0.0));
+
+        assert_eq!(c.take_filtered(), Some(("secret".to_string(), (0.0, 0.0))));
+        assert!(c.take_filtered().is_none(), "第二次取走必须是空");
+    }
+
+    /// 新的复制（supersede）让上一条被拦截内容失效 —— 覆盖只对「刚刚
+    /// 被拦的那条」有效，不能翻译用户早已放弃的内容。
+    #[test]
+    fn new_request_clears_the_pending_filtered_text() {
+        let c = TranslationCoordinator::new();
+        let a = c.supersede();
+        c.store_filtered(a, "secret".to_string(), (0.0, 0.0));
+
+        let _b = c.supersede();
+        assert!(c.take_filtered().is_none(), "新复制后旧拦截内容必须失效");
+    }
+
+    /// 被拦截的暂存不参与「在途任务」语义：拦截不该显示成有一个任务在跑。
+    #[test]
+    fn storing_filtered_text_does_not_install_an_in_flight_task() {
+        let c = TranslationCoordinator::new();
+        let a = c.supersede();
+        c.store_filtered(a, "secret".to_string(), (0.0, 0.0));
+        assert!(!c.has_in_flight());
+        assert_eq!(c.current(), Some(a));
     }
 
     /// 闸门为 false 时 f 绝不能被执行（副作用不能泄漏）

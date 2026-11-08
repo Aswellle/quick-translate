@@ -27,7 +27,9 @@ struct KeyDescriptor {
 /// 凭证与字符串类键的描述符表。
 ///
 /// 布尔/整数键（auto_start / history_limit / fallback_enabled /
-/// onboarding_completed / clipboard_monitor_enabled / reduce_transparency）
+/// onboarding_completed / clipboard_monitor_enabled /
+/// sensitive_filter_enabled / reduce_transparency / cache_enabled /
+/// glossary_enabled / baidu_use_term_base）
 /// 的解析各自带类型转换与钳制逻辑，留在 match 里，表只收字符串直存类键。
 const KEY_DESCRIPTORS: &[KeyDescriptor] = &[
     KeyDescriptor {
@@ -53,6 +55,48 @@ const KEY_DESCRIPTORS: &[KeyDescriptor] = &[
         encrypted: false,
         get_credential: None,
         set_string: Some(|c, v| c.export_dir = v),
+    },
+    KeyDescriptor {
+        key: "hotkey_translate_clipboard",
+        encrypted: false,
+        get_credential: None,
+        set_string: Some(|c, v| c.hotkey_translate_clipboard = v),
+    },
+    KeyDescriptor {
+        key: "hotkey_open_manual",
+        encrypted: false,
+        get_credential: None,
+        set_string: Some(|c, v| c.hotkey_open_manual = v),
+    },
+    KeyDescriptor {
+        key: "hotkey_toggle_monitor",
+        encrypted: false,
+        get_credential: None,
+        set_string: Some(|c, v| c.hotkey_toggle_monitor = v),
+    },
+    KeyDescriptor {
+        key: "hotkey_toggle_popup",
+        encrypted: false,
+        get_credential: None,
+        set_string: Some(|c, v| c.hotkey_toggle_popup = v),
+    },
+    KeyDescriptor {
+        key: "hotkey_retranslate_last",
+        encrypted: false,
+        get_credential: None,
+        set_string: Some(|c, v| c.hotkey_retranslate_last = v),
+    },
+    KeyDescriptor {
+        key: "youdao_vocab_id",
+        encrypted: false,
+        get_credential: None,
+        set_string: Some(|c, v| c.youdao_vocab_id = v),
+    },
+    KeyDescriptor {
+        key: "tencent_term_repo_ids",
+        encrypted: false,
+        get_credential: None,
+        set_string: Some(|c, v| c.tencent_term_repo_ids = v),
     },
     KeyDescriptor {
         key: "deepl_api_key",
@@ -195,12 +239,23 @@ impl ConfigService {
             "provider" => Some(self.cache.provider.clone()),
             "theme" => Some(self.cache.theme.clone()),
             "export_dir" => Some(self.cache.export_dir.clone()),
+            "hotkey_translate_clipboard" => Some(self.cache.hotkey_translate_clipboard.clone()),
+            "hotkey_open_manual" => Some(self.cache.hotkey_open_manual.clone()),
+            "hotkey_toggle_monitor" => Some(self.cache.hotkey_toggle_monitor.clone()),
+            "hotkey_toggle_popup" => Some(self.cache.hotkey_toggle_popup.clone()),
+            "hotkey_retranslate_last" => Some(self.cache.hotkey_retranslate_last.clone()),
+            "youdao_vocab_id" => Some(self.cache.youdao_vocab_id.clone()),
+            "tencent_term_repo_ids" => Some(self.cache.tencent_term_repo_ids.clone()),
             "auto_start" => Some(self.cache.auto_start.to_string()),
             "history_limit" => Some(self.cache.history_limit.to_string()),
             "fallback_enabled" => Some(self.cache.fallback_enabled.to_string()),
             "onboarding_completed" => Some(self.cache.onboarding_completed.to_string()),
             "clipboard_monitor_enabled" => Some(self.cache.clipboard_monitor_enabled.to_string()),
+            "sensitive_filter_enabled" => Some(self.cache.sensitive_filter_enabled.to_string()),
             "reduce_transparency" => Some(self.cache.reduce_transparency.to_string()),
+            "cache_enabled" => Some(self.cache.cache_enabled.to_string()),
+            "glossary_enabled" => Some(self.cache.glossary_enabled.to_string()),
+            "baidu_use_term_base" => Some(self.cache.baidu_use_term_base.to_string()),
             _ => None,
         }
     }
@@ -291,7 +346,11 @@ impl ConfigService {
             "fallback_enabled" => self.cache.fallback_enabled = value == "true",
             "onboarding_completed" => self.cache.onboarding_completed = value == "true",
             "clipboard_monitor_enabled" => self.cache.clipboard_monitor_enabled = value == "true",
+            "sensitive_filter_enabled" => self.cache.sensitive_filter_enabled = value == "true",
             "reduce_transparency" => self.cache.reduce_transparency = value == "true",
+            "cache_enabled" => self.cache.cache_enabled = value == "true",
+            "glossary_enabled" => self.cache.glossary_enabled = value == "true",
+            "baidu_use_term_base" => self.cache.baidu_use_term_base = value == "true",
             _ => {}
         }
     }
@@ -385,8 +444,20 @@ fn load_config_from_db(conn: &Connection) -> Result<AppConfig, AppError> {
             "clipboard_monitor_enabled" => {
                 config.clipboard_monitor_enabled = decode(&raw) == "true";
             }
+            "sensitive_filter_enabled" => {
+                config.sensitive_filter_enabled = decode(&raw) == "true";
+            }
             "reduce_transparency" => {
                 config.reduce_transparency = decode(&raw) == "true";
+            }
+            "cache_enabled" => {
+                config.cache_enabled = decode(&raw) == "true";
+            }
+            "glossary_enabled" => {
+                config.glossary_enabled = decode(&raw) == "true";
+            }
+            "baidu_use_term_base" => {
+                config.baidu_use_term_base = decode(&raw) == "true";
             }
             _ => {}
         }
@@ -522,6 +593,133 @@ mod tests {
             reloaded.reduce_transparency,
             "重启后必须仍为 true —— 漏掉 load 分支会静默回退成 false"
         );
+    }
+
+    /// sensitive_filter_enabled 走与其它布尔键相同的三条路径（get / 缓存 /
+    /// 载入），且默认开启 —— 过滤是安全默认值，静默回退成关闭不可接受。
+    #[test]
+    fn sensitive_filter_roundtrips_through_all_three_paths() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let db = test_db();
+        let mut svc = fresh_service(db);
+
+        assert_eq!(
+            svc.get("sensitive_filter_enabled").as_deref(),
+            Some("true"),
+            "默认必须开启"
+        );
+
+        rt.block_on(async {
+            svc.set("sensitive_filter_enabled", "false").await.unwrap();
+        });
+        assert_eq!(
+            svc.get("sensitive_filter_enabled").as_deref(),
+            Some("false"),
+            "写入后缓存必须立即反映新值"
+        );
+
+        let shared = svc.db.try_conn().unwrap();
+        let conn = shared.blocking_lock();
+        let reloaded = load_config_from_db(&conn).unwrap();
+        drop(conn);
+        assert!(
+            !reloaded.sensitive_filter_enabled,
+            "重启后必须仍为 false —— 漏掉 load 分支会静默回到 true"
+        );
+    }
+
+    /// cache_enabled 走与其它布尔键相同的三条路径（get / 缓存 / 载入），
+    /// 默认开启 —— 离线复用是既有行为，新增开关不得改变默认。
+    #[test]
+    fn cache_enabled_roundtrips_through_all_three_paths() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let db = test_db();
+        let mut svc = fresh_service(db);
+
+        assert_eq!(
+            svc.get("cache_enabled").as_deref(),
+            Some("true"),
+            "默认必须开启（不改变既有离线回退行为）"
+        );
+
+        rt.block_on(async {
+            svc.set("cache_enabled", "false").await.unwrap();
+        });
+        assert_eq!(
+            svc.get("cache_enabled").as_deref(),
+            Some("false"),
+            "写入后缓存必须立即反映新值"
+        );
+
+        let shared = svc.db.try_conn().unwrap();
+        let conn = shared.blocking_lock();
+        let reloaded = load_config_from_db(&conn).unwrap();
+        drop(conn);
+        assert!(
+            !reloaded.cache_enabled,
+            "重启后必须仍为 false —— 漏掉 load 分支会静默回到 true"
+        );
+    }
+
+    /// glossary_enabled 同样走三条路径，默认开启（无条目时开启等于空操作）。
+    #[test]
+    fn glossary_enabled_roundtrips_through_all_three_paths() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let db = test_db();
+        let mut svc = fresh_service(db);
+
+        assert_eq!(svc.get("glossary_enabled").as_deref(), Some("true"));
+
+        rt.block_on(async {
+            svc.set("glossary_enabled", "false").await.unwrap();
+        });
+        assert_eq!(svc.get("glossary_enabled").as_deref(), Some("false"));
+
+        let shared = svc.db.try_conn().unwrap();
+        let conn = shared.blocking_lock();
+        let reloaded = load_config_from_db(&conn).unwrap();
+        drop(conn);
+        assert!(!reloaded.glossary_enabled);
+    }
+
+    /// 控制台术语库引用键：布尔开关与字符串 ID 都走三条路径。
+    #[test]
+    fn console_term_base_keys_roundtrip() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let db = test_db();
+        let mut svc = fresh_service(db);
+
+        assert_eq!(svc.get("baidu_use_term_base").as_deref(), Some("false"));
+        assert_eq!(svc.get("youdao_vocab_id").as_deref(), Some(""));
+        assert_eq!(svc.get("tencent_term_repo_ids").as_deref(), Some(""));
+
+        rt.block_on(async {
+            svc.set("baidu_use_term_base", "true").await.unwrap();
+            svc.set("youdao_vocab_id", "vocab-1").await.unwrap();
+            svc.set("tencent_term_repo_ids", "repo-1,repo-2")
+                .await
+                .unwrap();
+        });
+
+        let shared = svc.db.try_conn().unwrap();
+        let conn = shared.blocking_lock();
+        let reloaded = load_config_from_db(&conn).unwrap();
+        drop(conn);
+        assert!(reloaded.baidu_use_term_base);
+        assert_eq!(reloaded.youdao_vocab_id, "vocab-1");
+        assert_eq!(reloaded.tencent_term_repo_ids, "repo-1,repo-2");
     }
 }
 
@@ -694,6 +892,13 @@ fn read_field_for_test(config: &AppConfig, key: &str) -> String {
         "provider" => config.provider.clone(),
         "theme" => config.theme.clone(),
         "export_dir" => config.export_dir.clone(),
+        "hotkey_translate_clipboard" => config.hotkey_translate_clipboard.clone(),
+        "hotkey_open_manual" => config.hotkey_open_manual.clone(),
+        "hotkey_toggle_monitor" => config.hotkey_toggle_monitor.clone(),
+        "hotkey_toggle_popup" => config.hotkey_toggle_popup.clone(),
+        "hotkey_retranslate_last" => config.hotkey_retranslate_last.clone(),
+        "youdao_vocab_id" => config.youdao_vocab_id.clone(),
+        "tencent_term_repo_ids" => config.tencent_term_repo_ids.clone(),
         _ => String::new(),
     }
 }

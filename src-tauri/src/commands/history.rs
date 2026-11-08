@@ -50,6 +50,13 @@ pub async fn clear_history(
     Ok(())
 }
 
+/// 清空翻译缓存（独立于历史：缓存含原文与译文，用户必须能单独清除）。
+#[tauri::command]
+pub async fn clear_translation_cache(state: State<'_, AppState>) -> Result<i64, AppError> {
+    let deleted = state.cache.clear_and_count().await?;
+    Ok(deleted)
+}
+
 /// 删除单条历史记录
 #[tauri::command]
 pub async fn delete_history_record(

@@ -152,6 +152,7 @@ export const ERROR_MESSAGES: Record<string, string> = {
   EMPTY_TEXT:          "未检测到选中文本",
   NON_TEXT_CONTENT:    "仅支持文本翻译",
   SAME_LANGUAGE:       "源语言与目标语言相同",
+  SENSITIVE_CONTENT_BLOCKED: "内容疑似包含密钥、令牌或鉴权头等敏感信息，未发送到翻译服务",
   NETWORK_ERROR:       "网络连接失败，请检查网络设置",
   AUTH_ERROR:          "API Key 无效，请在设置中检查",
   RATE_LIMIT:          "请求频率过高，请稍后重试",

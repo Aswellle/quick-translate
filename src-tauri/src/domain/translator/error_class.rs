@@ -92,9 +92,12 @@ pub fn classify(err: &AppError) -> ErrorClass {
         // 输入的锅，不是 provider 的锅。
         // ProviderRejected 同理：4xx 表示「这个请求被拒绝了」，
         // 换一家还是同样结果，而 provider 本身是健康的。
-        AppError::EmptyText | AppError::NonTextContent | AppError::ProviderRejected { .. } => {
-            ErrorClass::Permanent
-        }
+        // SensitiveContentBlocked 同理：换源解决不了内容本身的问题，
+        // 等用户确认（force）而不是重试。
+        AppError::EmptyText
+        | AppError::NonTextContent
+        | AppError::ProviderRejected { .. }
+        | AppError::SensitiveContentBlocked { .. } => ErrorClass::Permanent,
 
         // 本地配置错误：换源也没用，得先修配置
         AppError::ConfigError(_) => ErrorClass::Permanent,

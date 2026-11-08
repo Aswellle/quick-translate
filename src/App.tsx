@@ -10,8 +10,9 @@ import { PopupWindow } from "@/windows/popup/PopupWindow";
 import { SettingsWindow } from "@/windows/settings/SettingsWindow";
 import { HistoryWindow } from "@/windows/history/HistoryWindow";
 import { OnboardingWindow } from "@/windows/onboarding/OnboardingWindow";
+import { ManualTranslateWindow } from "@/windows/manual/ManualTranslateWindow";
 
-type WindowType = "popup" | "settings" | "history" | "onboarding";
+type WindowType = "popup" | "settings" | "history" | "onboarding" | "manual";
 
 /** settings 窗口可携带子路径：#settings/provider 直达翻译源配置 Tab */
 function getWindowType(): WindowType {
@@ -19,20 +20,22 @@ function getWindowType(): WindowType {
   if (hash.startsWith("settings")) return "settings";
   if (hash === "history")    return "history";
   if (hash === "onboarding") return "onboarding";
+  if (hash === "manual")     return "manual";
   return "popup";
 }
 
 /** 从 hash 中解析 settings 的初始 Tab（托盘「配置翻译源…」的直达路径） */
-function getSettingsInitialTab(): "general" | "provider" | "about" {
+function getSettingsInitialTab(): "general" | "provider" | "glossary" | "about" {
   const hash = window.location.hash.replace("#", "");
   if (hash.startsWith("settings/provider")) return "provider";
+  if (hash.startsWith("settings/glossary")) return "glossary";
   if (hash.startsWith("settings/about")) return "about";
   return "general";
 }
 
 export default function App() {
   const [windowType, setWindowType] = useState<WindowType>(getWindowType);
-  const [settingsInitialTab, setSettingsInitialTab] = useState<"general" | "provider" | "about">(getSettingsInitialTab);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<"general" | "provider" | "glossary" | "about">(getSettingsInitialTab);
   const setConfig = useConfigStore((s) => s.setConfig);
 
   useEffect(() => {
@@ -90,6 +93,7 @@ export default function App() {
       {windowType === "settings"    && <SettingsWindow key={settingsInitialTab} initialTab={settingsInitialTab} />}
       {windowType === "history"     && <HistoryWindow />}
       {windowType === "onboarding"  && <OnboardingWindow />}
+      {windowType === "manual"      && <ManualTranslateWindow />}
     </div>
   );
 }

@@ -185,6 +185,22 @@ impl RuntimeStatus {
         }
     }
 
+    /// 记录一次持久化队列丢弃（纯记账，不触发状态广播）。
+    pub fn record_persistence_dropped(&self) {
+        use std::sync::atomic::Ordering;
+        self.counters
+            .persistence_dropped
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// 记录一次敏感内容拦截（纯记账，不触发状态广播、不含原文）。
+    pub fn record_clipboard_filtered(&self) {
+        use std::sync::atomic::Ordering;
+        self.counters
+            .clipboard_filtered
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     /// 本地诊断快照（计划第 33 节）：debug / support 用，不参与状态广播。
     ///
     /// fallback_count 不在本层维护（真实计数在 TranslationEngine 的原子量里，
@@ -200,6 +216,8 @@ impl RuntimeStatus {
             translation_failure_count: self.counters.translation_failure.load(Ordering::Relaxed),
             fallback_count: 0,
             echo_count: 0,
+            clipboard_filtered_count: self.counters.clipboard_filtered.load(Ordering::Relaxed),
+            persistence_dropped_count: self.counters.persistence_dropped.load(Ordering::Relaxed),
         }
     }
 

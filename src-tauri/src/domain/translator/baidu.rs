@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Instant;
 
-use super::TranslationProvider;
+use super::{TranslateOptions, TranslationProvider};
 use crate::error::AppError;
 use crate::infra::http_client::HttpClient;
 use crate::types::{ProviderInfo, TranslationResult};
@@ -53,6 +53,30 @@ impl BaiduProvider {
         h.update(s.as_bytes());
         format!("{:x}", h.finalize())
     }
+
+    /// 组装请求参数（纯函数，便于测试可选术语库开关）。
+    fn build_params<'a>(
+        text: &'a str,
+        target: &'a str,
+        app_id: &'a str,
+        salt: &'a str,
+        sign: &'a str,
+        use_term_base: bool,
+    ) -> Vec<(&'a str, &'a str)> {
+        let mut params = vec![
+            ("q", text),
+            ("from", "auto"),
+            ("to", target),
+            ("appid", app_id),
+            ("salt", salt),
+            ("sign", sign),
+        ];
+        if use_term_base {
+            // 官方接入文档：开通「我的术语库」后加 needIntervene=1 生效
+            params.push(("needIntervene", "1"));
+        }
+        params
+    }
 }
 
 #[derive(Deserialize)]
@@ -75,6 +99,18 @@ impl TranslationProvider for BaiduProvider {
         text: &str,
         target_lang: &str,
     ) -> Result<TranslationResult, AppError> {
+        self.translate_with_options(text, target_lang, &TranslateOptions::default())
+            .await
+    }
+
+    /// 百度通用接口的术语库是控制台维护的「我的术语库」，API 只有一个
+    /// `needIntervene=1` 开关。开关状态下发前不改变任何其它请求形态。
+    async fn translate_with_options(
+        &self,
+        text: &str,
+        target_lang: &str,
+        options: &TranslateOptions,
+    ) -> Result<TranslationResult, AppError> {
         if self.app_id.is_empty() || self.secret_key.is_empty() {
             return Err(AppError::AuthError {
                 provider: "baidu".into(),
@@ -95,14 +131,14 @@ impl TranslationProvider for BaiduProvider {
         let sign_str = format!("{}{}{}{}", self.app_id, text, salt, self.secret_key);
         let sign = Self::md5_sign(&sign_str);
 
-        let params = [
-            ("q", text),
-            ("from", "auto"),
-            ("to", target),
-            ("appid", &self.app_id),
-            ("salt", &salt),
-            ("sign", &sign),
-        ];
+        let params = Self::build_params(
+            text,
+            target,
+            &self.app_id,
+            &salt,
+            &sign,
+            options.baidu_use_term_base,
+        );
 
         let response = self
             .http_client
@@ -216,6 +252,35 @@ impl TranslationProvider for BaiduProvider {
             Ok(_) => Ok(true),
             Err(AppError::AuthError { .. }) => Ok(false),
             Err(e) => Err(e),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 术语库开关只增加 needIntervene=1，不改变既有参数集合。
+    #[test]
+    fn term_base_switch_only_adds_need_intervene() {
+        let base = BaiduProvider::build_params("hello", "ZH", "app", "1", "sign", false);
+        assert!(!base.iter().any(|(k, _)| *k == "needIntervene"));
+        assert_eq!(base.len(), 6, "默认请求形状保持不变");
+
+        let with_terms = BaiduProvider::build_params("hello", "ZH", "app", "1", "sign", true);
+        assert_eq!(with_terms.len(), base.len() + 1);
+        assert!(
+            with_terms
+                .iter()
+                .any(|(k, v)| *k == "needIntervene" && *v == "1"),
+            "开启后必须下发 needIntervene=1"
+        );
+        for (key, value) in &base {
+            assert!(
+                with_terms.iter().any(|(k, v)| k == key && v == value),
+                "既有参数 {} 不应被改动",
+                key
+            );
         }
     }
 }

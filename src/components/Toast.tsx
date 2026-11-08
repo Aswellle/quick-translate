@@ -5,11 +5,20 @@ import { useEffect, useState } from "react";
 
 export type ToastType = "error" | "success" | "warning" | "info";
 
+/** Toast 上的动作按钮（Rust 侧 ToastAction 的前端镜像） */
+export interface ToastAction {
+  /** 动作标识，目前只有 "translate_filtered" */
+  id: string;
+  label: string;
+}
+
 interface ToastProps {
   id: number;
   message: string;
   type?: ToastType;
   duration?: number;
+  action?: ToastAction;
+  onAction?: (id: string) => void;
   onClose: (id: number) => void;
 }
 
@@ -47,7 +56,15 @@ const TOAST_COLORS: Record<ToastType, string> = {
   info:    "text-blue-500  dark:text-blue-400",
 };
 
-export function ToastItem({ id, message, type = "info", duration = 3500, onClose }: ToastProps) {
+export function ToastItem({
+  id,
+  message,
+  type = "info",
+  duration = 3500,
+  action,
+  onAction,
+  onClose,
+}: ToastProps) {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
@@ -64,10 +81,20 @@ export function ToastItem({ id, message, type = "info", duration = 3500, onClose
     };
   }, [id, duration, onClose]);
 
+  // 带动作按钮的 toast 需要指针事件：容器是 pointer-events-none 的，
+  // 按钮自身必须显式恢复 auto，否则点击会穿透到底层窗口。
+  const handleAction = () => {
+    if (!action) return;
+    onAction?.(action.id);
+    // 点击动作后立即收起这一条：它的语义是「对刚才那次拦截作出决定」，
+    // 决定已作出，提示继续停留只会挡住结果浮窗。
+    onClose(id);
+  };
+
   return (
     <div
       className={[
-        "flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl max-w-xs",
+        "flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl max-w-xs pointer-events-auto",
         "bg-[var(--surface-primary)] dark:bg-[var(--surface-secondary)]",
         "border border-[var(--border-secondary)]",
         "shadow-macos",
@@ -78,6 +105,15 @@ export function ToastItem({ id, message, type = "info", duration = 3500, onClose
     >
       {TOAST_ICONS[type]}
       <span className="text-[var(--text-primary)] text-[12px] leading-snug">{message}</span>
+      {action && (
+        <button
+          type="button"
+          onClick={handleAction}
+          className="ml-1 shrink-0 px-2 py-0.5 rounded-md text-[11.5px] font-medium bg-[var(--system-blue)] hover:brightness-110 text-white transition-all active:scale-95"
+        >
+          {action.label}
+        </button>
+      )}
     </div>
   );
 }

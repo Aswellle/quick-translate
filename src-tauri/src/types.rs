@@ -40,6 +40,11 @@ pub struct ProviderStatus {
     pub last_error_class: Option<String>,
 }
 
+/// 历史记录来源（计划 Task 09：手动输入与剪贴板自动触发可区分，
+/// 但走同一翻译核心与落盘管道）。
+pub const RECORD_SOURCE_CLIPBOARD: &str = "clipboard";
+pub const RECORD_SOURCE_MANUAL: &str = "manual";
+
 /// 历史记录条目（DB → 前端）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranslationRecord {
@@ -52,11 +57,19 @@ pub struct TranslationRecord {
     pub created_at: i64, // Unix ms
     pub duration_ms: Option<i64>,
     pub is_starred: bool,
+    /// 请求来源："clipboard"（自动触发）| "manual"（用户手动发起）。
+    /// v7 之前的历史行由迁移统一置为 clipboard。
+    pub source: String,
 }
 
 impl TranslationRecord {
     /// 从翻译结果构造历史记录
-    pub fn from_result(result: &TranslationResult, source_text: &str, target_lang: &str) -> Self {
+    pub fn from_result(
+        result: &TranslationResult,
+        source_text: &str,
+        target_lang: &str,
+        source: &str,
+    ) -> Self {
         TranslationRecord {
             id: uuid::Uuid::new_v4().to_string(),
             source_text: source_text.to_string(),
@@ -67,6 +80,7 @@ impl TranslationRecord {
             created_at: now_unix_ms(),
             duration_ms: Some(result.duration_ms as i64),
             is_starred: false,
+            source: source.to_string(),
         }
     }
 }
@@ -176,6 +190,12 @@ pub struct AppConfig {
     pub onboarding_completed: bool,
     /// 是否启用剪贴板监控自动翻译
     pub clipboard_monitor_enabled: bool,
+    /// 剪贴板敏感内容过滤开关（domain::clipboard_filter）。
+    ///
+    /// 默认开启：疑似凭证（私钥/JWT/云服务令牌等高置信度形态）在发送给
+    /// 翻译服务之前被本地拦截。关闭意味着用户自行承担凭证外发风险，
+    /// 设置页文案必须如实说明这一点。
+    pub sensitive_filter_enabled: bool,
     /// 减少透明效果（应用内开关）。
     ///
     /// 为什么需要它：`prefers-reduced-transparency` 媒体查询在 WKWebView
@@ -189,6 +209,36 @@ pub struct AppConfig {
     /// 历史记录导出的默认保存目录。空串 = 每次导出弹原生保存对话框；
     /// 非空 = 直接写入该目录（不再询问）。设置页可修改/清除。
     pub export_dir: String,
+    /// 翻译结果的本地缓存开关（默认开启）。
+    ///
+    /// 关闭只暂停读写，不删除已有条目 —— 「清空缓存」仍是独立操作。
+    /// 设为开关而不是只提供「清空」：不想在磁盘上留存译文副本的用户，
+    /// 需要一个持续生效的选项，而不是每次翻译后手动清一次。
+    pub cache_enabled: bool,
+    /// 全局快捷键的加速键（空串 = 禁用该动作）。
+    ///
+    /// 语法由 tauri-plugin-global-shortcut 解析（如 "CmdOrControl+Alt+T"）。
+    /// 这里只存字符串：合法性由注册结果裁决，注册失败会在设置页显示
+    /// 真实原因且不影响应用启动。
+    pub hotkey_translate_clipboard: String,
+    pub hotkey_open_manual: String,
+    pub hotkey_toggle_monitor: String,
+    pub hotkey_toggle_popup: String,
+    pub hotkey_retranslate_last: String,
+    /// 术语表总开关（计划 Task 10）。
+    ///
+    /// 关闭时术语条目不参与任何翻译请求与缓存键；条目本身保留。
+    /// 只有支持原生 glossary 的 Provider 会真正生效（当前为 DeepL），
+    /// 其余 Provider 在设置页如实标记为不支持。
+    pub glossary_enabled: bool,
+    /// 百度通用接口：使用控制台「我的术语库」（请求参数 needIntervene=1）。
+    /// 术语内容只能在百度控制台维护，应用只负责开关。
+    pub baidu_use_term_base: bool,
+    /// 有道智云控制台术语表 ID（请求参数 vocabId）。空串 = 不使用。
+    pub youdao_vocab_id: String,
+    /// 腾讯云控制台术语库 ID 列表（逗号分隔；请求参数 TermRepoIDList）。
+    /// 空串 = 不使用。
+    pub tencent_term_repo_ids: String,
 }
 
 impl Default for AppConfig {
@@ -209,11 +259,30 @@ impl Default for AppConfig {
             fallback_enabled: true,
             onboarding_completed: false,
             clipboard_monitor_enabled: true,
+            sensitive_filter_enabled: true,
             reduce_transparency: false,
             export_dir: String::new(),
+            cache_enabled: true,
+            hotkey_translate_clipboard: "CmdOrControl+Alt+T".to_string(),
+            hotkey_open_manual: "CmdOrControl+Alt+M".to_string(),
+            hotkey_toggle_monitor: "CmdOrControl+Alt+P".to_string(),
+            hotkey_toggle_popup: "CmdOrControl+Alt+H".to_string(),
+            hotkey_retranslate_last: "CmdOrControl+Alt+R".to_string(),
+            glossary_enabled: true,
+            baidu_use_term_base: false,
+            youdao_vocab_id: String::new(),
+            tencent_term_repo_ids: String::new(),
         }
     }
 }
+
+/// 应用支持的语言代码（与前端 SUPPORTED_LANGUAGES 一致）。
+///
+/// 单一定义来源：配置校验（target_lang）与术语表语言对校验共用，
+/// 避免两处清单漂移。
+pub const SUPPORTED_LANGS: &[&str] = &[
+    "zh", "zh-tw", "en", "ja", "ko", "fr", "de", "es", "ru", "pt", "it", "ar",
+];
 
 /// 获取当前 Unix 时间戳（毫秒）
 pub fn now_unix_ms() -> i64 {
@@ -232,6 +301,21 @@ pub struct ToastPayload {
     pub kind: String,
     /// 显示时长（毫秒），默认 3000
     pub duration: Option<u32>,
+    /// 可选动作按钮（目前只有敏感过滤拦截使用）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<ToastAction>,
+}
+
+/// Toast 上的动作按钮：前端按 `id` 分发，`label` 是按钮文案。
+///
+/// 引入动作按钮的动机（计划 3.2 第 6 条）：过滤拦下内容后，用户必须有
+/// 一条**显式**的「我知道风险，仍然翻译」路径 —— 否则过滤会变成无法
+/// 绕过的高墙，用户只能关掉整个过滤开关。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToastAction {
+    /// 动作标识："translate_filtered"
+    pub id: String,
+    pub label: String,
 }
 
 impl ToastPayload {
@@ -240,6 +324,7 @@ impl ToastPayload {
             message: message.into(),
             kind: "error".into(),
             duration: None,
+            action: None,
         }
     }
     pub fn warning(message: impl Into<String>) -> Self {
@@ -247,6 +332,7 @@ impl ToastPayload {
             message: message.into(),
             kind: "warning".into(),
             duration: None,
+            action: None,
         }
     }
     pub fn success(message: impl Into<String>) -> Self {
@@ -254,6 +340,7 @@ impl ToastPayload {
             message: message.into(),
             kind: "success".into(),
             duration: None,
+            action: None,
         }
     }
     pub fn info(message: impl Into<String>) -> Self {
@@ -261,6 +348,26 @@ impl ToastPayload {
             message: message.into(),
             kind: "info".into(),
             duration: None,
+            action: None,
+        }
+    }
+
+    /// 带动作按钮的警告 toast（敏感过滤拦截的「仍然翻译」入口）。
+    /// 停留时间拉长到 8 秒：这是需要用户阅读并决策的提示，不是一闪
+    /// 而过的状态通知。
+    pub fn warning_with_action(
+        message: impl Into<String>,
+        action_id: impl Into<String>,
+        action_label: impl Into<String>,
+    ) -> Self {
+        ToastPayload {
+            message: message.into(),
+            kind: "warning".into(),
+            duration: Some(8000),
+            action: Some(ToastAction {
+                id: action_id.into(),
+                label: action_label.into(),
+            }),
         }
     }
 }

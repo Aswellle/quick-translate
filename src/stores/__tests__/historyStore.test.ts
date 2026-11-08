@@ -18,6 +18,7 @@ function rec(id: string): TranslationRecord {
     created_at: 1730000000000,
     duration_ms: 100,
     is_starred: false,
+    source: "clipboard",
   };
 }
 

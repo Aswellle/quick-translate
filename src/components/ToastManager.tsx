@@ -4,13 +4,15 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { ToastItem, type ToastType } from "./Toast";
+import { ToastItem, type ToastType, type ToastAction } from "./Toast";
+import { translateFilteredText } from "@/lib/commands";
 
 interface ToastEntry {
   id: number;
   message: string;
   type: ToastType;
   duration?: number;
+  action?: ToastAction;
 }
 
 let _nextId = 1;
@@ -34,6 +36,22 @@ export function ToastManager() {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
+  // Toast 动作分发：目前唯一动作是敏感过滤拦截后的「仍然翻译」。
+  // 只把**用户点击**这一件事转成后端命令调用 —— 命令本身消费的是
+  // coordinator 暂存的那一条，前端拿不到也无法注入文本。
+  const handleAction = useCallback((actionId: string) => {
+    if (actionId === "translate_filtered") {
+      translateFilteredText()
+        .then((ok) => {
+          if (!ok) toast("这条内容已失效，请重新复制", "info");
+        })
+        .catch((err) => {
+          console.error("[ToastManager] 覆盖过滤翻译失败:", err);
+          toast("翻译未能启动，请重试", "error");
+        });
+    }
+  }, []);
+
   // 注册全局命令式 API
   useEffect(() => {
     _addToast = addToast;
@@ -47,13 +65,18 @@ export function ToastManager() {
     let unlisten: (() => void) | undefined;
     let cancelled = false;
 
-    listen<{ message: string; kind: string; duration?: number }>("toast", (event) => {
-      const { message, kind, duration } = event.payload;
+    listen<{
+      message: string;
+      kind: string;
+      duration?: number;
+      action?: ToastAction;
+    }>("toast", (event) => {
+      const { message, kind, duration, action } = event.payload;
       const validTypes: ToastType[] = ["error", "success", "warning", "info"];
       const type: ToastType = validTypes.includes(kind as ToastType)
         ? (kind as ToastType)
         : "info";
-      addToast({ message, type, duration });
+      addToast({ message, type, duration, action });
     }).then((fn) => {
       if (cancelled) fn();
       else unlisten = fn;
@@ -79,6 +102,8 @@ export function ToastManager() {
           message={t.message}
           type={t.type}
           duration={t.duration}
+          action={t.action}
+          onAction={handleAction}
           onClose={removeToast}
         />
       ))}

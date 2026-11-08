@@ -285,6 +285,9 @@ pub fn run_migrations(conn: &Connection) -> Result<(), AppError> {
         (4, migrate_v4),
         (5, migrate_v5),
         (6, migrate_v6),
+        (7, migrate_v7),
+        (8, migrate_v8),
+        (9, migrate_v9),
     ];
 
     for &(version, migration_fn) in migrations {
@@ -512,6 +515,66 @@ fn migrate_v6(tx: &Transaction) -> Result<(), AppError> {
         .map_err(|e| AppError::DatabaseError(format!("Schema v6 迁移失败: {}", e)))
 }
 
+/// v7：历史记录来源类型（计划 Task 09）。
+///
+/// 手动输入与剪贴板自动触发共用同一翻译核心，但历史必须能区分来源。
+/// 既有行全部来自剪贴板监控（v7 之前没有别的入口），统一置为 clipboard。
+fn migrate_v7(tx: &Transaction) -> Result<(), AppError> {
+    tx.execute_batch(
+        "ALTER TABLE translation_records
+             ADD COLUMN source TEXT NOT NULL DEFAULT 'clipboard';",
+    )
+    .map_err(|e| AppError::DatabaseError(format!("Schema v7 迁移失败: {}", e)))
+}
+
+/// 术语表建表语句（schema v8）。
+///
+/// 导出给 `domain::glossary` 的测试共用，保证测试表结构与线上一致。
+/// 术语按**语言对**组织（DeepL glossary 是一个语言对一个词典，且不支持
+/// 源语言自动检测）。同一语言对内原文唯一、大小写不敏感：两条同名条目
+/// 译法不同时无法决定用哪条，写入/导入阶段就拒绝。
+pub(crate) const GLOSSARY_TABLE_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS glossary_entries (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_lang    TEXT NOT NULL,
+    target_lang    TEXT NOT NULL,
+    source_term    TEXT NOT NULL,
+    target_term    TEXT NOT NULL,
+    note           TEXT NOT NULL DEFAULT '',
+    case_sensitive INTEGER NOT NULL DEFAULT 0,
+    created_at     INTEGER NOT NULL,
+    updated_at     INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_glossary_pair_source_nocase
+    ON glossary_entries(source_lang, target_lang, source_term COLLATE NOCASE);
+"#;
+
+/// v8：新增本地术语表（计划 Task 10）。
+fn migrate_v8(tx: &Transaction) -> Result<(), AppError> {
+    tx.execute_batch(GLOSSARY_TABLE_SQL)
+        .map_err(|e| AppError::DatabaseError(format!("Schema v8 迁移失败: {}", e)))
+}
+
+/// DeepL glossary 同步映射（schema v9）。
+pub(crate) const GLOSSARY_SYNC_TABLE_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS deepl_glossary_sync (
+    -- provider\1source_lang\1target_lang
+    pair_key     TEXT PRIMARY KEY,
+    fingerprint  TEXT NOT NULL,
+    glossary_id  TEXT NOT NULL,
+    updated_at   INTEGER NOT NULL
+);
+"#;
+
+/// v9：记录「语言对 → DeepL glossary_id + 术语指纹」的映射。
+///
+/// 指纹变化 = 条目变化 → 删旧建新（DeepL v2 无编辑接口）。映射持久化
+/// 避免每次启动重建全部 glossary。
+fn migrate_v9(tx: &Transaction) -> Result<(), AppError> {
+    tx.execute_batch(GLOSSARY_SYNC_TABLE_SQL)
+        .map_err(|e| AppError::DatabaseError(format!("Schema v9 迁移失败: {}", e)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -592,5 +655,169 @@ mod tests {
             )
             .unwrap();
         assert_eq!(value, "cipher-salvaged", "抢救行必须覆盖默认空值");
+    }
+
+    // ── 迁移升级路径：旧版本数据库必须无损升级到最新 schema ─────────────
+
+    fn current_schema_version(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT COALESCE(MAX(version),0) FROM schema_version",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// 从 v1 直接升级到最新：既有记录不丢失，v2 起的字段带默认值可用。
+    ///
+    /// 这是升级测试的锚点版本 —— 用户在 0.2.x 之后发布的任何版本，数据库
+    /// 都是从 v1 起步的。新增迁移时必须让本测试继续通过（它会跟随最新
+    /// 版本号自动检查）。
+    #[test]
+    fn upgrading_from_v1_preserves_existing_records() {
+        let conn = Connection::open_in_memory().unwrap();
+
+        // 构造一个「只跑过 v1」的库：直接执行 v1 SQL 并记账
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY NOT NULL,
+                applied_at INTEGER NOT NULL
+             );",
+        )
+        .unwrap();
+        let tx = conn.unchecked_transaction().unwrap();
+        migrate_v1(&tx).unwrap();
+        tx.execute(
+            "INSERT INTO schema_version (version, applied_at) VALUES (1, 1)",
+            [],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        // v1 时代的记录（字段集不含 is_starred）
+        conn.execute(
+            "INSERT INTO translation_records
+             (id, source_text, translated_text, source_lang, target_lang, provider, created_at)
+             VALUES ('legacy-1', 'hello', '你好', 'en', 'zh', 'google', 1700000000000)",
+            [],
+        )
+        .unwrap();
+
+        // 升级到最新
+        run_migrations(&conn).unwrap();
+        assert_eq!(current_schema_version(&conn), 9, "应停在最新版本");
+
+        // 旧记录必须原样保留，且新列有可用默认值
+        let (text, provider, starred, source): (String, String, i64, String) = conn
+            .query_row(
+                "SELECT translated_text, provider, is_starred, source
+                 FROM translation_records WHERE id = 'legacy-1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .expect("v1 记录必须存活到升级之后");
+        assert_eq!(text, "你好");
+        assert_eq!(provider, "google");
+        assert_eq!(starred, 0, "is_starred 默认 0");
+        assert_eq!(source, "clipboard", "v7 前的历史行全部来自剪贴板监控");
+
+        // v6 的缓存表必须可用
+        conn.execute(
+            "INSERT INTO translation_cache
+             (cache_key, source_text, translated_text, source_lang, provider, created_at, last_hit_at)
+             VALUES ('k', 'a', 'b', 'en', 'google', 1, 1)",
+            [],
+        )
+        .expect("v6 表必须存在");
+    }
+
+    /// 已在最新版本的库重复跑 run_migrations 必须是幂等的。
+    #[test]
+    fn running_migrations_twice_is_idempotent() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        let v1 = current_schema_version(&conn);
+        run_migrations(&conn).unwrap();
+        assert_eq!(current_schema_version(&conn), v1, "重复迁移不得新增版本行");
+
+        // 数据仍然可写（schema 未被二次 ALTER 破坏）
+        conn.execute(
+            "INSERT INTO translation_records
+             (id, source_text, translated_text, source_lang, target_lang, provider, created_at)
+             VALUES ('t-1', 'a', 'b', 'en', 'zh', 'google', 1)",
+            [],
+        )
+        .unwrap();
+    }
+
+    /// 版本行数必须与迁移数一致：每个迁移恰好记一次账。
+    #[test]
+    fn each_migration_is_recorded_exactly_once() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        let rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM schema_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            rows,
+            current_schema_version(&conn),
+            "版本号连续且无重复记账"
+        );
+        assert_eq!(rows, 9);
+    }
+
+    /// v6 → v7 专项：既有行全部补上来源类型默认值（v7 之前唯一的
+    /// 翻译入口是剪贴板监控），v7 起新写入携带真实来源。
+    #[test]
+    fn upgrading_from_v6_backfills_clipboard_source() {
+        // 直接构造一个「只跑过 v1..v6」的库
+        let conn = Connection::open_in_memory().unwrap();
+        // run_migrations 的 bootstrap 步骤：版本账本表先建
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY NOT NULL,
+                applied_at INTEGER NOT NULL
+             );",
+        )
+        .unwrap();
+        {
+            let tx = conn.unchecked_transaction().unwrap();
+            migrate_v1(&tx).unwrap();
+            migrate_v2(&tx).unwrap();
+            migrate_v3(&tx).unwrap();
+            migrate_v4(&tx).unwrap();
+            migrate_v5(&tx).unwrap();
+            migrate_v6(&tx).unwrap();
+            for v in 1..=6 {
+                tx.execute(
+                    "INSERT INTO schema_version (version, applied_at) VALUES (?1, 1)",
+                    rusqlite::params![v],
+                )
+                .unwrap();
+            }
+            tx.commit().unwrap();
+        }
+
+        // v6 时代的记录（无 source 列）
+        conn.execute(
+            "INSERT INTO translation_records
+             (id, source_text, translated_text, source_lang, target_lang,
+              provider, created_at, duration_ms, is_starred)
+             VALUES ('v6-row', 'hello', '你好', 'en', 'zh', 'google', 1700000000000, 100, 0)",
+            [],
+        )
+        .unwrap();
+
+        run_migrations(&conn).unwrap();
+        assert_eq!(current_schema_version(&conn), 9);
+
+        let source: String = conn
+            .query_row(
+                "SELECT source FROM translation_records WHERE id = 'v6-row'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("v6 记录必须存活");
+        assert_eq!(source, "clipboard", "既有行统一回填 clipboard 来源");
     }
 }

@@ -98,6 +98,10 @@ async fn set_config_batch_inner(
         )));
     }
 
+    // 持久化与副作用全部落地后广播一次（载荷读取与 get_config 相同的
+    // 掩码视图，凭证不会明文出现在事件里）
+    emit_config_changed(app, &state.config.read().await.get_all());
+
     Ok(())
 }
 
@@ -109,16 +113,18 @@ const BOOL_KEYS: &[&str] = &[
     "fallback_enabled",
     "onboarding_completed",
     "clipboard_monitor_enabled",
+    "sensitive_filter_enabled",
     "reduce_transparency",
+    "cache_enabled",
+    "glossary_enabled",
+    "baidu_use_term_base",
 ];
 
 /// 界面主题的合法取值
 const THEME_VALUES: &[&str] = &["system", "light", "dark"];
 
 /// 支持的目标语言（与前端 SUPPORTED_LANGUAGES 一致）
-const TARGET_LANGS: &[&str] = &[
-    "zh", "zh-tw", "en", "ja", "ko", "fr", "de", "es", "ru", "pt", "it", "ar",
-];
+const TARGET_LANGS: &[&str] = crate::types::SUPPORTED_LANGS;
 
 /// 凭证键（值只需非空；掩码值已在更早的入口过滤）
 const CREDENTIAL_KEYS: &[&str] = &[
@@ -138,7 +144,18 @@ const CREDENTIAL_KEYS: &[&str] = &[
 fn validate_value(key: &str, value: &str) -> Result<(), AppError> {
     let known = matches!(
         key,
-        "provider" | "target_lang" | "theme" | "history_limit" | "export_dir"
+        "provider"
+            | "target_lang"
+            | "theme"
+            | "history_limit"
+            | "export_dir"
+            | "hotkey_translate_clipboard"
+            | "hotkey_open_manual"
+            | "hotkey_toggle_monitor"
+            | "hotkey_toggle_popup"
+            | "hotkey_retranslate_last"
+            | "youdao_vocab_id"
+            | "tencent_term_repo_ids"
     ) || BOOL_KEYS.contains(&key)
         || CREDENTIAL_KEYS.contains(&key);
     if !known {
@@ -184,6 +201,29 @@ fn validate_value(key: &str, value: &str) -> Result<(), AppError> {
         }
         // provider 的存在性由管线内依赖引擎的校验负责；这里保证非空
         "provider" if value.trim().is_empty() => return Err(invalid()),
+        // 加速键语法由注册时裁决（错误可定位到具体冲突），这里只挡
+        // 明显异常的长度，避免把任意大字符串写进配置
+        "hotkey_translate_clipboard"
+        | "hotkey_open_manual"
+        | "hotkey_toggle_monitor"
+        | "hotkey_toggle_popup"
+        | "hotkey_retranslate_last" => {
+            if value.chars().count() > 100 {
+                return Err(invalid());
+            }
+        }
+        // 术语表 ID 由有道控制台生成；允许清空（= 不使用）
+        "youdao_vocab_id" => {
+            if value.chars().count() > 200 {
+                return Err(invalid());
+            }
+        }
+        // 腾讯云术语库 ID 列表（逗号分隔）；允许清空（= 不使用）
+        "tencent_term_repo_ids" => {
+            if value.chars().count() > 500 {
+                return Err(invalid());
+            }
+        }
         k if CREDENTIAL_KEYS.contains(&k) && value.trim().is_empty() => return Err(invalid()),
         _ => {}
     }
@@ -300,19 +340,57 @@ async fn handle_side_effect(
             emit_theme_changed(app, value);
         }
         "clipboard_monitor_enabled" => {
-            if value == "true" {
-                state.clipboard_monitor.resume();
-            } else {
-                state.clipboard_monitor.suspend();
-            }
-            tray::refresh_menu(app).await;
+            apply_clipboard_monitor_switch(app, state.inner(), value == "true").await;
         }
         "reduce_transparency" => {
             emit_reduce_transparency_changed(app, value);
         }
-        _ => {}
+        // 缓存读写开关：持久化已在上方完成，这里只切换活体实例。
+        // 关闭不删除既有条目（「清空缓存」仍是独立操作）。
+        "cache_enabled" => {
+            state.cache.set_enabled(value == "true");
+        }
+        _ => {
+            // 全局快捷键：持久化后重新注册。失败会作为副作用错误上报
+            // （设置页显示真实冲突原因，旧快捷键保持可用）。
+            if let Some(action) = crate::system::hotkeys::action_for_config_key(key) {
+                state
+                    .hotkeys
+                    .apply(app, action, value)
+                    .map_err(|e| AppError::ConfigError(format!("快捷键未生效: {}", e)))?;
+            }
+        }
     }
     Ok(())
+}
+
+/// 剪贴板监控开关的实际生效动作（设置管线与全局快捷键共用）。
+///
+/// 只做「活体实例 + 托盘菜单状态」这一步；持久化与 config-changed
+/// 广播由调用方负责 —— 两条调用路径的持久化语义不同（命令管线在
+/// 副作用之前落库，快捷键动作自己先写库）。
+pub(crate) async fn apply_clipboard_monitor_switch(
+    app: &AppHandle,
+    state: &AppState,
+    enabled: bool,
+) {
+    if enabled {
+        state.clipboard_monitor.resume();
+    } else {
+        state.clipboard_monitor.suspend();
+    }
+    tray::refresh_menu(app).await;
+}
+
+/// 广播配置变更事件：载荷是脱敏后的完整 `AppConfig`（与 get_config 同构）。
+///
+/// 为什么必须有：设置窗口 hide 而非销毁，草稿只在挂载时加载一次；
+/// 托盘切换翻译源/目标语言、开关剪贴板监控这些**绕过命令管线的直写
+/// 路径**不广播的话，设置页重开后显示的还是打开时的旧值。
+/// 载荷直接用 `AppConfig`，前端按字段合并即可，不必在事件里重复一套
+/// 「哪些键是布尔」的类型映射。
+pub(crate) fn emit_config_changed(app: &AppHandle, cfg: &AppConfig) {
+    let _ = app.emit("config-changed", cfg);
 }
 
 /// 广播「减少透明效果」开关变更。

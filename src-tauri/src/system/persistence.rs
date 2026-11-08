@@ -46,6 +46,9 @@ pub struct OwnedCacheEntry {
     pub translated_text: String,
     pub source_lang: String,
     pub provider: String,
+    /// 本次请求的作用域令牌（空串 = 无作用域判别），进入缓存键，
+    /// 见 `domain::cache::scope_token`
+    pub scope_token: String,
 }
 
 impl OwnedCacheEntry {
@@ -56,6 +59,7 @@ impl OwnedCacheEntry {
             translated_text: &self.translated_text,
             source_lang: &self.source_lang,
             provider: &self.provider,
+            scope_token: &self.scope_token,
         }
     }
 }
@@ -73,6 +77,10 @@ pub struct PersistJob {
 
 pub struct PersistenceWriter {
     tx: mpsc::Sender<PersistJob>,
+    /// 诊断计数句柄：入队失败（队列满 / worker 已停）时记账。
+    /// 丢弃本身仍是正确行为（绝不能阻塞翻译结果回传），但静默丢弃会
+    /// 让「历史莫名少了记录」无法排查 —— 计数暴露在诊断快照里（计划 3.3）。
+    runtime: Option<Arc<RuntimeStatus>>,
 }
 
 impl PersistenceWriter {
@@ -114,6 +122,8 @@ impl PersistenceWriter {
         capacity: usize,
     ) -> Self {
         let (tx, mut rx) = mpsc::channel::<PersistJob>(capacity);
+        // writer 侧留一份引用用于入队失败记账（worker 侧的会被 async move 拿走）
+        let runtime_for_writer = runtime.clone();
 
         tauri::async_runtime::spawn(async move {
             info!("[persistence] worker 已启动");
@@ -132,7 +142,10 @@ impl PersistenceWriter {
             info!("[persistence] 队列已关闭，worker 退出");
         });
 
-        Self { tx }
+        Self {
+            tx,
+            runtime: Some(runtime_for_writer),
+        }
     }
 
     /// 入队。返回 false 表示队列已满或 worker 已停止，本次写入被丢弃。
@@ -143,7 +156,12 @@ impl PersistenceWriter {
     pub fn enqueue(&self, job: PersistJob) -> bool {
         match self.tx.try_send(job) {
             Ok(()) => true,
-            Err(mpsc::error::TrySendError::Full(_)) => false,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                if let Some(rt) = &self.runtime {
+                    rt.record_persistence_dropped();
+                }
+                false
+            }
             Err(mpsc::error::TrySendError::Closed(_)) => false,
         }
     }
@@ -156,7 +174,7 @@ impl PersistenceWriter {
     fn channel_only(capacity: usize) -> Self {
         let (tx, rx) = mpsc::channel(capacity);
         std::mem::forget(rx);
-        Self { tx }
+        Self { tx, runtime: None }
     }
 }
 
@@ -298,6 +316,7 @@ mod tests {
                 created_at: crate::types::now_unix_ms(),
                 duration_ms: Some(1),
                 is_starred: false,
+                source: crate::types::RECORD_SOURCE_CLIPBOARD.to_string(),
             },
             history_limit: 200,
             cache_entry: OwnedCacheEntry {
@@ -306,6 +325,7 @@ mod tests {
                 translated_text: "译文".to_string(),
                 source_lang: "en".to_string(),
                 provider: "deepl".to_string(),
+                scope_token: String::new(),
             },
         }
     }
@@ -317,7 +337,7 @@ mod tests {
         let version: i64 = conn
             .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 6, "全新库应跑到最新迁移版本");
+        assert_eq!(version, 9, "全新库应跑到最新迁移版本");
 
         let cache_table: i64 = conn
             .query_row(
@@ -327,6 +347,15 @@ mod tests {
             )
             .unwrap();
         assert_eq!(cache_table, 1, "v6 应建出 translation_cache 表");
+
+        let source_column: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('translation_records') WHERE name='source'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(source_column, 1, "v7 应建出 source 列");
     }
 
     #[tokio::test]
@@ -358,7 +387,7 @@ mod tests {
         let mut history_count = 0;
         while std::time::Instant::now() < deadline {
             history_count = history.query(&HistoryQuery::default()).await.unwrap().len();
-            if history_count == 1 && cache.get("hello", "zh").await.unwrap().is_some() {
+            if history_count == 1 && cache.get("hello", "zh", "").await.unwrap().is_some() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -366,7 +395,7 @@ mod tests {
         assert_eq!(history_count, 1, "worker 应在期限内写入历史");
 
         assert!(
-            cache.get("hello", "zh").await.unwrap().is_some(),
+            cache.get("hello", "zh", "").await.unwrap().is_some(),
             "worker 应同时写入本地缓存"
         );
     }
@@ -414,6 +443,28 @@ mod tests {
         assert!(
             !writer.enqueue(job("b")),
             "队列满时应返回 false，绝不能把翻译回传路径堵住"
+        );
+    }
+
+    /// 入队失败必须留下诊断计数（计划 3.3：丢弃不能静默到无法排查）。
+    #[test]
+    fn enqueue_failure_records_dropped_count() {
+        let (tx, rx) = mpsc::channel(1);
+        std::mem::forget(rx); // 无人消费，队列保持满
+        let runtime = test_runtime();
+        let writer = PersistenceWriter {
+            tx,
+            runtime: Some(runtime.clone()),
+        };
+
+        assert!(writer.enqueue(job("a")));
+        assert!(!writer.enqueue(job("b")));
+        assert!(!writer.enqueue(job("c")));
+
+        assert_eq!(
+            runtime.diagnostics().persistence_dropped_count,
+            2,
+            "两次入队失败都应计入诊断"
         );
     }
 

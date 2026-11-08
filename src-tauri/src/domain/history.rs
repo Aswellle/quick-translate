@@ -32,8 +32,8 @@ impl HistoryRepository {
         conn.execute(
             r#"INSERT INTO translation_records
                (id, source_text, translated_text, source_lang, target_lang,
-                provider, created_at, duration_ms, is_starred)
-               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"#,
+                provider, created_at, duration_ms, is_starred, source)
+               VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"#,
             rusqlite::params![
                 record.id,
                 record.source_text,
@@ -44,6 +44,7 @@ impl HistoryRepository {
                 record.created_at,
                 record.duration_ms,
                 record.is_starred as i64,
+                record.source,
             ],
         )
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
@@ -123,9 +124,9 @@ impl HistoryRepository {
         let mut stmt = conn
             .prepare(
                 r#"SELECT id, source_text, translated_text, source_lang, target_lang,
-                          provider, created_at, duration_ms, is_starred
+                          provider, created_at, duration_ms, is_starred, source
                    FROM translation_records
-                   ORDER BY created_at DESC"#,
+                   ORDER BY created_at DESC, rowid DESC"#,
             )
             .map_err(|e| AppError::DatabaseError(e.to_string()))?;
 
@@ -297,7 +298,7 @@ impl HistoryRepository {
                    WHERE id IN (
                        SELECT id FROM translation_records
                        WHERE is_starred = 0
-                       ORDER BY created_at ASC
+                       ORDER BY created_at ASC, rowid ASC
                        LIMIT ?1
                    )"#,
                 rusqlite::params![to_delete],
@@ -360,16 +361,16 @@ fn query_all(
 ) -> Result<Vec<TranslationRecord>, AppError> {
     let sql = if starred_only {
         r#"SELECT id, source_text, translated_text, source_lang, target_lang,
-                  provider, created_at, duration_ms, is_starred
+                  provider, created_at, duration_ms, is_starred, source
            FROM translation_records
            WHERE is_starred = 1
-           ORDER BY created_at DESC
+           ORDER BY created_at DESC, rowid DESC
            LIMIT ?1 OFFSET ?2"#
     } else {
         r#"SELECT id, source_text, translated_text, source_lang, target_lang,
-                  provider, created_at, duration_ms, is_starred
+                  provider, created_at, duration_ms, is_starred, source
            FROM translation_records
-           ORDER BY created_at DESC
+           ORDER BY created_at DESC, rowid DESC
            LIMIT ?1 OFFSET ?2"#
     };
 
@@ -403,18 +404,18 @@ fn query_like(
 
     let sql = if starred_only {
         r#"SELECT id, source_text, translated_text, source_lang, target_lang,
-                  provider, created_at, duration_ms, is_starred
+                  provider, created_at, duration_ms, is_starred, source
            FROM translation_records
            WHERE is_starred = 1
              AND (source_text LIKE ?1 ESCAPE '\' OR translated_text LIKE ?1 ESCAPE '\')
-           ORDER BY created_at DESC
+           ORDER BY created_at DESC, rowid DESC
            LIMIT ?2 OFFSET ?3"#
     } else {
         r#"SELECT id, source_text, translated_text, source_lang, target_lang,
-                  provider, created_at, duration_ms, is_starred
+                  provider, created_at, duration_ms, is_starred, source
            FROM translation_records
            WHERE source_text LIKE ?1 ESCAPE '\' OR translated_text LIKE ?1 ESCAPE '\'
-           ORDER BY created_at DESC
+           ORDER BY created_at DESC, rowid DESC
            LIMIT ?2 OFFSET ?3"#
     };
 
@@ -486,6 +487,7 @@ fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TranslationRecord> {
         created_at: row.get(6)?,
         duration_ms: row.get(7)?,
         is_starred: row.get::<_, i64>(8).map(|v| v != 0)?,
+        source: row.get(9)?,
     })
 }
 
@@ -514,6 +516,7 @@ mod tests {
             created_at,
             duration_ms: Some(100),
             is_starred: false,
+            source: crate::types::RECORD_SOURCE_CLIPBOARD.to_string(),
         }
     }
 
@@ -521,6 +524,521 @@ mod tests {
     /// DST 平移不会把种子记录挤到邻天
     fn noon_days_ago(k: i64) -> i64 {
         local_midnight_ms(crate::types::now_unix_ms()) - k * MS_PER_DAY + 12 * 60 * 60 * 1000
+    }
+
+    // ── 分页稳定性（计划 6.7：时间相同的记录必须有第二排序键）──────────
+
+    /// 同一毫秒内连续落盘的记录，分页必须无重复、无遗漏，且顺序可重复。
+    ///
+    /// 缺陷形态：`ORDER BY created_at DESC` 只有单一排序键，SQLite 对并列
+    /// 行的相对顺序不作保证 —— 分页时同一记录可能出现在两页里，也可能
+    /// 被跳过。第二键 `rowid DESC` 让「后落盘的排在前面」，与 created_at
+    /// 的降序语义一致，且 rowid 单调递增、查询稳定。
+    #[tokio::test]
+    async fn pagination_is_stable_when_timestamps_collide() {
+        let repo = repo();
+        let ts = 1_700_000_000_000;
+        // 6 条完全相同的 created_at，插入顺序即期望的「新→旧」顺序
+        let mut ids = Vec::new();
+        for _ in 0..6 {
+            let rec = record_at(ts);
+            ids.push(rec.id.clone());
+            repo.insert(&rec).await.unwrap();
+        }
+        let expected: Vec<String> = ids.iter().rev().cloned().collect();
+
+        // 逐页读取（limit=2），合并三页
+        let mut paged = Vec::new();
+        for offset in [0, 2, 4] {
+            let page = repo
+                .query(&HistoryQuery {
+                    limit: 2,
+                    offset,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            paged.extend(page.into_iter().map(|r| r.id));
+        }
+
+        assert_eq!(
+            paged, expected,
+            "分页合并必须与完整查询顺序一致：无重复、无遗漏"
+        );
+
+        // 重复查询结果必须一致（稳定排序）
+        let again = repo
+            .query(&HistoryQuery {
+                limit: 6,
+                offset: 0,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            again.into_iter().map(|r| r.id).collect::<Vec<_>>(),
+            expected
+        );
+    }
+
+    /// LIKE 搜索路径同样需要第二排序键 —— 搜索结果的翻页与全量一致。
+    #[tokio::test]
+    async fn search_pagination_is_stable_when_timestamps_collide() {
+        let repo = repo();
+        let ts = 1_700_000_000_000;
+        let mut ids = Vec::new();
+        for i in 0..4 {
+            let mut rec = record_at(ts);
+            rec.source_text = format!("apple {i}");
+            ids.push(rec.id.clone());
+            repo.insert(&rec).await.unwrap();
+        }
+        let expected: Vec<String> = ids.iter().rev().cloned().collect();
+
+        let mut paged = Vec::new();
+        for offset in [0, 2] {
+            let page = repo
+                .query(&HistoryQuery {
+                    search: Some("apple".to_string()),
+                    limit: 2,
+                    offset,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            paged.extend(page.into_iter().map(|r| r.id));
+        }
+        assert_eq!(paged, expected, "搜索结果分页必须稳定");
+    }
+
+    // ── CRUD 契约 ───────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn toggle_star_flips_and_persists() {
+        let repo = repo();
+        let rec = record_at(1_700_000_000_000);
+        let id = rec.id.clone();
+        repo.insert(&rec).await.unwrap();
+
+        assert!(repo.toggle_star(&id).await.unwrap(), "首次切换 → 已收藏");
+        assert!(
+            repo.toggle_star(&id).await.unwrap() == false,
+            "再次切换 → 取消收藏"
+        );
+
+        // 收藏状态必须真的落库（重新查询可见）
+        repo.toggle_star(&id).await.unwrap();
+        let rows = repo
+            .query(&HistoryQuery {
+                limit: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].is_starred);
+    }
+
+    #[tokio::test]
+    async fn toggle_star_on_missing_id_is_an_error() {
+        let repo = repo();
+        let err = repo.toggle_star("no-such-id").await.unwrap_err();
+        assert_eq!(err.error_code(), "DATABASE_ERROR");
+    }
+
+    /// 计划 Task 09：手动输入与剪贴板自动触发可区分 —— 来源类型必须
+    /// 往返落库，查询契约（map_row）拿到的是真实来源而不是默认值。
+    #[tokio::test]
+    async fn source_field_roundtrips_through_insert_and_query() {
+        let repo = repo();
+
+        let mut manual = record_at(1_700_000_000_000);
+        manual.source_text = "typed by user".to_string();
+        manual.source = crate::types::RECORD_SOURCE_MANUAL.to_string();
+        repo.insert(&manual).await.unwrap();
+
+        let clipboard = record_at(1_700_000_000_001); // 辅助默认即 clipboard
+        repo.insert(&clipboard).await.unwrap();
+
+        let rows = repo
+            .query(&HistoryQuery {
+                limit: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(rows.len(), 2);
+        let by_text = |text: &str| {
+            rows.iter()
+                .find(|r| r.source_text == text)
+                .unwrap_or_else(|| panic!("缺少 source_text={} 的行", text))
+        };
+        assert_eq!(
+            by_text("typed by user").source,
+            "manual",
+            "手动路径写入的记录必须标为 manual"
+        );
+        assert_eq!(
+            by_text("hello").source,
+            "clipboard",
+            "剪贴板路径写入的记录必须标为 clipboard"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_by_id_removes_only_the_target() {
+        let repo = repo();
+        let a = record_at(1_700_000_000_000);
+        let b = record_at(1_700_000_000_001);
+        repo.insert(&a).await.unwrap();
+        repo.insert(&b).await.unwrap();
+
+        repo.delete_by_id(&a.id).await.unwrap();
+
+        let rows = repo
+            .query(&HistoryQuery {
+                limit: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, b.id);
+        assert_eq!(repo.count(None, false).await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn clear_all_empties_the_table() {
+        let repo = repo();
+        for i in 0..3 {
+            repo.insert(&record_at(1_700_000_000_000 + i))
+                .await
+                .unwrap();
+        }
+        repo.clear_all().await.unwrap();
+        assert_eq!(repo.count(None, false).await.unwrap(), 0);
+        assert!(repo
+            .query(&HistoryQuery {
+                limit: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    // ── FIFO 超限清理：只删最旧的未收藏记录 ─────────────────────────────
+
+    #[tokio::test]
+    async fn enforce_limit_deletes_oldest_unstarred_first() {
+        let repo = repo();
+        // 4 条记录，第 0 条（最旧）被收藏
+        let mut ids = Vec::new();
+        for i in 0..4 {
+            let mut rec = record_at(1_700_000_000_000 + i * 1000);
+            rec.is_starred = i == 0;
+            ids.push(rec.id.clone());
+            repo.insert(&rec).await.unwrap();
+        }
+
+        // 限制到 2 条：总 4 → 删 2 条，但收藏的第 0 条不能删
+        let deleted = repo.enforce_limit(2).await.unwrap();
+        assert_eq!(deleted, 2);
+
+        let rows = repo
+            .query(&HistoryQuery {
+                limit: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let remaining: Vec<String> = rows.iter().map(|r| r.id.clone()).collect();
+        assert!(remaining.contains(&ids[0]), "收藏记录永不自动删除");
+        assert!(remaining.contains(&ids[3]), "最新的未收藏记录应保留");
+        assert_eq!(
+            repo.count(None, false).await.unwrap(),
+            2,
+            "总数应降到 limit（收藏记录占一个名额）"
+        );
+    }
+
+    #[tokio::test]
+    async fn enforce_limit_is_a_noop_below_the_threshold() {
+        let repo = repo();
+        repo.insert(&record_at(1_700_000_000_000)).await.unwrap();
+        assert_eq!(repo.enforce_limit(10).await.unwrap(), 0);
+        assert_eq!(repo.count(None, false).await.unwrap(), 1);
+    }
+
+    // ── LIKE 搜索：转义与 CJK ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn like_search_escapes_wildcards() {
+        let repo = repo();
+        let mut plain = record_at(1_700_000_000_000);
+        plain.source_text = "100 percent done".to_string();
+        repo.insert(&plain).await.unwrap();
+
+        let mut with_pct = record_at(1_700_000_000_001);
+        with_pct.source_text = "save 100% now".to_string();
+        repo.insert(&with_pct).await.unwrap();
+
+        // 搜索 "%" 只能命中真正含 % 的那条，不能变成「匹配一切」
+        let rows = repo
+            .query(&HistoryQuery {
+                search: Some("%".to_string()),
+                limit: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1, "% 必须按字面量匹配");
+        assert_eq!(rows[0].id, with_pct.id);
+
+        // 同理 "_" 不得通配单字符
+        let rows = repo
+            .query(&HistoryQuery {
+                search: Some("_".to_string()),
+                limit: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(rows.is_empty(), "_ 必须按字面量匹配");
+    }
+
+    #[tokio::test]
+    async fn like_search_finds_cjk_substrings() {
+        let repo = repo();
+        let mut zh = record_at(1_700_000_000_000);
+        zh.source_text = "机器学习模型".to_string();
+        zh.translated_text = "machine learning model".to_string();
+        repo.insert(&zh).await.unwrap();
+        repo.insert(&record_at(1_700_000_000_001)).await.unwrap();
+
+        let rows = repo
+            .query(&HistoryQuery {
+                search: Some("学习".to_string()),
+                limit: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1, "中文子串搜索必须命中");
+
+        // 译文侧也应可搜
+        let rows = repo
+            .query(&HistoryQuery {
+                search: Some("learning".to_string()),
+                limit: 10,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+    }
+
+    // ── 分页参数钳制 ────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn query_clamps_limit_and_offset() {
+        let repo = repo();
+        repo.insert(&record_at(1_700_000_000_000)).await.unwrap();
+
+        // limit=0 会被钳到 1（SQLite 里 LIMIT 0 会静默返回空页）
+        let rows = repo
+            .query(&HistoryQuery {
+                limit: 0,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+
+        // 负 offset 按 0 处理，不得报错
+        let rows = repo
+            .query(&HistoryQuery {
+                limit: 10,
+                offset: -5,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn starred_only_filters_both_query_and_count() {
+        let repo = repo();
+        let mut starred = record_at(1_700_000_000_000);
+        starred.is_starred = true;
+        repo.insert(&starred).await.unwrap();
+        repo.insert(&record_at(1_700_000_000_001)).await.unwrap();
+
+        let rows = repo
+            .query(&HistoryQuery {
+                limit: 10,
+                starred_only: Some(true),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, starred.id);
+        assert_eq!(repo.count(None, true).await.unwrap(), 1);
+        assert_eq!(repo.count(None, false).await.unwrap(), 2);
+    }
+
+    // ── 大数据量：分页与搜索的查询计划与耗时（计划 6.6 / 6.9）──────────
+
+    /// 在单事务里批量灌入 `n` 条记录，避免逐条落盘的测试开销。
+    async fn seed_bulk(repo: &HistoryRepository, n: usize) -> Vec<String> {
+        let conn = repo.conn().unwrap();
+        let conn = conn.lock().await;
+        let tx = conn.unchecked_transaction().unwrap();
+        let mut ids = Vec::with_capacity(n);
+        {
+            let mut stmt = tx
+                .prepare(
+                    "INSERT INTO translation_records
+                     (id, source_text, translated_text, source_lang, target_lang,
+                      provider, created_at, duration_ms, is_starred, source)
+                     VALUES (?1, ?2, ?3, 'en', 'zh', 'google', ?4, 10, 0, 'clipboard')",
+                )
+                .unwrap();
+            for i in 0..n {
+                let id = format!("bulk-{i:06}");
+                // 时间递增，模拟真实使用；第 i 条比前一条新 1ms
+                let text = if i % 100 == 0 {
+                    format!("机器学习模型 batch {i}")
+                } else {
+                    format!("ordinary sample {i}")
+                };
+                stmt.execute(rusqlite::params![
+                    id,
+                    text,
+                    format!("译文 {i}"),
+                    1_700_000_000_000i64 + i as i64
+                ])
+                .unwrap();
+                ids.push(id);
+            }
+        }
+        tx.commit().unwrap();
+        ids
+    }
+
+    /// 1 万条记录下分页查询走索引、耗时在可接受范围，且翻页结果正确。
+    #[tokio::test]
+    async fn ten_thousand_records_paginate_and_search_within_budget() {
+        let repo = repo();
+        let ids = seed_bulk(&repo, 10_000).await;
+        assert_eq!(repo.count(None, false).await.unwrap(), 10_000);
+
+        // 查询计划必须命中 created_at 索引，而不是全表扫描后排序
+        {
+            let conn = repo.conn().unwrap();
+            let conn = conn.lock().await;
+            let plan: String = conn
+                .query_row(
+                    "EXPLAIN QUERY PLAN
+                     SELECT id FROM translation_records
+                     ORDER BY created_at DESC, rowid DESC LIMIT 20 OFFSET 0",
+                    [],
+                    |r| r.get::<_, String>(3),
+                )
+                .unwrap_or_default();
+            // 多行 plan 时只取第一行；这里用 query_row 已保证单行成立
+            assert!(
+                plan.contains("idx_records_created_at") || plan.contains("USING INDEX"),
+                "分页查询应走索引，实际计划: {plan}"
+            );
+        }
+
+        // 第一页：最新的 20 条（时间倒序）
+        let start = std::time::Instant::now();
+        let page = repo
+            .query(&HistoryQuery {
+                limit: 20,
+                offset: 0,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let first_page_elapsed = start.elapsed();
+        assert_eq!(page.len(), 20);
+        assert_eq!(page[0].id, ids[9_999], "第一页第一条必须是最新记录");
+        assert!(
+            first_page_elapsed < std::time::Duration::from_millis(500),
+            "1 万条下第一页耗时 {:?}，超出可接受范围",
+            first_page_elapsed
+        );
+
+        // 深分页（第 400 页）仍然正确且足够快
+        let start = std::time::Instant::now();
+        let deep = repo
+            .query(&HistoryQuery {
+                limit: 20,
+                offset: 8_000,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let deep_elapsed = start.elapsed();
+        assert_eq!(deep.len(), 20);
+        assert_eq!(deep[0].id, ids[1_999], "偏移 8000 → 第 8000 新的记录");
+        assert!(
+            deep_elapsed < std::time::Duration::from_millis(500),
+            "1 万条下深分页耗时 {:?}，超出可接受范围",
+            deep_elapsed
+        );
+
+        // CJK 搜索（LIKE 全表匹配，无索引可用 —— 只要求不失控）
+        let start = std::time::Instant::now();
+        let hits = repo
+            .query(&HistoryQuery {
+                search: Some("机器学习".to_string()),
+                limit: 20,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let search_elapsed = start.elapsed();
+        assert_eq!(hits.len(), 20, "搜索命中 100 条，首页取 20");
+        assert_eq!(repo.count(Some("机器学习"), false).await.unwrap(), 100);
+        assert!(
+            search_elapsed < std::time::Duration::from_millis(500),
+            "1 万条下中文搜索耗时 {:?}，超出可接受范围",
+            search_elapsed
+        );
+    }
+
+    /// FIFO 清理在 1 万条规模下只删最旧的未收藏行，且数量精确。
+    #[tokio::test]
+    async fn enforce_limit_at_scale_deletes_exactly_the_overflow() {
+        let repo = repo();
+        let ids = seed_bulk(&repo, 10_000).await;
+
+        // 收藏最新的 5 条：它们无论如何不能被删
+        for id in &ids[9_995..] {
+            repo.toggle_star(id).await.unwrap();
+        }
+
+        let deleted = repo.enforce_limit(200).await.unwrap();
+        assert_eq!(deleted, 9_800);
+        assert_eq!(repo.count(None, false).await.unwrap(), 200);
+
+        // 收藏的 5 条必须还在
+        let starred = repo
+            .query(&HistoryQuery {
+                limit: 10,
+                starred_only: Some(true),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(starred.len(), 5, "收藏记录必须全部存活");
     }
 
     // ── get_stats 的天数钳制 ─────────────────────────────────────────────
