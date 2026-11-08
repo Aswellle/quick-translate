@@ -94,19 +94,28 @@ export function GlossaryTab({
 
   const jsonInputRef = useRef<HTMLInputElement>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
+  const reloadSeqRef = useRef(0);
 
   const noteInfo = providerNote(draft.provider);
   const pairInvalid = sourceLang === targetLang;
 
   const reload = useCallback(async () => {
+    // 请求序号门：语言对快速切换或 mutation 后的补拉乱序返回时，只让
+    // 最新一次的结果生效 —— 旧语言对的迟到列表会盖掉新语言对的条目，
+    // 在新语言对标题下渲染文不对题的数据；此时点「保存修改」还会把
+    // 旧条目的语言对静默改写成当前对。
+    const seq = ++reloadSeqRef.current;
     setLoading(true);
     try {
-      setEntries(await listGlossaryEntries(sourceLang, targetLang));
+      const list = await listGlossaryEntries(sourceLang, targetLang);
+      if (seq !== reloadSeqRef.current) return;
+      setEntries(list);
     } catch {
+      if (seq !== reloadSeqRef.current) return;
       toast("读取术语表失败", "error");
       setEntries([]);
     } finally {
-      setLoading(false);
+      if (seq === reloadSeqRef.current) setLoading(false);
     }
   }, [sourceLang, targetLang]);
 

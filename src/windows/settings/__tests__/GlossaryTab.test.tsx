@@ -110,6 +110,10 @@ describe("GlossaryTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     applyConfig.mockClear();
+    // 清掉上一个测试遗留的容器：多个测试渲染同名 id 的控件后，jsdom 的
+    // querySelector("#id") 走文档级 getElementById 快路径，首个同 id 元素
+    // 在遗留容器里会让本容器的作用域查询错返回 null。
+    document.body.innerHTML = "";
     container = document.createElement("div");
     document.body.appendChild(container);
     root = createRoot(container);
@@ -228,5 +232,66 @@ describe("GlossaryTab", () => {
       "repo-1,repo-2",
       "toast"
     );
+  });
+
+  // 请求序号门回归：旧语言对的迟到列表不得覆盖新语言对的结果。
+  // 若没有序号门，界面会在 en→zh 标题下渲染 ja→zh 的条目，此时点
+  // 「保存修改」还会把旧条目的语言对静默改写成当前对。
+  it("语言对快速切换时只让最新一次加载生效", async () => {
+    const staleEntry: GlossaryEntry = {
+      id: 1,
+      source_lang: "en",
+      target_lang: "zh",
+      source_term: "Apple",
+      target_term: "苹果",
+      note: "",
+      case_sensitive: false,
+      created_at: 0,
+      updated_at: 0,
+    };
+    const freshEntry: GlossaryEntry = {
+      id: 2,
+      source_lang: "ja",
+      target_lang: "zh",
+      source_term: "桜",
+      target_term: "樱花",
+      note: "",
+      case_sensitive: false,
+      created_at: 0,
+      updated_at: 0,
+    };
+
+    let resolveStale!: (v: GlossaryEntry[]) => void;
+    // 第一次加载（en→zh）挂起；切语言对后第二次加载（ja→zh）立即返回
+    mockedList.mockImplementationOnce(
+      () => new Promise<GlossaryEntry[]>((res) => { resolveStale = res; })
+    );
+    mockedList.mockImplementationOnce(() => Promise.resolve([freshEntry]));
+
+    render();
+    await act(async () => {});
+
+    const selectSetter = Object.getOwnPropertyDescriptor(
+      window.HTMLSelectElement.prototype,
+      "value"
+    )!.set!;
+    const sourceSelect = container.querySelector(
+      "#glossary-source-lang"
+    ) as HTMLSelectElement;
+    const _m = container.querySelector("[id=glossary-source-lang]");     act(() => {
+      selectSetter.call(sourceSelect, "ja");
+      sourceSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await act(async () => {});
+
+    // 旧语言对的响应此刻才迟到返回
+    await act(async () => {
+      resolveStale([staleEntry]);
+    });
+
+    expect(container.textContent).toContain("桜 → 樱花");
+    expect(container.textContent).not.toContain("Apple → 苹果");
+    expect(mockedList).toHaveBeenNthCalledWith(1, "en", "zh");
+    expect(mockedList).toHaveBeenNthCalledWith(2, "ja", "zh");
   });
 });
