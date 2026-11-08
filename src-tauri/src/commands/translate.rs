@@ -125,7 +125,7 @@ pub async fn translate_text(
         &target,
     )
     .await;
-    let glossary_fingerprint = applied_glossary
+    let mut glossary_fingerprint = applied_glossary
         .as_ref()
         .map(|g| g.fingerprint.clone())
         .unwrap_or_default();
@@ -148,7 +148,7 @@ pub async fn translate_text(
     // 缓存作用域令牌：显式源语言/术语指纹/控制台术语库/风格上下文进键。
     // 查询与写入用同一把钥匙 —— 用户切换语言、术语或风格配置后，旧上下文
     // 的缓存译文不会再被端出来（domain/cache.rs::scope_token）。
-    let scope_token = crate::domain::cache::scope_token(
+    let mut scope_token = crate::domain::cache::scope_token(
         source_lang.as_deref(),
         &glossary_fingerprint,
         baidu_use_term_base,
@@ -161,16 +161,62 @@ pub async fn translate_text(
         glossary_id: applied_glossary.as_ref().map(|g| g.glossary_id.clone()),
         glossary_fingerprint: applied_glossary.as_ref().map(|g| g.fingerprint.clone()),
         baidu_use_term_base,
-        youdao_vocab_id,
-        tencent_term_repo_ids,
+        youdao_vocab_id: youdao_vocab_id.clone(),
+        tencent_term_repo_ids: tencent_term_repo_ids.clone(),
         style,
     };
 
     // 调用翻译引擎（带上下文：显式源语言 + 已同步的 glossary）
-    let engine_outcome = state
+    let mut engine_outcome = state
         .translator
         .translate_with_options(&text_to_translate, &target, &options)
         .await;
+
+    // glossary 自愈：映射失效（换 key 前的残留、远端 glossary 被删除）会让
+    // 携带 glossary_id 的请求被 400 拒绝并归为 Permanent —— 整条翻译直接
+    // 失败且不 fallback。失效本地映射并降级为「本次不带术语」重试一次；
+    // 重试仍失败则沿用原错误（fallback/缓存语义不变）。
+    if let (Err(AppError::ProviderRejected { .. }), Some(_)) =
+        (&engine_outcome, options.glossary_id.as_ref())
+    {
+        crate::system::glossary_sync::invalidate_mapping(&state, source_lang.as_deref(), &target)
+            .await;
+        let retry_options = crate::domain::translator::TranslateOptions {
+            glossary_id: None,
+            glossary_fingerprint: None,
+            ..options.clone()
+        };
+        match state
+            .translator
+            .translate_with_options(&text_to_translate, &target, &retry_options)
+            .await
+        {
+            Ok(r) => {
+                tracing::info!(
+                    event = "glossary_invalidated_retry_without_terms",
+                    "[translate_text] glossary 映射已失效，本次降级为不带术语翻译"
+                );
+                // 本次实际未应用术语：缓存读写的作用域键必须与之一致
+                glossary_fingerprint = String::new();
+                scope_token = crate::domain::cache::scope_token(
+                    source_lang.as_deref(),
+                    &glossary_fingerprint,
+                    baidu_use_term_base,
+                    youdao_vocab_id.as_deref(),
+                    &tencent_term_repo_ids,
+                    style.as_config_value(),
+                );
+                engine_outcome = Ok(r);
+            }
+            Err(retry_err) => {
+                tracing::warn!(
+                    event = "glossary_retry_without_terms_failed",
+                    "[translate_text] 不带术语的重试仍失败，沿用原错误: {}",
+                    retry_err
+                );
+            }
+        }
+    }
 
     // 与剪贴板路径一致：翻译源健康结论交给运行时层（计划第 4 节），
     // 无论成功失败都上报 —— coordinator 在 outcome 分支之前上报。

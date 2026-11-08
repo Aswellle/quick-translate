@@ -289,6 +289,16 @@ async fn handle_side_effect(
                 .translator
                 .update_provider_credentials("deepl", creds)
                 .await?;
+            // glossary 是账号隔离的：换 key 后旧映射指向的 glossary_id 对
+            // 新账号必然无效，复用会让翻译被 400 拒绝并归为 Permanent。
+            // 整表清空让下次翻译按指纹重建。
+            if let Err(e) = state.glossary_sync.clear_all().await {
+                tracing::warn!(
+                    event = "glossary_sync_clear_failed",
+                    "[config] 更换 DeepL key 后清空 glossary 映射失败: {}",
+                    e
+                );
+            }
         }
         "tencent_secret_id" | "tencent_secret_key" => {
             let cfg = state.config.read().await;

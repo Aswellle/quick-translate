@@ -9,11 +9,20 @@
 //   条目」时工作。自动检测源语言的路径不应用（DeepL 限制，见
 //   docs/GLOSSARY_CAPABILITY_ASSESSMENT.md）。
 // - 同步失败只降级为「本次不应用术语表」并记日志，绝不阻塞翻译。远程
-//   创建/删除动作各受 3s 硬超时（deepl::GLOSSARY_SYNC_TIMEOUT）约束，
-//   服务端再慢也不会把翻译开头拖过可感知时限。
-// - 指纹未变时复用已记录的 glossary_id，不重复创建。
+//   创建/删除动作各受 3s 硬超时（deepl::GLOSSARY_SYNC_TIMEOUT）约束；
+//   远端删除退到关键路径之外（detach 后台执行）—— 翻译开头的延迟上界
+//   是创建超时一项，不再叠加删除的 3s。
+// - 按语言对互斥：并发手动翻译（同一语言对）在指纹变化时无互斥会各自
+//   create —— 既泄漏旧 glossary，也可能删掉对方正在使用的。
+// - 指纹未变时复用已记录的 glossary_id，不重复创建。映射的生命周期：
+//   换 deepl_api_key 时整表清空（glossary 是账号隔离的，旧 id 对新账号
+//   必然无效）；provider 拒绝携带的 glossary_id 时失效对应映射并降级
+//   重试一次（commands/translate.rs 自愈路径）。
 // - v2 glossary 无编辑接口：指纹变化 → 新建 → 更新映射 → 尽力删除旧
 //   glossary（删除失败只记 warn，旧条目在 DeepL 账号侧残留不影响使用）。
+
+use std::collections::HashMap;
+use std::sync::Arc;
 
 use rusqlite::OptionalExtension;
 
@@ -21,6 +30,7 @@ use crate::domain::glossary::{self, GlossaryEntry};
 use crate::domain::translator::deepl;
 use crate::error::AppError;
 use crate::infra::database::Db;
+use crate::infra::http_client::HttpClient;
 use crate::state::AppState;
 use crate::types::now_unix_ms;
 
@@ -79,7 +89,6 @@ impl GlossarySyncStore {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub async fn remove(&self, pair_key: &str) -> Result<(), AppError> {
         let conn = self.db.try_conn().ok_or(AppError::StorageUnavailable)?;
         let conn = conn.lock().await;
@@ -88,6 +97,18 @@ impl GlossarySyncStore {
             rusqlite::params![pair_key],
         )
         .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+        Ok(())
+    }
+
+    /// 清空全部映射：deepl_api_key 更换时调用 —— glossary 是账号隔离的，
+    /// 旧 key 创建的 glossary_id 对新账号必然无效，复用会让翻译请求被
+    /// 400 拒绝并归为 Permanent（整条翻译失败、不 fallback）。旧账号侧
+    /// 的 glossary 随账号一起不再可达，无泄漏需要处理。
+    pub async fn clear_all(&self) -> Result<(), AppError> {
+        let conn = self.db.try_conn().ok_or(AppError::StorageUnavailable)?;
+        let conn = conn.lock().await;
+        conn.execute("DELETE FROM deepl_glossary_sync", [])
+            .map_err(|e| AppError::DatabaseError(e.to_string()))?;
         Ok(())
     }
 }
@@ -100,6 +121,62 @@ pub struct AppliedGlossary {
 
 fn pair_key(source_lang: &str, target_lang: &str) -> String {
     format!("deepl\u{1}{}\u{1}{}", source_lang, target_lang)
+}
+
+/// 按语言对的同步互斥（按需创建，数量以不同语言对数为上界）。
+static PAIR_LOCKS: std::sync::LazyLock<
+    tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+> = std::sync::LazyLock::new(|| tokio::sync::Mutex::new(HashMap::new()));
+
+async fn pair_lock(key: &str) -> Arc<tokio::sync::Mutex<()>> {
+    PAIR_LOCKS
+        .lock()
+        .await
+        .entry(key.to_string())
+        .or_default()
+        .clone()
+}
+
+/// 远端 glossary 删除退到翻译关键路径之外：清理是账号侧卫生问题，不该
+/// 让翻译开头多等最多 3s（此前创建 + 删除各自 3s 串行，指纹变化后的
+/// 第一次翻译最坏 6s+ 才发出）。删除失败只记 warn（残留不影响使用）。
+fn detach_delete(http_client: Arc<HttpClient>, api_key: String, glossary_id: String) {
+    if glossary_id.is_empty() {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = deepl::delete_glossary(&http_client, &api_key, &glossary_id).await {
+            tracing::warn!(
+                event = "glossary_cleanup_failed",
+                "[glossary] 删除远端 glossary 失败: {}",
+                e
+            );
+        }
+    });
+}
+
+/// 失效指定语言对的映射（自愈路径：provider 拒绝携带的 glossary_id 时
+/// 调用 —— 映射指向的远端 glossary 已不存在或不可达）。下次翻译会按
+/// 指纹重建并写入新映射。
+pub(crate) async fn invalidate_mapping(
+    state: &AppState,
+    source_lang: Option<&str>,
+    target_lang: &str,
+) {
+    let Some(source_lang) = source_lang else {
+        return;
+    };
+    if let Err(e) = state
+        .glossary_sync
+        .remove(&pair_key(source_lang, target_lang))
+        .await
+    {
+        tracing::warn!(
+            event = "glossary_invalidate_failed",
+            "[glossary] 失效 glossary 映射失败: {}",
+            e
+        );
+    }
 }
 
 /// TSV 每行 `原文\t译文`；术语里的制表符/换行替换为空格（DeepL 以行为
@@ -156,13 +233,31 @@ pub async fn prepare_deepl_glossary(
         }
     };
     if entries.is_empty() {
+        // 清空术语表后尽力清理远端残留并失效映射：清理退到关键路径之外，
+        // 映射失效让「重新导入相同条目」走重建而不是复用已删的 id
+        let key = pair_key(source_lang, target_lang);
+        if let Ok(Some(record)) = state.glossary_sync.get(&key).await {
+            let api_key = state.config.read().await.get_credential("deepl_api_key");
+            detach_delete(state.http_client.clone(), api_key, record.glossary_id);
+            if let Err(e) = state.glossary_sync.remove(&key).await {
+                tracing::warn!(
+                    event = "glossary_invalidate_failed",
+                    "[glossary] 清空后失效映射失败: {}",
+                    e
+                );
+            }
+        }
         return None;
     }
 
     let fingerprint = glossary::fingerprint(&entries, true);
     let key = pair_key(source_lang, target_lang);
 
-    // 指纹未变：直接复用已同步的 glossary
+    // 按语言对互斥覆盖「查映射 → 创建 → 记映射」整段：并发手动翻译在
+    // 指纹变化时无互斥会各自创建，既泄漏旧 glossary，也可能删掉对方
+    // 正在使用的。锁内重读映射 —— 并发同步可能刚写入新映射，直接复用。
+    let pair_guard = pair_lock(&key).await;
+    let _pair_guard = pair_guard.lock().await;
     if let Ok(Some(record)) = state.glossary_sync.get(&key).await {
         if record.fingerprint == fingerprint && !record.glossary_id.is_empty() {
             return Some(AppliedGlossary {
@@ -192,6 +287,8 @@ pub async fn prepare_deepl_glossary(
     .await
     {
         Ok(glossary_id) => {
+            // 先记映射再清理：upsert 是本地毫秒级操作，即使后续清理慢，
+            // 映射也已落库，下次翻译直接复用
             let previous = state.glossary_sync.get(&key).await.ok().flatten();
             if let Err(e) = state
                 .glossary_sync
@@ -206,17 +303,7 @@ pub async fn prepare_deepl_glossary(
             }
             if let Some(previous) = previous {
                 if previous.glossary_id != glossary_id {
-                    // 尽力清理旧 glossary：失败只记日志，不影响本次结果
-                    if let Err(e) =
-                        deepl::delete_glossary(&state.http_client, &api_key, &previous.glossary_id)
-                            .await
-                    {
-                        tracing::warn!(
-                            event = "glossary_cleanup_failed",
-                            "[glossary] 删除旧 DeepL glossary 失败: {}",
-                            e
-                        );
-                    }
+                    detach_delete(state.http_client.clone(), api_key, previous.glossary_id);
                 }
             }
             tracing::info!(
@@ -297,6 +384,25 @@ mod tests {
         store.remove("deepl\u{1}en\u{1}zh").await.unwrap();
         assert!(store.get("deepl\u{1}en\u{1}zh").await.unwrap().is_none());
         assert!(store.get("deepl\u{1}en\u{1}ja").await.unwrap().is_some());
+    }
+
+    /// deepl_api_key 更换时整表清空：glossary 是账号隔离的，旧映射对新
+    /// 账号必然无效。
+    #[tokio::test]
+    async fn clear_all_removes_every_pair() {
+        let store = store();
+        store
+            .upsert("deepl\u{1}en\u{1}zh", "fp1", "g1")
+            .await
+            .unwrap();
+        store
+            .upsert("deepl\u{1}en\u{1}ja", "fp2", "g2")
+            .await
+            .unwrap();
+
+        store.clear_all().await.unwrap();
+        assert!(store.get("deepl\u{1}en\u{1}zh").await.unwrap().is_none());
+        assert!(store.get("deepl\u{1}en\u{1}ja").await.unwrap().is_none());
     }
 
     #[test]
