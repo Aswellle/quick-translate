@@ -18,7 +18,7 @@
 
 CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 3 平台、clippy 与单测 × Windows/macOS、release 构建验证 × 双平台。CI 不依赖真实 Provider 凭证。
 
-> 进展更新：Task 04（+33）、Task 06（+19）、Task 09 来源类型（+2）、Task 09 缓存回退统一（+4）、缓存读写开关（+4）、全局快捷键（+4）、术语表数据层（+14，含语言对隔离）、DeepL 同步与缓存指纹（+7）、百度/有道控制台术语库（+3）、腾讯 TermRepoIDList（+2）、快捷键重试（+1）、评审整改（+7：DeepL 同步硬超时 +1、缓存作用域令牌 +2、手动路径敏感过滤 +4）后 Rust 单测现为 **414 passed**；前端为 **96 / 17 文件**（+3：手动窗口敏感内容确认；+5：手动窗口目标语言时序 2 例、事件名契约 3 例）。
+> 进展更新：Task 04（+33）、Task 06（+19）、Task 09 来源类型（+2）、Task 09 缓存回退统一（+4）、缓存读写开关（+4）、全局快捷键（+4）、术语表数据层（+14，含语言对隔离）、DeepL 同步与缓存指纹（+7）、百度/有道控制台术语库（+3）、腾讯 TermRepoIDList（+2）、快捷键重试（+1）、评审整改（+7：DeepL 同步硬超时 +1、缓存作用域令牌 +2、手动路径敏感过滤 +4）、翻译风格（Rust +5：请求形态裁剪 2、脏值兜底 1、风格进缓存令牌 2）后 Rust 单测现为 **419 passed**；前端为 **96 / 17 文件**（+3：手动窗口敏感内容确认；+5：手动窗口目标语言时序 2 例、事件名契约 3 例）。
 
 ## Mock 注入能力（现状确认）
 
@@ -53,12 +53,12 @@ CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 
 
 | 模块 | 数量 | 已覆盖 | 缺口 |
 |---|---|---|---|
-| `domain/cache.rs` | **23** | TTL、LRU、键构造、回声过滤、清空缓存仅删缓存条目、离线回退结果组装（provider=cache / truncated 透传 / 回声拒收 / 未命中）、读写开关（暂停不删除 / 关闭期间清空 / 回退尊重开关）、作用域令牌（维度顺序、术语上下文隔离） | 无待办 |
+| `domain/cache.rs` | **24** | TTL、LRU、键构造、回声过滤、清空缓存仅删缓存条目、离线回退结果组装（provider=cache / truncated 透传 / 回声拒收 / 未命中）、读写开关（暂停不删除 / 关闭期间清空 / 回退尊重开关）、作用域令牌（维度顺序、术语上下文隔离、翻译风格位隔离） | 无待办 |
 | `domain/glossary.rs` | **13** | 按语言对的 CRUD、语言对隔离、大小写不敏感重复拒绝、批内重复与批量原子性、CSV/JSON 导入导出（引号/逗号/换行/可选表头/其他语言对拒绝）、指纹（顺序无关、说明不参与、禁用为空） | Provider 应用（DeepL glossary 同步）与缓存键接入未实现 |
 | `domain/history.rs` | **19** | query 分页（`rowid` 第二排序键）、LIKE 转义、中文子串检索、toggle_star/delete_by_id/clear_all、FIFO 只删最旧未收藏、参数钳制、starred 过滤、收藏持久性、来源类型（clipboard/manual）往返；万条规模分页/搜索索引与 500ms 预算、万条 FIFO | 无待办 |
 | `system/persistence.rs` | 9 | 有界队列、丢弃策略、单 worker、入队失败诊断计数 | 关闭时 drain 语义已核验：channel 排空后退出（见 agent-progress Task 06），无显式退出等待——设计如此，非缺陷 |
 | `infra/database.rs` | **6** | 损坏抢救、配置行恢复、v1→最新迁移升级保留记录、重复迁移幂等、版本行逐版本记账（当前 v8） | 无待办（任何新 schema 变更前先加迁移测试） |
-| `domain/config.rs` | **15** | 描述符表完备性、批次 all-or-nothing、类型校验、布尔键三路径往返（含 cache_enabled/glossary_enabled/baidu_use_term_base）、控制台术语库键往返 | 无待办 |
+| `domain/config.rs` | **16** | 描述符表完备性、批次 all-or-nothing、类型校验、布尔键三路径往返（含 cache_enabled/glossary_enabled/baidu_use_term_base）、控制台术语库键往返、translation_style 三值校验（未知值拒绝） | 无待办 |
 | `infra/crypto.rs` | 12 | AES-GCM、掩码、错误处理 | 无待办 |
 
 ### 系统与运行时
