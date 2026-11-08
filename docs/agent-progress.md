@@ -4,12 +4,26 @@
 - Branch: main
 - Base commit: b64b04e（Merge pull request #80）
 - App version: 0.9.0
-- Current task: 计划内 Task 01–11 已完成（Task 08 剩余受要求 19 阻塞）；剩余为外部验证项（实机快捷键/术语表、真实凭证、macOS），无未阻塞的代码任务
+- Current task: 计划内 Task 01–11 已完成（Task 08 剩余受要求 19 阻塞）；Windows 实机验证已完成（五个全局快捷键 + 术语表 UI）；剩余为真实凭证与 macOS 验证
 - Working tree: 干净
 - 执行依据: docs/QUICK_TRANSLATE_AI_AGENT_DEVELOPMENT_PLAN.md（2026-11-07 修订）
 - 测试清单: docs/TEST_INVENTORY.md
 
 ## Completed
+
+### 2026-11-08 — Windows 实机验证：五个全局快捷键与术语表界面
+- 环境：Windows 11（本机），dev 构建，真实应用数据目录（旧库自动迁移 v6→v9）。
+- 快捷键：用 `RegisterHotKey` 探测五个组合键均返回 1409（已被应用占用）；实际注入按键验证：
+  - `CmdOrControl+Alt+T`：读取剪贴板 → coordinator 翻译 → 浮窗显示；Google 免配置源成功（1550ms），译文正确。
+  - `CmdOrControl+Alt+H`：隐藏（`popup_hidden` + `reset_last_text`）；再次按下重新显示（`popup_show_by_hotkey`）。
+  - `CmdOrControl+Alt+M`：打开「QuickTranslate 手动翻译」窗口（源语言/目标语言/5000 字符限制齐全）。
+  - `CmdOrControl+Alt+P`：配置 false→true，`MonitorController resume` + 吸收当前剪贴板；再按一次恢复 false。
+  - `CmdOrControl+Alt+R`：先翻译 A（29 字符），再把剪贴板改成 B，按下后仍以 A（len=29）发起请求，证明复用 `last_text` 而非当前剪贴板。
+- 设置页「快捷键」分组五行均显示「已注册」及默认组合键。
+- 术语表：设置 → 术语表 Tab 正常；语言对 English→简体中文；通过界面新增 `verification-term → 验证术语`，SQLite `glossary_entries` 落盘；通过界面删除后列表恢复空态、数据库归零。Google 不支持术语表的提示与 DeepL 大小写说明如实展示。
+- 数据清理：测试产生的 3 条历史与 2 条缓存已删除（10→7、7→5），术语表归零；剪贴板监控恢复为验证前的 false；验证后的数据库已备份到临时目录。
+- 观察：启动日志对 7 个凭证键打印「无法解密，已重置为空」；设置页当前显示未配置任何翻译源密钥，本次翻译走 Google 免配置源。若此前实际配置过密钥，需要在设置页重新填写（现有数据中无法恢复）。
+- 未验证：真实 DeepL/百度/有道/腾讯凭证下的术语表效果；macOS 全部实机项。
 
 ### 2026-11-08 — 移除未使用的全局快捷键 JS 包
 - `@tauri-apps/plugin-global-shortcut`（JS 包）没有任何 import 或调用方：快捷键走 Rust 端 `tauri-plugin-global-shortcut` 注册与分发，前端只编辑加速键并读取状态。
@@ -230,8 +244,9 @@
 
 ## Risks not yet verified
 - Platform: Windows
-  - Scenario: 全局快捷键的 OS 注册、冲突提示与五个动作的端到端行为
-  - Required manual test: 启动应用，逐个按下 `CmdOrControl+Alt+T/M/P/H/R`；再用其他应用占用同一组合验证冲突提示与旧快捷键保持可用
+  - Scenario: 全局快捷键的 OS 注册与五个动作的端到端行为 —— 2026-11-08 实机已验证
+  - Remaining: 冲突提示（其他应用先占用同一组合键）未验证；需先占用组合键再启动应用，确认设置页显示真实失败原因且旧快捷键保持可用
+  - Scenario: 术语表管理界面 —— 2026-11-08 实机已验证新增/删除与 SQLite 落盘
 - Platform: macOS
   - Scenario: 浮窗定位、剪贴板 changeCount 语义、打开外部 URL、全局快捷键注册
   - Required manual test: QT-001/002/004 的 macOS 实机验证（上轮审计遗留，EXTERNAL_VALIDATION_REQUIRED）
@@ -242,5 +257,5 @@
 ## Next task
 - 计划内代码任务已全部完成；无未阻塞的实现项。
 - Task 10 剩余：四个 Provider 的术语表效果 opt-in 真实凭证验证（DeepL/百度/有道/腾讯）。
-- 全局快捷键与术语表实机验证（Windows 优先）；macOS 未验证项继续保留。
+- Windows 快捷键冲突提示实机验证；macOS 未验证项继续保留。
 - 阻塞项：Task 08 剩余（供应商目录分类/AI 类目）待要求 19 解禁。

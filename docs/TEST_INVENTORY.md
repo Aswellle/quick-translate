@@ -67,12 +67,12 @@ CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 
 | `runtime/status.rs` | 14 | 组件状态聚合、指纹去重 |
 | `commands/system.rs` | 10 | open_url 白名单校验 |
 | `system/tray.rs` | — | 托盘状态行组装 |
-| `system/hotkeys.rs` | **4** | 动作清单唯一性、默认加速键非空且不重复、默认值贯通 AppConfig、初始注册状态 | OS 注册/冲突/三个动作分发需实机验证（未自动化） |
+| `system/hotkeys.rs` | **4** | 动作清单唯一性、默认加速键非空且不重复、默认值贯通 AppConfig、初始注册状态 | Windows 实机已验证五个动作的 OS 注册与分发（2026-11-08）；冲突提示与 macOS 未验证 |
 | `system/glossary_sync.rs` | **4** | 同步映射读写/冲突更新、按语言对删除、TSV 控制字符转义、pair key 构造 | DeepL glossary 真实 API 调用需 opt-in contract test |
 | `util/backoff.rs` | 5 | 指数退避、抖动边界 |
 | `error.rs` | — | URL 脱敏 |
 
-## 前端测试清单（86 / 15 文件）
+## 前端测试清单（88 / 15 文件）
 
 | 文件 | 覆盖 |
 |---|---|
@@ -95,9 +95,9 @@ CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 
 3. ~~`database.rs` 迁移升级路径无测试~~ → 已由 Task 06 完成（3 → 6 个测试，v1 升级/幂等/记账）
 4. 应用排除列表缺失（依赖平台来源进程能力，需先评估） → Task 04
 5. ~~手动翻译入口缺失~~ → 已由 Task 09 完成（托盘菜单 + 独立小窗 + `translate_text`；schema v7 来源类型；手动路径缓存回退与剪贴板路径统一）
-6. ~~全局快捷键：`@tauri-apps/plugin-global-shortcut` 已声明依赖但未接线~~ → 首次实现完成（Rust 端 `tauri-plugin-global-shortcut` + `system/hotkeys.rs`，三个动作复用既有入口，设置页可录制/禁用/查看注册状态）；OS 注册与冲突行为待实机验证；JS 包去留待定
+6. ~~全局快捷键：`@tauri-apps/plugin-global-shortcut` 已声明依赖但未接线~~ → 首次实现完成（Rust 端 `tauri-plugin-global-shortcut` + `system/hotkeys.rs`，五个动作复用既有入口，设置页可录制/禁用/查看注册状态）；Windows 实机已验证 OS 注册与五个动作（2026-11-08）；冲突提示与 macOS 未验证；JS 包已移除
 7. ~~缓存禁用/清空的独立入口待核验~~ → 清空入口已由 Task 06 完成（独立命令 + 设置页操作行）；读写开关已补齐（`cache_enabled`，默认开启，关闭只暂停不删除）
-8. 术语表：本地数据层 + DeepL 同步 + 百度/有道/腾讯控制台引用 + 管理 UI 已完成（mock 层验证）；真实服务商调用与术语匹配效果需 opt-in contract test
+8. 术语表：本地数据层 + DeepL 同步 + 百度/有道/腾讯控制台引用 + 管理 UI 已完成（mock 层验证；Windows 实机已验证术语表界面的新增/删除与落盘，2026-11-08）；真实服务商调用与术语匹配效果需 opt-in contract test
 
 ## 约定
 
