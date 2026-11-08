@@ -34,6 +34,7 @@ const baseConfig = (): AppConfig => ({
   hotkey_open_manual: "CmdOrControl+Alt+M",
   hotkey_toggle_monitor: "CmdOrControl+Alt+P",
   hotkey_toggle_popup: "CmdOrControl+Alt+H",
+  hotkey_retranslate_last: "CmdOrControl+Alt+R",
   glossary_enabled: true,
   baidu_use_term_base: false,
   youdao_vocab_id: "",

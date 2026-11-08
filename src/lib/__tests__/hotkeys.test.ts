@@ -106,9 +106,10 @@ describe("formatAccelerator", () => {
 });
 
 describe("HOTKEY_CONFIG_KEYS", () => {
-  it("覆盖后端的四个动作，且映射到 AppConfig 字段", () => {
+  it("覆盖后端的五个动作，且映射到 AppConfig 字段", () => {
     expect(Object.keys(HOTKEY_CONFIG_KEYS).sort()).toEqual([
       "open_manual",
+      "retranslate_last",
       "toggle_monitor",
       "toggle_popup",
       "translate_clipboard",
@@ -118,6 +119,7 @@ describe("HOTKEY_CONFIG_KEYS", () => {
       "hotkey_open_manual",
       "hotkey_toggle_monitor",
       "hotkey_toggle_popup",
+      "hotkey_retranslate_last",
     ]);
   });
 });
