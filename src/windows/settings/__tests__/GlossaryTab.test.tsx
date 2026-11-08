@@ -294,4 +294,26 @@ describe("GlossaryTab", () => {
     expect(mockedList).toHaveBeenNthCalledWith(1, "en", "zh");
     expect(mockedList).toHaveBeenNthCalledWith(2, "ja", "zh");
   });
+
+  // 失败态与空态分离回归：toast 一闪而过，若读取失败落回「还没有术语」
+  // 空态，已有术语的用户会信以为真并重复录入。
+  it("读取失败显示原因与重试入口，不冒充空态", async () => {
+    mockedList.mockImplementationOnce(() =>
+      Promise.reject(new Error("db unavailable"))
+    );
+    render();
+    await act(async () => {});
+
+    expect(container.textContent).toContain("术语表读取失败");
+    expect(container.textContent).toContain("db unavailable");
+    expect(container.textContent).not.toContain("该语言对还没有术语");
+
+    // 重试成功后回到正常列表渲染
+    mockedList.mockImplementationOnce(() => Promise.resolve([]));
+    await act(async () => {
+      clickByText(container, "重试");
+    });
+    expect(container.textContent).toContain("该语言对还没有术语");
+    expect(container.textContent).not.toContain("术语表读取失败");
+  });
 });

@@ -82,6 +82,8 @@ export function GlossaryTab({
   );
   const [entries, setEntries] = useState<GlossaryEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  // 读取失败与空态分离：失败要显示原因与重试入口，不能落回「还没有术语」
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -110,9 +112,11 @@ export function GlossaryTab({
       const list = await listGlossaryEntries(sourceLang, targetLang);
       if (seq !== reloadSeqRef.current) return;
       setEntries(list);
-    } catch {
+      setLoadError(null);
+    } catch (err) {
       if (seq !== reloadSeqRef.current) return;
       toast("读取术语表失败", "error");
+      setLoadError(errorMessage(err));
       setEntries([]);
     } finally {
       if (seq === reloadSeqRef.current) setLoading(false);
@@ -389,6 +393,21 @@ export function GlossaryTab({
           <div className="macos-card divide-y divide-[var(--border-secondary)] overflow-hidden">
             {loading ? (
               <p className="px-3 py-4 text-[12px] text-[var(--text-tertiary)]">正在读取…</p>
+            ) : loadError ? (
+              /* 读取失败必须与空态分离：toast 一闪而过，若落回「还没有
+                 术语」空态，已有 30 条术语的用户会信以为真并重复录入 */
+              <div className="px-3 py-4 flex items-center justify-between gap-3">
+                <p className="text-[12px] text-[var(--popup-text-primary)] leading-relaxed">
+                  术语表读取失败：{loadError}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void reload()}
+                  className="px-2.5 py-1 rounded-lg text-[12px] font-medium border border-[var(--border-primary)] text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] transition-colors shrink-0"
+                >
+                  重试
+                </button>
+              </div>
             ) : entries.length === 0 ? (
               <p className="px-3 py-4 text-[12px] text-[var(--text-tertiary)]">
                 该语言对还没有术语。添加后，DeepL 翻译时按目标译法生效。
