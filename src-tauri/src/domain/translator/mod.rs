@@ -76,12 +76,17 @@ impl TranslationStyle {
     }
 }
 
-/// 默认全空 = 与既有 `translate(text, target)` 行为完全一致；只有支持
-/// 原生 glossary 的 provider（当前 DeepL）会读取这些字段，其余 provider
-/// 通过 trait 默认实现直接忽略 —— 不改变它们已有的请求形态。
+/// 默认全空 = 与既有 `translate(text, target)` 行为完全一致。字段的消费
+/// 方：source_lang 由 DeepL/百度/有道/腾讯映射到各自的 from/source 参数
+/// 下发（None = 自动检测）；glossary 维度只有 DeepL 读取；style 只有
+/// DeepL 读取（目标语言不支持 formality 时请求侧自行忽略，见
+/// deepl::FORMALITY_TARGET_LANGS）；不支持术语库的 provider 通过 trait
+/// 默认实现直接忽略 —— 不改变它们已有的请求形态。
 #[derive(Debug, Clone, Default)]
 pub struct TranslateOptions {
-    /// 显式源语言（应用内代码，如 "en"）。None = 自动检测。
+    /// 显式源语言（应用内代码，如 "en"）。None = 自动检测。四个覆盖了
+    /// translate_with_options 的 provider 都会把它映射并下发 —— 校验了
+    /// 却不发请求，等于承诺与实现脱节。
     pub source_lang: Option<String>,
     /// 已同步到 provider 的 glossary 标识（DeepL glossary_id）。
     pub glossary_id: Option<String>,

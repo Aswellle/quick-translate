@@ -72,9 +72,12 @@ impl YoudaoProvider {
         hex::encode(h.finalize())
     }
 
-    /// 组装请求参数（纯函数，便于测试可选 vocabId）。
+    /// 组装请求参数（纯函数，便于测试可选 vocabId 与显式源语言）。
+    /// 有道 v3 签名要求这些字段同场出现，参数个数是协议形状而非设计味道。
+    #[allow(clippy::too_many_arguments)]
     fn build_params<'a>(
         text: &'a str,
+        from: &'a str,
         target: &'a str,
         app_key: &'a str,
         salt: &'a str,
@@ -84,7 +87,7 @@ impl YoudaoProvider {
     ) -> Vec<(&'a str, &'a str)> {
         let mut params = vec![
             ("q", text),
-            ("from", "auto"),
+            ("from", from),
             ("to", target),
             ("appKey", app_key),
             ("salt", salt),
@@ -135,6 +138,13 @@ impl TranslationProvider for YoudaoProvider {
 
         let start = Instant::now();
         let target = Self::to_youdao_lang(target_lang);
+        // 显式源语言此前被静默丢弃：设置页选了源语言就必须下发（与缓存
+        // 作用域键的 src= 维度承诺一致）
+        let from = options
+            .source_lang
+            .as_deref()
+            .map(Self::to_youdao_lang)
+            .unwrap_or("auto");
         let salt = Uuid::new_v4().to_string();
         let curtime = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -150,6 +160,7 @@ impl TranslationProvider for YoudaoProvider {
             .filter(|v| !v.is_empty());
         let params = Self::build_params(
             text,
+            from,
             target,
             &self.app_key,
             &salt,
@@ -271,13 +282,15 @@ mod tests {
 
     #[test]
     fn vocab_id_is_sent_only_when_configured() {
-        let base =
-            YoudaoProvider::build_params("hello", "zh-CHS", "key", "salt", "sign", "1", None);
+        let base = YoudaoProvider::build_params(
+            "hello", "auto", "zh-CHS", "key", "salt", "sign", "1", None,
+        );
         assert!(!base.iter().any(|(k, _)| *k == "vocabId"));
         assert_eq!(base.len(), 8, "默认请求形状保持不变");
 
         let with_vocab = YoudaoProvider::build_params(
             "hello",
+            "auto",
             "zh-CHS",
             "key",
             "salt",
@@ -289,5 +302,23 @@ mod tests {
         assert!(with_vocab
             .iter()
             .any(|(k, v)| *k == "vocabId" && *v == "vocab-out-1"));
+    }
+
+    /// 显式源语言映射到有道源码并作为 from 下发（此前恒发 auto，被静默
+    /// 丢弃）。
+    #[test]
+    fn explicit_source_lang_is_mapped_and_sent() {
+        // 映射层：应用内代码 → 有道源码
+        assert_eq!(YoudaoProvider::to_youdao_lang("zh"), "zh-CHS");
+        // 下发层：build_params 收到的就是映射后的值
+        let params =
+            YoudaoProvider::build_params("hello", "zh-CHS", "en", "key", "salt", "sign", "1", None);
+        assert!(
+            params.iter().any(|(k, v)| *k == "from" && *v == "zh-CHS"),
+            "映射后的显式源语言必须作为 from 下发"
+        );
+        let auto =
+            YoudaoProvider::build_params("hello", "auto", "en", "key", "salt", "sign", "1", None);
+        assert!(auto.iter().any(|(k, v)| *k == "from" && *v == "auto"));
     }
 }
