@@ -20,6 +20,15 @@ vi.mock("@/lib/commands", async (importOriginal) => {
   };
 });
 
+// 事件层 mock：捕获 config-changed 监听器，测试直接驱动它
+const listeners = new Map<string, (e: unknown) => void>();
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async (event: string, cb: (e: unknown) => void) => {
+    listeners.set(event, cb);
+    return () => {};
+  }),
+}));
+
 import { translateText } from "@/lib/commands";
 
 const mockedTranslate = vi.mocked(translateText);
@@ -62,6 +71,7 @@ describe("ManualTranslateWindow", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    listeners.clear();
     useConfigStore.setState({ config: null, isLoaded: false });
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -151,6 +161,41 @@ describe("ManualTranslateWindow", () => {
       submitButton(container).click();
     });
     expect(mockedTranslate).not.toHaveBeenCalled();
+  });
+
+  /** config-changed 契约回归：manual 窗口 hide 而非销毁、store 只在挂载时
+   *  加载一次 —— 托盘切目标语言等带外写入若不被合并，「跟随配置」跟随的
+   *  是窗口首次加载时的旧值，翻译静默译向旧目标。 */
+  it("config-changed 带外写入合并进 store，翻译目标随新值", async () => {
+    mockedTranslate.mockResolvedValue({
+      source_text: "hello",
+      translated_text: "こんにちは",
+      detected_source_lang: "en",
+      target_lang: "ja",
+      provider: "deepl",
+      duration_ms: 10,
+      truncated: false,
+    });
+    render();
+    await act(async () => {}); // flush listen() 注册
+    // 真实时序：App.tsx 挂载即加载配置，事件到达时 store 已有基线
+    act(() => {
+      useConfigStore.setState({ config: { target_lang: "zh" } as AppConfig, isLoaded: true });
+    });
+
+    const cfg = { target_lang: "ja" } as AppConfig;
+    const handler = listeners.get("config-changed");
+    expect(handler, "config-changed 监听器必须已注册").toBeTruthy();
+    act(() => {
+      handler!({ payload: cfg, event: "config-changed", id: 0, channel: null });
+    });
+    expect(targetSelectValue(container)).toBe("ja");
+
+    setInput(container, "hello");
+    await act(async () => {
+      submitButton(container).click();
+    });
+    expect(mockedTranslate).toHaveBeenCalledWith("hello", "ja", undefined, undefined);
   });
 
   it("超长文本禁用按钮并明确提示，不静默截断", async () => {
