@@ -11,6 +11,19 @@
 
 ## Completed
 
+### 2026-11-08 — 快捷键：重新翻译上一次
+- coordinator 记住最近一次通过敏感过滤并实际发起的原文（内存态，不落盘、不进日志；被拦截内容不记入），剪贴板与手动路径都写入。
+- 新增 `retranslate_last` 动作（默认 CmdOrControl+Alt+R）：复用 `execute_at_position` 的完整入口；无内容时提示。
+- Tests: cargo test --lib 406 passed；fmt/clippy PASS；vitest 88/88；tsc/build PASS
+- Commit: 7e919c7 / 5bbc0f3
+- 未验证：OS 注册与快捷键行为需实机验证。
+
+### 2026-11-08 — 快捷键：显示/隐藏翻译浮窗
+- 新增 `toggle_popup` 动作（默认 CmdOrControl+Alt+H）：可见时走 popup_watch 的唯一关闭路径；不可见时重新显示并重置看守基线；从未翻译过时提示而非创建空白浮窗。设置页第四行自动出现。
+- Tests: cargo test --lib 406 passed；fmt/clippy PASS；vitest 88/88；tsc/build PASS
+- Commit: 6a4f83d / a352335
+- 未验证：OS 注册与快捷键行为需实机验证（同其余动作）。
+
 ### 2026-11-08 — 腾讯云术语库引用（TermRepoIDList）
 - 参数核实：腾讯云 SDK 的 `TextTranslateRequest` 与官方更新历史确认 2024-07-04 起支持 `TermRepoIDList`（术语库 ID 列表），不是此前社区资料中的 `TermBaseId`。
 - Changes: `TranslateOptions` 增加 `tencent_term_repo_ids`；请求体仅非空时序列化 `TermRepoIDList`（默认形状不变）；配置键为逗号分隔字符串（去空白/去重/最多 10 项）；术语表页提供腾讯云术语库 ID 输入（失焦提交）。
@@ -80,7 +93,7 @@
 - Commit: d41e66f / 3ae9b2c
 - **未验证（如实记录）**：快捷键的 OS 注册、冲突提示与三个动作的端到端行为需要实机验证 —— 本机未启动 Tauri 应用实跑；macOS 完全未验证（`on_shortcut` 在主线程内联执行的处理已核读 tauri-runtime-wry 源码，但平台行为未实测）。默认加速键 `CmdOrControl+Alt+T/M/P` 可能与其他应用冲突，冲突时设置页会显示真实原因。
 - 依赖去留：`@tauri-apps/plugin-global-shortcut`（JS 包）当前未被使用（本实现走 Rust 端）。保留还是移除留待后续小步（移除需同步 package-lock）。
-- 未做：动作「显示/隐藏浮窗」「重新翻译上一次文本」需要前端状态或新的暂存语义，留待后续；快捷键录制暂不校验跨平台键位差异。
+- 未做：快捷键录制暂不校验跨平台键位差异。（「显示/隐藏浮窗」6a4f83d、「重新翻译上一次」7e919c7 已补齐）
 
 ### 2026-11-08 — 本地缓存读写开关（完成，Task 06 遗留项收尾）
 - 背景：此前只能「清空缓存」，不想在磁盘留存译文副本的用户没有持续生效的选项。
