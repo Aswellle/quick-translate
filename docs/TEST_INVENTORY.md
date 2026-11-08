@@ -18,7 +18,7 @@
 
 CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 3 平台、clippy 与单测 × Windows/macOS、release 构建验证 × 双平台。CI 不依赖真实 Provider 凭证。
 
-> 进展更新：Task 04（+33）、Task 06（+19）、Task 09 来源类型（+2）、Task 09 缓存回退统一（+4）、缓存读写开关（+4）、全局快捷键（+4）、术语表数据层（+14，含语言对隔离）、DeepL 同步与缓存指纹（+7）、百度/有道控制台术语库（+3）、腾讯 TermRepoIDList（+2）后 Rust 单测现为 **406 passed**；前端为 **88 / 15 文件**（+51）。
+> 进展更新：Task 04（+33）、Task 06（+19）、Task 09 来源类型（+2）、Task 09 缓存回退统一（+4）、缓存读写开关（+4）、全局快捷键（+4）、术语表数据层（+14，含语言对隔离）、DeepL 同步与缓存指纹（+7）、百度/有道控制台术语库（+3）、腾讯 TermRepoIDList（+2）、快捷键重试（+1）后 Rust 单测现为 **407 passed**；前端为 **88 / 15 文件**（+51）。
 
 ## Mock 注入能力（现状确认）
 
@@ -37,7 +37,7 @@ CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 
 | `domain/translator/health.rs` | 13 | 状态机流转、冷却阶梯（含长冷却）、半开单探测、Retry-After 边界 | 并发探测互斥已有；无待办 |
 | `domain/translator/error_class.rs` | 9 | 错误分类表 | 无待办 |
 | `domain/translator/policy.rs` | 10 | 请求策略、8s 预算、剩余预算校验 | 无待办 |
-| `system/translation/coordinator.rs` | 21 | 代际闸门、迟到结果丢弃、install 拒绝并中止、窗锁串行、commit_popup_show 全协议、缓存回退判定、过滤门控开关语义、拦截内容暂存生命周期 | 无待办（取消跨 fallback 切换由 translator 的 `aborted_task_never_continues_the_fallback_chain` 锁定，d3b3f97） |
+| `system/translation/coordinator.rs` | **22** | 代际闸门、迟到结果丢弃、install 拒绝并中止、窗锁串行、commit_popup_show 全协议、缓存回退判定、过滤门控开关语义、拦截内容暂存生命周期、上一次翻译保留 | 无待办（取消跨 fallback 切换由 translator 的 `aborted_task_never_continues_the_fallback_chain` 锁定，d3b3f97） |
 
 ### 剪贴板链路
 
