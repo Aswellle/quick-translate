@@ -11,6 +11,28 @@
 
 ## Completed
 
+### 2026-11-08 — 评审 WATCHLIST 处置：可落地项修复，其余记录取舍
+- Changes:
+  - 手动翻译窗口目标语言初值跟随配置 store（35d1492）：挂载瞬间对 config 的
+    useState 一次性快照会把首次打开恒钉在兜底值 zh（App.tsx 异步加载 getConfig）；
+    改为用户选择前跟随 store，选择后跟随即停；+2 时序回归测试。
+  - 事件名契约测试（events.test.ts）：Rust emit ↔ 前端 listen 全部十对配对锁死，
+    与错误码契约同级；+3 测试。前端现为 96 passed / 17 文件。
+- WATCHLIST 逐项处置（其余七项不动的理由）：
+  - DeepL 远程 glossary 生命周期（删除失败/切换 provider 后远程残留）：既有设计
+    「尽力清理 + 残留不影响使用」已在代码注释与能力评估文档中记录，远程对象不占
+    本地资源；如需对账属产品功能，待用户决策。
+  - 快捷键失败值持久化：失败值保留 = 保留用户意图（下次启动重试注册），设置页
+    显示真实失败原因且旧值在 active 中保持可用 —— 语义自洽，不做回滚。
+  - 监控开关绕过统一管线：双路径持久化语义差异已在 apply_clipboard_monitor_switch
+    注释中明确，属既有取舍。
+  - TranslateOptions 意图联合体 / system→commands 模块环 / CONFIG_LABELS 人工维护：
+    重构类，按「不为形式统一重写成熟机制」原则保留现状，新增维度时再议。
+  - 剪贴板双属主：当前行为（监控吸收、手动窗口只读）无已知问题，约定待产品化
+    时固化。
+- Tests: `npm test` → 96 passed / 17 文件；`npx tsc --noEmit` → PASS
+- Commits: 35d1492（目标语言跟随）、事件契约（见 git log）、docs 计数
+
 ### 2026-11-08 — 代码评审整改：术语表同步限时、缓存作用域、手动路径过滤
 - 背景：/code-review 双线评审（architect 判 BLOCK）后按结论依次整改，四个提交。
 - Changes:
