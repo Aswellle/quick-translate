@@ -39,6 +39,18 @@ fn manual_filter_check(text: &str, enabled: bool, force: bool) -> Result<(), App
     }
 }
 
+/// 显式目标语言的校验（纯函数，便于测试）：白名单 + 长度上限。
+/// target_lang 进缓存键、历史列与请求参数 —— 校验面由接收方兜住，
+/// 不信任调用方（纵深防御：前端是第一方代码，但异常渲染进程不应能
+/// 借它写入任意长字符串或发起无意义的 provider 请求）。
+fn resolve_explicit_target_lang(t: String) -> Result<String, AppError> {
+    let t = t.trim().to_string();
+    if t.len() > 12 || !crate::types::SUPPORTED_LANGS.contains(&t.as_str()) {
+        return Err(AppError::ConfigError(format!("目标语言不受支持: {}", t)));
+    }
+    Ok(t)
+}
+
 /// 前端手动触发翻译
 /// 用于：设置面板的"测试翻译"按钮
 /// 注意：返回值直接给前端，不通过 event
@@ -104,8 +116,12 @@ pub async fn translate_text(
     // 获取目标语言（参数 > 配置 > 默认值）
     // 必须用 .read().await，不能用 blocking_read()：此函数是 async fn，
     // 在 Tokio worker 线程上运行，blocking_read() 会 panic + abort 整进程
+    //
+    // target_lang 与 source_lang 同一白名单：它进缓存键、历史列与请求
+    // 参数，一个异常渲染进程不应能借它写入任意长字符串或发起无意义的
+    // provider 请求（纵深防御：前端是第一方代码，但校验面由接收方兜住）
     let target = match target_lang {
-        Some(t) => t,
+        Some(t) => resolve_explicit_target_lang(t)?,
         None => state
             .config
             .read()
@@ -372,6 +388,7 @@ pub async fn get_provider_status(
 #[cfg(test)]
 mod tests {
     use super::manual_filter_check;
+    use super::resolve_explicit_target_lang;
     use super::to_snake_case;
     use crate::error::AppError;
 
@@ -455,5 +472,14 @@ mod tests {
             to_snake_case(&format!("{:?}", ErrorClass::SameLanguage)),
             "same_language"
         );
+    }
+
+    /// 显式目标语言：白名单外拒绝、超长拒绝、合法值放行、首尾空白折叠。
+    #[test]
+    fn explicit_target_lang_is_validated() {
+        assert!(resolve_explicit_target_lang("zh".to_string()).is_ok());
+        assert!(resolve_explicit_target_lang("  ja  ".to_string()).is_ok());
+        assert!(resolve_explicit_target_lang("xx-yy".to_string()).is_err());
+        assert!(resolve_explicit_target_lang("a".repeat(64).to_string()).is_err());
     }
 }
