@@ -101,6 +101,8 @@ export function GlossaryTab({
   const jsonInputRef = useRef<HTMLInputElement>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
   const reloadSeqRef = useRef(0);
+  const formCardRef = useRef<HTMLDivElement>(null);
+  const sourceTermInputRef = useRef<HTMLInputElement>(null);
 
   const noteInfo = providerNote(draft.provider);
   const pairInvalid = sourceLang === targetLang;
@@ -193,6 +195,11 @@ export function GlossaryTab({
     setNote(entry.note);
     setCaseSensitive(entry.case_sensitive);
     setFormError(null);
+    // 视线管理：变化发生在视口外的顶部表单（按钮变「保存修改」、多出
+    // 「取消」），长列表下点「编辑」看起来像没有响应 —— 滚动到表单并
+    // 聚焦第一个输入框
+    formCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    requestAnimationFrame(() => sourceTermInputRef.current?.focus());
   };
 
   const remove = async (id: number) => {
@@ -254,7 +261,7 @@ export function GlossaryTab({
       await navigator.clipboard.writeText(content);
       toast(`已复制 ${kind.toUpperCase()} 到剪贴板`, "success");
     } catch (err) {
-      toast(`导出失败：${errorMessage(err)}`, "error");
+      toast(`复制失败：${errorMessage(err)}`, "error");
     }
   };
 
@@ -354,9 +361,10 @@ export function GlossaryTab({
       ) : (
         <>
           {/* 新增 / 编辑 */}
-          <div className="macos-card px-3 py-3 space-y-2">
+          <div ref={formCardRef} className="macos-card px-3 py-3 space-y-2 scroll-mt-3">
             <div className="flex items-center gap-2">
               <input
+                ref={sourceTermInputRef}
                 value={sourceTerm}
                 onChange={(e) => setSourceTerm(e.target.value)}
                 placeholder="原文术语"
@@ -456,7 +464,7 @@ export function GlossaryTab({
                       </div>
                     )}
                   </div>
-                  <div className="flex items-center gap-1 shrink-0">
+                  <div className="flex items-center gap-2 shrink-0">
                     <button
                       type="button"
                       onClick={() => startEdit(entry)}
@@ -472,7 +480,7 @@ export function GlossaryTab({
                           term: `${entry.source_term} → ${entry.target_term}`,
                         })
                       }
-                      className="text-[11px] px-2 py-0.5 rounded border border-[var(--border-primary)] hover:bg-[var(--hover-bg)] text-red-500"
+                      className="text-[11px] px-2 py-1.5 rounded border border-[var(--border-primary)] hover:bg-[var(--hover-bg)] text-red-500"
                     >
                       删除
                     </button>
@@ -513,10 +521,10 @@ export function GlossaryTab({
               导入 CSV
             </button>
             <button type="button" onClick={() => void copyExport("json")} className="text-[12px] px-3 py-1 rounded-lg border border-[var(--border-primary)] hover:bg-[var(--hover-bg)] text-[var(--text-secondary)]">
-              导出 JSON
+              复制 JSON
             </button>
             <button type="button" onClick={() => void copyExport("csv")} className="text-[12px] px-3 py-1 rounded-lg border border-[var(--border-primary)] hover:bg-[var(--hover-bg)] text-[var(--text-secondary)]">
-              导出 CSV
+              复制 CSV
             </button>
             <button
               type="button"
