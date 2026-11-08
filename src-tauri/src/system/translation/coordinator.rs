@@ -449,10 +449,11 @@ async fn run_translation(app: &AppHandle, request: TranslationRequest) {
         "[coordinator] 开始翻译"
     );
 
-    // 控制台术语库引用（百度/有道）：配置随请求读取，改配置立即生效，
-    // 不需要重建 provider。剪贴板路径没有显式源语言 → 不应用 DeepL glossary。
-    // 同一请求上下文同时构造缓存作用域令牌 —— 查询与写入用同一把钥匙，
-    // 术语配置切换后旧上下文的缓存译文不会被端出来。
+    // 控制台术语库引用（百度/有道）与翻译风格：配置随请求读取，改配置
+    // 立即生效，不需要重建 provider。剪贴板路径没有显式源语言 → 不应用
+    // DeepL glossary。同一请求上下文同时构造缓存作用域令牌 —— 查询与
+    // 写入用同一把钥匙，术语或风格配置切换后旧上下文的缓存译文不会被
+    // 端出来。
     let (options, scope_token) = {
         let cfg = state.config.read().await;
         let baidu_use_term_base = cfg
@@ -464,17 +465,22 @@ async fn run_translation(app: &AppHandle, request: TranslationRequest) {
             crate::domain::translator::tencent::TencentProvider::parse_term_repo_ids(
                 &cfg.get("tencent_term_repo_ids").unwrap_or_default(),
             );
+        let style = crate::domain::translator::TranslationStyle::from_config(
+            &cfg.get("translation_style").unwrap_or_default(),
+        );
         let scope_token = crate::domain::cache::scope_token(
             None,
             "",
             baidu_use_term_base,
             youdao_vocab_id.as_deref(),
             &tencent_term_repo_ids,
+            style.as_config_value(),
         );
         let options = crate::domain::translator::TranslateOptions {
             baidu_use_term_base,
             youdao_vocab_id,
             tencent_term_repo_ids,
+            style,
             ..Default::default()
         };
         (options, scope_token)

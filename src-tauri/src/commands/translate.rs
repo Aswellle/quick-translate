@@ -129,8 +129,8 @@ pub async fn translate_text(
         .as_ref()
         .map(|g| g.fingerprint.clone())
         .unwrap_or_default();
-    // 控制台术语库引用（百度/有道）：随请求读取，改配置立即生效。
-    let (baidu_use_term_base, youdao_vocab_id, tencent_term_repo_ids) = {
+    // 控制台术语库引用（百度/有道）与翻译风格：随请求读取，改配置立即生效。
+    let (baidu_use_term_base, youdao_vocab_id, tencent_term_repo_ids, style) = {
         let cfg = state.config.read().await;
         (
             cfg.get("baidu_use_term_base")
@@ -140,17 +140,21 @@ pub async fn translate_text(
             crate::domain::translator::tencent::TencentProvider::parse_term_repo_ids(
                 &cfg.get("tencent_term_repo_ids").unwrap_or_default(),
             ),
+            crate::domain::translator::TranslationStyle::from_config(
+                &cfg.get("translation_style").unwrap_or_default(),
+            ),
         )
     };
-    // 缓存作用域令牌：显式源语言/术语指纹/控制台术语库上下文进键。
-    // 查询与写入用同一把钥匙 —— 用户切换语言或术语配置后，旧上下文的
-    // 缓存译文不会再被端出来（domain/cache.rs::scope_token）。
+    // 缓存作用域令牌：显式源语言/术语指纹/控制台术语库/风格上下文进键。
+    // 查询与写入用同一把钥匙 —— 用户切换语言、术语或风格配置后，旧上下文
+    // 的缓存译文不会再被端出来（domain/cache.rs::scope_token）。
     let scope_token = crate::domain::cache::scope_token(
         source_lang.as_deref(),
         &glossary_fingerprint,
         baidu_use_term_base,
         youdao_vocab_id.as_deref(),
         &tencent_term_repo_ids,
+        style.as_config_value(),
     );
     let options = crate::domain::translator::TranslateOptions {
         source_lang: source_lang.clone(),
@@ -159,6 +163,7 @@ pub async fn translate_text(
         baidu_use_term_base,
         youdao_vocab_id,
         tencent_term_repo_ids,
+        style,
     };
 
     // 调用翻译引擎（带上下文：显式源语言 + 已同步的 glossary）
