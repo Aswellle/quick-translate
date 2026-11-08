@@ -18,7 +18,7 @@
 
 CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 3 平台、clippy 与单测 × Windows/macOS、release 构建验证 × 双平台。CI 不依赖真实 Provider 凭证。
 
-> 进展更新：Task 04（+33）、Task 06（+19）、Task 09 来源类型（+2）、Task 09 缓存回退统一（+4）、缓存读写开关（+4）、全局快捷键（+4）、术语表数据层（+14，含语言对隔离）、DeepL 同步与缓存指纹（+7）、百度/有道控制台术语库（+3）后 Rust 单测现为 **404 passed**；前端为 **87 / 15 文件**（+50）。
+> 进展更新：Task 04（+33）、Task 06（+19）、Task 09 来源类型（+2）、Task 09 缓存回退统一（+4）、缓存读写开关（+4）、全局快捷键（+4）、术语表数据层（+14，含语言对隔离）、DeepL 同步与缓存指纹（+7）、百度/有道控制台术语库（+3）、腾讯 TermRepoIDList（+2）后 Rust 单测现为 **406 passed**；前端为 **88 / 15 文件**（+51）。
 
 ## Mock 注入能力（现状确认）
 
@@ -86,7 +86,7 @@ CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 
 | `windows/popup/__tests__/PopupActivation.test.tsx` | 激活时序契约 |
 | `windows/popup/__tests__/TrafficLights.test.tsx` | 交通灯交互 |
 | `windows/settings/__tests__/ToggleRow.test.tsx` | 设置开关行 |
-| `windows/settings/__tests__/GlossaryTab.test.tsx` | 术语表按语言对加载、新增携带语言对/大小写、Provider 能力说明、百度控制台术语库开关 |
+| `windows/settings/__tests__/GlossaryTab.test.tsx` | 术语表按语言对加载、新增携带语言对/大小写、Provider 能力说明、百度开关、腾讯云术语库 ID 提交 |
 
 ## 已识别缺口汇总（映射后续任务）
 
@@ -97,7 +97,7 @@ CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 
 5. ~~手动翻译入口缺失~~ → 已由 Task 09 完成（托盘菜单 + 独立小窗 + `translate_text`；schema v7 来源类型；手动路径缓存回退与剪贴板路径统一）
 6. ~~全局快捷键：`@tauri-apps/plugin-global-shortcut` 已声明依赖但未接线~~ → 首次实现完成（Rust 端 `tauri-plugin-global-shortcut` + `system/hotkeys.rs`，三个动作复用既有入口，设置页可录制/禁用/查看注册状态）；OS 注册与冲突行为待实机验证；JS 包去留待定
 7. ~~缓存禁用/清空的独立入口待核验~~ → 清空入口已由 Task 06 完成（独立命令 + 设置页操作行）；读写开关已补齐（`cache_enabled`，默认开启，关闭只暂停不删除）
-8. 术语表：本地数据层 + DeepL 同步 + 百度/有道控制台引用 + 管理 UI 已完成（mock 层验证）；真实服务商调用与术语匹配效果需 opt-in contract test；腾讯云术语库参数名待官方 API 复核
+8. 术语表：本地数据层 + DeepL 同步 + 百度/有道/腾讯控制台引用 + 管理 UI 已完成（mock 层验证）；真实服务商调用与术语匹配效果需 opt-in contract test
 
 ## 约定
 

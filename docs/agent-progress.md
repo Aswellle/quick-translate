@@ -4,12 +4,20 @@
 - Branch: main
 - Base commit: b64b04e（Merge pull request #80）
 - App version: 0.9.0
-- Current task: 全局快捷键（完成，待实机验证）；Task 10 术语表（数据层 + DeepL 同步 + 百度/有道控制台引用 + 管理 UI 完成，真实 API 未验证）；下一步腾讯参数复核或真实凭证验证
+- Current task: 全局快捷键（完成，待实机验证）；Task 10 术语表（DeepL/百度/有道/腾讯控制台引用 + 管理 UI 完成，真实 API 未验证）；下一步真实凭证验证或新的产品任务
 - Working tree: 干净
 - 执行依据: docs/QUICK_TRANSLATE_AI_AGENT_DEVELOPMENT_PLAN.md（2026-11-07 修订）
 - 测试清单: docs/TEST_INVENTORY.md
 
 ## Completed
+
+### 2026-11-08 — 腾讯云术语库引用（TermRepoIDList）
+- 参数核实：腾讯云 SDK 的 `TextTranslateRequest` 与官方更新历史确认 2024-07-04 起支持 `TermRepoIDList`（术语库 ID 列表），不是此前社区资料中的 `TermBaseId`。
+- Changes: `TranslateOptions` 增加 `tencent_term_repo_ids`；请求体仅非空时序列化 `TermRepoIDList`（默认形状不变）；配置键为逗号分隔字符串（去空白/去重/最多 10 项）；术语表页提供腾讯云术语库 ID 输入（失焦提交）。
+- Tests: cargo test --lib **406 passed**（+2）；fmt/clippy PASS；vitest **88/88**（+1）；tsc/build PASS
+- Commit: 2ee7095 / 3a150f4
+- 未验证：真实腾讯云请求中的术语库效果（需已创建术语库的账号）。
+
 
 ### 2026-11-08 — 百度/有道控制台术语库引用
 - Changes:
@@ -213,6 +221,6 @@
   - Required manual test: 显式 opt-in 的真实凭证测试
 
 ## Next task
-- Task 10 剩余：腾讯云术语库参数名从官方 API 参考复核后再提供配置；百度/有道/DeepL 术语库效果的 opt-in 真实凭证验证。
+- Task 10 剩余：四个 Provider 的术语表效果 opt-in 真实凭证验证（DeepL/百度/有道/腾讯）；无代码阻塞项。
 - 全局快捷键与术语表实机验证（Windows 优先）；macOS 未验证项继续保留。
-- 阻塞项：Task 08 剩余（供应商目录分类/AI 类目）待要求 19 解禁；腾讯云术语库参数待复核。
+- 阻塞项：Task 08 剩余（供应商目录分类/AI 类目）待要求 19 解禁。

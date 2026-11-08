@@ -30,7 +30,7 @@
 ### 腾讯云 TMT
 
 - 控制台可创建术语库（名称规则、语言方向、是否双向），支持单条添加与 CSV/XLSX 批量导入（≤500KB，大批量需等待生效）。
-- 官方术语库文档明确「调用文本翻译接口时，在请求参数中配置术语库 ID」；社区资料写作 `TermBaseId`，但动态渲染的 API 参考页无法静态读取，**参数名与类型（单个 ID / ID 列表）需复核**。
+- 官方术语库文档明确「调用文本翻译接口时，在请求参数中配置术语库 ID」；进一步核实腾讯云 SDK 的 `TextTranslateRequest` 与官方更新历史：2024-07-04 起 `TextTranslate` 支持 **`TermRepoIDList`**（术语库 ID 列表）与 `SentRepoIDList`（句料库）。应用已按该参数实现。
 - 腾讯另有独立的术语库管理 API（产品 664 / 1300，`CreateGlossary` 等），与 TMT 是否共用同一术语库体系**未确认**。
 - 来源：<https://cloud.tencent.com/document/product/551/107926>（术语库使用）、<https://cloud.tencent.com/voc/tasks/13657>（社区确认可传术语库 ID）
 
@@ -75,12 +75,12 @@
 | DeepL | 已接入：按语言对创建/复用/重建 glossary，翻译带 `glossary_id` + 显式 `source_lang`；术语指纹进入缓存键。真实 API 未验证（仅 mock 请求形状） |
 | 百度 | 已接入：术语表页「使用百度控制台术语库」开关（`needIntervene=1`），术语内容在百度控制台维护 |
 | 有道 | 已接入：术语表页填写控制台术语表 ID（`vocabId`） |
-| 腾讯云 | **未接入**：官方术语库文档确认可配置 ID，但 API 参考页为动态渲染，参数名/形态未能静态核实，不猜测实现 |
+| 腾讯云 | 已接入：术语表页填写控制台术语库 ID（逗号分隔，请求参数 `TermRepoIDList`；2024-07 起 TextTranslate 支持） |
 | Google | 不支持（v2 Basic），界面明确标注 |
 
 ## 未决/待复核清单
 
-- 腾讯 `TextTranslate` 的术语库参数名与形态（单 ID / ID 列表）。
+- 腾讯 `TextTranslate` 的 `TermRepoIDList` 已核实（SDK + 更新历史），真实请求效果待 opt-in 验证。
 - 腾讯术语库管理 API（产品 664/1300）是否可管理 TMT 控制台术语库。
 - 百度 `needIntervene` 的适用套餐与生效延迟。
 - 有道 `vocabId` 的支持语言方向与术语表大小限制。
