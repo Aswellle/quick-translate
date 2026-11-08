@@ -11,6 +11,31 @@
 
 ## Completed
 
+### 2026-11-08 — 代码评审整改：术语表同步限时、缓存作用域、手动路径过滤
+- 背景：/code-review 双线评审（architect 判 BLOCK）后按结论依次整改，四个提交。
+- Changes:
+  - DeepL 术语表同步加 3s 硬超时（`GLOSSARY_SYNC_TIMEOUT`）：创建/删除动作整体限时，
+    超时降级为本次不应用术语表；新增慢速 mock server 测试。修复评审 BLOCK #1
+    （同步此前可拖住翻译最坏半分钟以上，绕过 8s 预算）。
+  - 缓存键纳入作用域令牌（`scope_token`）：显式源语言/DeepL 术语指纹/百度术语库/
+    有道词汇表/腾讯术语库全部进键，查询与写入同一把钥匙；全缺省时退回旧键形状，
+    既有缓存不失效。修复评审 BLOCK #2 的跨上下文串译（配置切换后旧译文仍被命中）。
+  - 手动翻译接入敏感内容过滤：与剪贴板路径同一套规则，命中返回
+    `SENSITIVE_CONTENT_BLOCKED`（错误分类 Permanent，解释不回显原文），前端确认框
+    放行后携带 force 重试；被拦截文本不记为上一次翻译。修复评审 HIGH #3
+    （手动窗口是唯一不过滤就出网的入口）。
+  - 设置页 CONFIG_LABELS 补术语表四个新键（此前 toast 显示原始键名）。
+- Tests:
+  - `cargo test --lib` → 414 passed（较 407 基线 +7：同步超时 +1、缓存作用域 +2、手动过滤 +4）
+  - `cargo fmt -- --check` / `cargo clippy --lib -- -D warnings` → PASS
+  - `npm test` → 91 passed / 16 文件（新增 ManualSensitiveGate 3 例）
+  - `npx tsc --noEmit` → PASS
+- Commits: 4eb0cbb（同步限时）、850a8ab（缓存作用域）、手动过滤（见 git log）、e00084c（标签）
+- 遗留：评审 WATCHLIST 九项（DeepL 远程 glossary 生命周期、快捷键失败值持久化、
+  system→commands 模块环等）为非阻塞设计关注点，待用户逐项决策；推送仍被
+  GitHub Push Protection 拦截（clipboard_filter.rs 测试假样本被误报为真实凭证），
+  等待仓库所有者批准 unblock。
+
 ### 2026-11-08 — Windows 实机验证：五个全局快捷键与术语表界面
 - 环境：Windows 11（本机），dev 构建，真实应用数据目录（旧库自动迁移 v6→v9）。
 - 快捷键：用 `RegisterHotKey` 探测五个组合键均返回 1409（已被应用占用）；实际注入按键验证：

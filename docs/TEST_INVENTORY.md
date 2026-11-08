@@ -18,7 +18,7 @@
 
 CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 3 平台、clippy 与单测 × Windows/macOS、release 构建验证 × 双平台。CI 不依赖真实 Provider 凭证。
 
-> 进展更新：Task 04（+33）、Task 06（+19）、Task 09 来源类型（+2）、Task 09 缓存回退统一（+4）、缓存读写开关（+4）、全局快捷键（+4）、术语表数据层（+14，含语言对隔离）、DeepL 同步与缓存指纹（+7）、百度/有道控制台术语库（+3）、腾讯 TermRepoIDList（+2）、快捷键重试（+1）后 Rust 单测现为 **407 passed**；前端为 **88 / 15 文件**（+51）。
+> 进展更新：Task 04（+33）、Task 06（+19）、Task 09 来源类型（+2）、Task 09 缓存回退统一（+4）、缓存读写开关（+4）、全局快捷键（+4）、术语表数据层（+14，含语言对隔离）、DeepL 同步与缓存指纹（+7）、百度/有道控制台术语库（+3）、腾讯 TermRepoIDList（+2）、快捷键重试（+1）、评审整改（+7：DeepL 同步硬超时 +1、缓存作用域令牌 +2、手动路径敏感过滤 +4）后 Rust 单测现为 **414 passed**；前端为 **91 / 16 文件**（+3：手动窗口敏感内容确认）。
 
 ## Mock 注入能力（现状确认）
 
@@ -38,6 +38,7 @@ CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 
 | `domain/translator/error_class.rs` | 9 | 错误分类表 | 无待办 |
 | `domain/translator/policy.rs` | 10 | 请求策略、8s 预算、剩余预算校验 | 无待办 |
 | `system/translation/coordinator.rs` | **22** | 代际闸门、迟到结果丢弃、install 拒绝并中止、窗锁串行、commit_popup_show 全协议、缓存回退判定、过滤门控开关语义、拦截内容暂存生命周期、上一次翻译保留 | 无待办（取消跨 fallback 切换由 translator 的 `aborted_task_never_continues_the_fallback_chain` 锁定，d3b3f97） |
+| `commands/translate.rs` | **5** | snake_case 前端契约、手动路径过滤门（命中拦截且解释不回显原文、确认放行、开关尊重、普通文本放行） | 命令层端到端（需 AppState mock，现有测试覆盖纯逻辑门） |
 
 ### 剪贴板链路
 
@@ -52,7 +53,7 @@ CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 
 
 | 模块 | 数量 | 已覆盖 | 缺口 |
 |---|---|---|---|
-| `domain/cache.rs` | **21** | TTL、LRU、键构造、回声过滤、清空缓存仅删缓存条目、离线回退结果组装（provider=cache / truncated 透传 / 回声拒收 / 未命中）、读写开关（暂停不删除 / 关闭期间清空 / 回退尊重开关）、术语指纹隔离 | 无待办 |
+| `domain/cache.rs` | **23** | TTL、LRU、键构造、回声过滤、清空缓存仅删缓存条目、离线回退结果组装（provider=cache / truncated 透传 / 回声拒收 / 未命中）、读写开关（暂停不删除 / 关闭期间清空 / 回退尊重开关）、作用域令牌（维度顺序、术语上下文隔离） | 无待办 |
 | `domain/glossary.rs` | **13** | 按语言对的 CRUD、语言对隔离、大小写不敏感重复拒绝、批内重复与批量原子性、CSV/JSON 导入导出（引号/逗号/换行/可选表头/其他语言对拒绝）、指纹（顺序无关、说明不参与、禁用为空） | Provider 应用（DeepL glossary 同步）与缓存键接入未实现 |
 | `domain/history.rs` | **19** | query 分页（`rowid` 第二排序键）、LIKE 转义、中文子串检索、toggle_star/delete_by_id/clear_all、FIFO 只删最旧未收藏、参数钳制、starred 过滤、收藏持久性、来源类型（clipboard/manual）往返；万条规模分页/搜索索引与 500ms 预算、万条 FIFO | 无待办 |
 | `system/persistence.rs` | 9 | 有界队列、丢弃策略、单 worker、入队失败诊断计数 | 关闭时 drain 语义已核验：channel 排空后退出（见 agent-progress Task 06），无显式退出等待——设计如此，非缺陷 |
@@ -68,11 +69,11 @@ CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 
 | `commands/system.rs` | 10 | open_url 白名单校验 |
 | `system/tray.rs` | — | 托盘状态行组装 |
 | `system/hotkeys.rs` | **4** | 动作清单唯一性、默认加速键非空且不重复、默认值贯通 AppConfig、初始注册状态 | Windows 实机已验证五个动作的 OS 注册与分发（2026-11-08）；冲突提示与 macOS 未验证 |
-| `system/glossary_sync.rs` | **4** | 同步映射读写/冲突更新、按语言对删除、TSV 控制字符转义、pair key 构造 | DeepL glossary 真实 API 调用需 opt-in contract test |
+| `system/glossary_sync.rs` | **4** | 同步映射读写/冲突更新、按语言对删除、TSV 控制字符转义、pair key 构造 | DeepL glossary 真实 API 调用需 opt-in contract test；同步动作整体受 3s 硬超时（`deepl::GLOSSARY_SYNC_TIMEOUT`，慢速 mock 测试在 deepl.rs） |
 | `util/backoff.rs` | 5 | 指数退避、抖动边界 |
 | `error.rs` | — | URL 脱敏 |
 
-## 前端测试清单（88 / 15 文件）
+## 前端测试清单（91 / 16 文件）
 
 | 文件 | 覆盖 |
 |---|---|
@@ -87,6 +88,8 @@ CI（`.github/workflows/ci.yml`）已覆盖：前端检查 × 3 平台、fmt × 
 | `windows/popup/__tests__/TrafficLights.test.tsx` | 交通灯交互 |
 | `windows/settings/__tests__/ToggleRow.test.tsx` | 设置开关行 |
 | `windows/settings/__tests__/GlossaryTab.test.tsx` | 术语表按语言对加载、新增携带语言对/大小写、Provider 能力说明、百度开关、腾讯云术语库 ID 提交 |
+| `windows/manual/__tests__/ManualTranslateWindow.test.tsx` | 手动窗口请求契约（参数下发、来源标识、空文本不发请求） |
+| `windows/manual/__tests__/ManualSensitiveGate.test.tsx` | 敏感内容确认契约：命中弹确认框不进错误位、确认携带 force 重试、取消不再发起 |
 
 ## 已识别缺口汇总（映射后续任务）
 
