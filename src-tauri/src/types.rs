@@ -116,6 +116,15 @@ impl Default for HistoryQuery {
     }
 }
 
+/// 历史筛选下拉的可选项（库内实际出现过的值，前端不硬编码清单）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HistoryFilterOptions {
+    /// 去重后的 "源语言→目标语言"，按字典序
+    pub language_pairs: Vec<String>,
+    /// 去重后的 provider id，按字典序
+    pub providers: Vec<String>,
+}
+
 /// 使用统计结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatsResult {

@@ -9,7 +9,7 @@ use tokio::sync::Mutex;
 use crate::domain::config::{HISTORY_LIMIT_MAX, HISTORY_LIMIT_MIN};
 use crate::error::AppError;
 use crate::infra::database::Db;
-use crate::types::{HistoryQuery, StatsResult, TranslationRecord};
+use crate::types::{HistoryFilterOptions, HistoryQuery, StatsResult, TranslationRecord};
 pub struct HistoryRepository {
     db: Db,
 }
@@ -120,6 +120,36 @@ impl HistoryRepository {
         };
 
         Ok(count)
+    }
+
+    /// 筛选下拉的可选项：库内实际出现过的语言对与翻译源（去重 + 字典序）。
+    /// 记录量大时仍是两个索引友好的 DISTINCT 扫描，与列表查询同一把锁，
+    /// 打开历史窗口时调一次即可。
+    pub async fn filter_options(&self) -> Result<HistoryFilterOptions, AppError> {
+        let conn = self.conn()?;
+        let conn = conn.lock().await;
+
+        let collect = |sql: &str| -> Result<Vec<String>, AppError> {
+            let mut stmt = conn
+                .prepare(sql)
+                .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+            let rows = stmt
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| AppError::DatabaseError(e.to_string()))?;
+            Ok(rows)
+        };
+
+        let mut language_pairs =
+            collect("SELECT DISTINCT source_lang || '→' || target_lang FROM translation_records")?;
+        language_pairs.sort();
+        let mut providers = collect("SELECT DISTINCT provider FROM translation_records")?;
+        providers.sort();
+
+        Ok(HistoryFilterOptions {
+            language_pairs,
+            providers,
+        })
     }
 
     /// 切换收藏状态，返回新的收藏状态
@@ -1053,6 +1083,34 @@ mod tests {
                 .unwrap(),
             2,
             "畸形语言对值不得过滤掉全部记录"
+        );
+    }
+
+    /// 筛选选项从库内实际数据派生：去重、字典序，空库返回空清单。
+    #[tokio::test]
+    async fn filter_options_derive_from_distinct_data() {
+        let repo = repo();
+        assert!(repo.filter_options().await.unwrap().providers.is_empty());
+
+        let mut b = record_at(1_700_000_000_000);
+        b.provider = "baidu".to_string();
+        b.source_lang = "ja".to_string();
+        repo.insert(&b).await.unwrap();
+        let mut g1 = record_at(1_700_000_000_001);
+        g1.provider = "google".to_string();
+        repo.insert(&g1).await.unwrap();
+        let mut g2 = record_at(1_700_000_000_002);
+        g2.provider = "google".to_string();
+        repo.insert(&g2).await.unwrap();
+
+        let opts = repo.filter_options().await.unwrap();
+        assert_eq!(
+            opts.providers,
+            vec!["baidu".to_string(), "google".to_string()]
+        );
+        assert_eq!(
+            opts.language_pairs,
+            vec!["en→zh".to_string(), "ja→zh".to_string()]
         );
     }
 
