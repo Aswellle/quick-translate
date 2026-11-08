@@ -1,5 +1,6 @@
 // src-tauri/src/system/updater.rs
-// 自动更新检查：启动后延迟 5s 后台静默检查，有新版本时通过 Toast 通知
+// 自动更新检查：启动后延迟 5s 后台静默检查，有新版本时通过 Toast 通知。
+// 隔离数据目录实例（e2e/临时）跳过检查 —— 见 check_and_notify 内注释。
 
 use tauri::AppHandle;
 use tauri_plugin_updater::UpdaterExt;
@@ -9,6 +10,19 @@ use crate::types::ToastPayload;
 
 /// 后台静默检查更新，有新版本时推送 Toast，无新版本或出错均静默退出
 pub async fn check_and_notify(app: &AppHandle) {
+    // 隔离数据目录（e2e/临时实例）不打更新端点，两个理由：
+    // 1. 每次检查都是一次 latest.json 资产下载 —— GitHub 会把它计入
+    //    发行资产的下载数，e2e 的启动量会污染「真实更新检查量」这一
+    //    发布度量（实测 50 次里约一半是 e2e 贡献的）；
+    // 2. 更严重的隐患：隔离实例的二进制落后于 latest 时，发现新版本会
+    //    走自动 download_and_install —— 测试进程绝不该静默安装新版本。
+    if crate::isolated_data_root().is_some() {
+        tracing::info!(
+            event = "updater_skipped_isolated",
+            "[updater] 隔离数据目录实例，跳过更新检查"
+        );
+        return;
+    }
     // pubkey 为占位符时 updater() 会返回 Err，直接静默退出
     let updater = match app.updater() {
         Ok(u) => u,

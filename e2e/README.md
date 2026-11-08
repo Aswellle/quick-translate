@@ -26,6 +26,10 @@ node e2e/run.mjs smoke        # 指定场景
 - `QUICKTRANSLATE_APP_DATA_DIR=<临时目录>`：SQLite/日志/密钥/配置全部
   落在临时目录，跑完即删（`smoke` 可用 `keepDir` 排查现场）
 - WebView2 用户数据（EBWebView）同样重定向，不会误删真实用户的缓存
+- **更新检查跳过**：启动 5s 后的静默更新检查在隔离实例上自动跳过
+  （日志事件 `updater_skipped_isolated`）—— 每次检查都是一次 latest.json
+  资产下载，会污染 GitHub 发行资产的下载数；且隔离实例的二进制落后于
+  latest 时会触发真实的自动安装，测试进程绝不该这么做
 - **例外**：`clipboard-translate` 场景会写真实系统剪贴板（合成文本）——
   剪贴板监控的产品语义决定了它必须在真实通道上验证
 
