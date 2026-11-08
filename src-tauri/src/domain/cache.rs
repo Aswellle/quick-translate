@@ -318,6 +318,8 @@ pub fn should_fall_back_to_cache(err: &AppError) -> bool {
 ///   编入只会白白分裂缓存，不编。
 /// - `gl=<指纹>`：DeepL 术语表指纹（同步成功才会出现）。
 /// - `bd=1` / `yd=<词汇表ID>` / `tc=<术语库ID列表>`：控制台术语库引用。
+/// - `st=<风格>`：非自然风格时进入（formal/informal 改变 DeepL 译文）。
+///   切换风格后旧风格的缓存译文不再被命中。
 ///
 /// 所有维度都不存在时令牌为空串，键退回「文本 + 目标语言」的旧形状 ——
 /// 既有缓存条目不失效。写入与查询必须用同一把钥匙（同一请求上下文
@@ -328,6 +330,7 @@ pub fn scope_token(
     baidu_use_term_base: bool,
     youdao_vocab_id: Option<&str>,
     tencent_term_repo_ids: &[String],
+    translation_style: &str,
 ) -> String {
     let mut parts: Vec<String> = Vec::new();
     if let Some(src) = source_lang {
@@ -344,6 +347,9 @@ pub fn scope_token(
     }
     if !tencent_term_repo_ids.is_empty() {
         parts.push(format!("tc={}", tencent_term_repo_ids.join(";")));
+    }
+    if translation_style == "formal" || translation_style == "informal" {
+        parts.push(format!("st={}", translation_style));
     }
     parts.join(",")
 }
@@ -775,16 +781,55 @@ mod tests {
     /// 令牌构造：各维度按固定顺序拼接，全部缺省时为空串（退回旧键形状）。
     #[test]
     fn scope_token_orders_all_context_dimensions() {
-        assert_eq!(scope_token(None, "", false, None, &[]), "");
+        assert_eq!(scope_token(None, "", false, None, &[], ""), "");
         assert_eq!(
             scope_token(
                 Some("en"),
                 "fp1",
                 true,
                 Some("v1"),
-                &["r1".to_string(), "r2".to_string()]
+                &["r1".to_string(), "r2".to_string()],
+                ""
             ),
             "src=en,gl=fp1,bd=1,yd=v1,tc=r1;r2"
+        );
+        // 风格位：非自然风格进键，natural/未知值不进（请求侧本就不会
+        // 为它们改变行为）
+        assert_eq!(
+            scope_token(None, "", false, None, &[], "formal"),
+            "st=formal"
+        );
+        assert_eq!(
+            scope_token(None, "", false, None, &[], "informal"),
+            "st=informal"
+        );
+        assert_eq!(scope_token(None, "", false, None, &[], "natural"), "");
+        assert_eq!(scope_token(None, "", false, None, &[], "bogus"), "");
+    }
+
+    /// 风格切换不得串用旧风格的缓存译文（DeepL formality 改变输出）。
+    #[tokio::test]
+    async fn style_change_never_serves_old_scope() {
+        let c = fast();
+        let formal = scope_token(None, "", false, None, &[], "formal");
+        c.put(CacheEntry {
+            source_text: "Apple",
+            target_lang: "de",
+            translated_text: "Apfel (formell)",
+            source_lang: "en",
+            provider: "deepl",
+            scope_token: &formal,
+        })
+        .await
+        .unwrap();
+
+        assert!(
+            c.get("Apple", "de", "").await.unwrap().is_none(),
+            "切回自然风格后不得命中正式风格的条目"
+        );
+        assert!(
+            c.get("Apple", "de", &formal).await.unwrap().is_some(),
+            "同一风格内照常命中"
         );
     }
 
@@ -793,7 +838,7 @@ mod tests {
     #[tokio::test]
     async fn term_context_change_never_serves_old_scope() {
         let c = fast();
-        let with_terms = scope_token(None, "", true, None, &[]);
+        let with_terms = scope_token(None, "", true, None, &[], "");
         c.put(CacheEntry {
             source_text: "Apple",
             target_lang: "zh",

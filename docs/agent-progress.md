@@ -10,6 +10,23 @@
 - 测试清单: docs/TEST_INVENTORY.md
 
 ## Completed
+## Completed
+
+### 2026-11-08 — 翻译风格预设（计划 Task 10 后半）
+- 范围：三态 natural / formal / informal。诚实边界：只有 DeepL 有原生
+  formality 参数且仅对部分目标语言生效（de/es/fr/it/ja/pt/ru；英/中目标
+  传了会被 400 拒绝，请求侧按目标语言裁剪）；其余翻译源忽略。口语/技术
+  文档/商务/学术需要 AI 类 Provider 的 prompt 能力，校验层直接拒绝，
+  待要求 19 解禁后随 Task 13/14 评估。
+- Changes:
+  - `translation_style` 配置键（描述符表/明文读取/校验三处贯通；未知值拒绝）。
+  - `TranslateOptions.style`（TranslationStyle 枚举，脏值兜底 Natural）；
+    DeepL 请求侧映射 formal→more、informal→less，Natural 不下发。
+  - 缓存作用域令牌新增 st= 位（非自然风格进键），切换风格不串旧译文。
+  - 设置页「外观」区新增风格选择行，能力说明如实标注。
+- Tests: `cargo test --lib` → 419 passed（+5）；`npm test` → 96 / 17；
+  fmt / clippy / tsc 全 PASS。
+- 分支：feat/translation-style（4 个提交，推送后走 PR）。
 
 ### 2026-11-08 — 翻译历史筛选增强（计划 5.2「翻译历史增强」）
 - 范围：按来源类型（剪贴板/手动）、语言对（"en→zh" 精确方向）、翻译源筛选历史列表；

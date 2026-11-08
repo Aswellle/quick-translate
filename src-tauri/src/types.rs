@@ -259,6 +259,14 @@ pub struct AppConfig {
     /// 腾讯云控制台术语库 ID 列表（逗号分隔；请求参数 TermRepoIDList）。
     /// 空串 = 不使用。
     pub tencent_term_repo_ids: String,
+    /// 翻译风格（计划 Task 10 后半）：natural（默认）/ formal（正式）/
+    /// informal（非正式）。
+    ///
+    /// 诚实边界：只有 DeepL 有原生 formality 参数，且仅对部分目标语言
+    /// 生效（deepl::FORMALITY_TARGET_LANGS；英文/中文目标不支持）。
+    /// 其余翻译源忽略此设置 —— 不做假装生效；口语/技术文档/商务/学术
+    /// 等风格需要 AI 类 Provider 的 prompt 能力，暂缓（要求 19）。
+    pub translation_style: String,
 }
 
 impl Default for AppConfig {
@@ -292,6 +300,7 @@ impl Default for AppConfig {
             baidu_use_term_base: false,
             youdao_vocab_id: String::new(),
             tencent_term_repo_ids: String::new(),
+            translation_style: "natural".to_string(),
         }
     }
 }

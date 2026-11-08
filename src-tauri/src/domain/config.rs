@@ -99,6 +99,12 @@ const KEY_DESCRIPTORS: &[KeyDescriptor] = &[
         set_string: Some(|c, v| c.tencent_term_repo_ids = v),
     },
     KeyDescriptor {
+        key: "translation_style",
+        encrypted: false,
+        get_credential: None,
+        set_string: Some(|c, v| c.translation_style = v),
+    },
+    KeyDescriptor {
         key: "deepl_api_key",
         encrypted: true,
         get_credential: Some(|c| &c.deepl_api_key),
@@ -246,6 +252,7 @@ impl ConfigService {
             "hotkey_retranslate_last" => Some(self.cache.hotkey_retranslate_last.clone()),
             "youdao_vocab_id" => Some(self.cache.youdao_vocab_id.clone()),
             "tencent_term_repo_ids" => Some(self.cache.tencent_term_repo_ids.clone()),
+            "translation_style" => Some(self.cache.translation_style.clone()),
             "auto_start" => Some(self.cache.auto_start.to_string()),
             "history_limit" => Some(self.cache.history_limit.to_string()),
             "fallback_enabled" => Some(self.cache.fallback_enabled.to_string()),
@@ -899,6 +906,7 @@ fn read_field_for_test(config: &AppConfig, key: &str) -> String {
         "hotkey_retranslate_last" => config.hotkey_retranslate_last.clone(),
         "youdao_vocab_id" => config.youdao_vocab_id.clone(),
         "tencent_term_repo_ids" => config.tencent_term_repo_ids.clone(),
+        "translation_style" => config.translation_style.clone(),
         _ => String::new(),
     }
 }
