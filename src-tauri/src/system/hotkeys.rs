@@ -316,27 +316,29 @@ fn read_clipboard_text() -> Option<String> {
 /// 暂停/恢复剪贴板监控：与设置页同一条配置写入 + 副作用路径。
 async fn toggle_monitor(app: &AppHandle) {
     let state = app.state::<AppState>();
-    let enabled = state
-        .config
-        .read()
-        .await
-        .get("clipboard_monitor_enabled")
-        .map(|v| v == "true")
-        .unwrap_or(true);
-    let next = !enabled;
-    let value = if next { "true" } else { "false" };
-
-    if let Err(e) = state
-        .config
-        .write()
-        .await
-        .set("clipboard_monitor_enabled", value)
-        .await
-    {
-        tracing::warn!("[hotkeys] 切换剪贴板监控失败: {}", e);
-        crate::commands::system::emit_toast(app, ToastPayload::error("切换剪贴板监控失败，请重试"));
-        return;
-    }
+    // 读-反-写收进同一把写锁：快捷键按住时系统键盘重复连发 Pressed、
+    // 每个事件 spawn 一个独立任务 —— 分离的读/写锁让并发任务都读到
+    // 同一个旧值、写出同一个反值，按住半秒可能实际只切换 0 次或 2 次，
+    // 配置值与用户感知的监控状态漂移（托盘菜单按配置渲染）
+    let next = {
+        let mut cfg = state.config.write().await;
+        let enabled = cfg
+            .get("clipboard_monitor_enabled")
+            .map(|v| v == "true")
+            .unwrap_or(true);
+        let next = !enabled;
+        let value = if next { "true" } else { "false" };
+        if let Err(e) = cfg.set("clipboard_monitor_enabled", value).await {
+            drop(cfg);
+            tracing::warn!("[hotkeys] 切换剪贴板监控失败: {}", e);
+            crate::commands::system::emit_toast(
+                app,
+                ToastPayload::error("切换剪贴板监控失败，请重试"),
+            );
+            return;
+        }
+        next
+    };
 
     crate::commands::config::apply_clipboard_monitor_switch(app, state.inner(), next).await;
     crate::commands::config::emit_config_changed(app, &state.config.read().await.get_all());

@@ -61,13 +61,23 @@ impl TencentProvider {
         }
     }
 
+    /// 显式源语言 → 腾讯源码（None = "auto"）。此前显式源语言被静默丢弃：
+    /// 用户选了源语言，请求仍发 auto —— 与缓存作用域键（src= 维度）承诺
+    /// 的行为脱节，译错语言。
+    fn resolve_source(source: Option<&str>) -> &str {
+        source.map(Self::to_tencent_lang).unwrap_or("auto")
+    }
+
     /// 把配置里的逗号分隔术语库 ID 解析为列表（去空白、去空项、去重）。
     /// 非法/超长项直接忽略 —— 术语库 ID 由腾讯云生成，应用不做格式猜测。
     pub(crate) fn parse_term_repo_ids(raw: &str) -> Vec<String> {
         let mut seen = std::collections::HashSet::new();
         raw.split(',')
             .map(str::trim)
-            .filter(|id| !id.is_empty() && id.chars().count() <= 128)
+            // 分号与 U+0001 是缓存作用域令牌/键的分隔符，ID 内出现会撞键
+            .filter(|id| {
+                !id.is_empty() && id.chars().count() <= 128 && !id.contains([';', '\u{1}'])
+            })
             .filter(|id| seen.insert((*id).to_string()))
             .take(10)
             .map(str::to_string)
@@ -203,7 +213,7 @@ impl TranslationProvider for TencentProvider {
 
         let body = TencentRequest {
             source_text: text.to_string(),
-            source: "auto".to_string(),
+            source: Self::resolve_source(options.source_lang.as_deref()).to_string(),
             target: target.to_string(),
             project_id: 0,
             term_repo_id_list: options.tencent_term_repo_ids.clone(),
@@ -369,6 +379,15 @@ fn is_leap(y: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 显式源语言映射到腾讯源码并下发（此前被静默丢弃，请求恒发 auto）。
+    #[test]
+    fn explicit_source_lang_is_mapped_and_sent() {
+        assert_eq!(TencentProvider::resolve_source(Some("ja")), "jp");
+        assert_eq!(TencentProvider::resolve_source(Some("zh-tw")), "zh-TW");
+        assert_eq!(TencentProvider::resolve_source(None), "auto");
+        assert_eq!(TencentProvider::resolve_source(Some("auto")), "auto");
+    }
 
     /// TC3 签名的凭证作用域直接由 chrono_from_timestamp 的 (年, 月, 日)
     /// 拼出 —— 闰年、世纪年、年末等边界错一天都会让全部请求静默 401。

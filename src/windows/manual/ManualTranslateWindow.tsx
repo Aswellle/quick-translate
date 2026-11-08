@@ -10,10 +10,13 @@ import {
   translateText,
   type TranslationResult,
   type AppError,
+  type AppConfig,
 } from "@/lib/commands";
 import { ERROR_MESSAGES, PROVIDER_LABELS, SUPPORTED_LANGUAGES } from "@/lib/constants";
 import { CopyButton } from "@/components/CopyButton";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
+import { mergeExternalConfig } from "@/lib/configSync";
 import { useConfigStore } from "@/stores/configStore";
 
 /** 单次翻译的文本长度上限。与 Rust `system::translation::request::MAX_TEXT_CHARS`
@@ -40,6 +43,20 @@ export function ManualTranslateWindow() {
   const charCount = [...text].length;
   const overLimit = charCount > MANUAL_MAX_CHARS;
   const canSubmit = text.trim().length > 0 && !overLimit && !busy;
+
+  // config-changed：托盘切目标语言/翻译源等带外写入经此广播到所有窗口。
+  // 本窗口 hide 而非销毁、configStore 只在 App.tsx 挂载时加载一次 ——
+  // 不合并的话「目标语言跟随配置」跟随的是窗口首次加载时的旧值，托盘
+  // 切语言后手动翻译仍译向旧目标且无任何提示。凭证键是掩码占位符、
+  // auto_start 以注册表为权威，均不合并（与设置窗口的合并规则同源）；
+  // 用户已显式选择的目标语言（targetLangChoice）优先于 store，合并只
+  // 改 store、不影响该选择。
+  useTauriEvent<AppConfig>("config-changed", (event) => {
+    const current = useConfigStore.getState().config;
+    if (!current) return;
+    const { merged, changed } = mergeExternalConfig(current, event.payload);
+    if (changed) useConfigStore.getState().setConfig(merged);
+  });
 
   const run = useCallback(
     async (force = false) => {
@@ -133,6 +150,7 @@ export function ManualTranslateWindow() {
               void run();
             }
           }}
+          aria-label="要翻译的文本"
           placeholder="输入或粘贴要翻译的文本（Ctrl+Enter 翻译）"
           rows={5}
           className="input-field w-full font-normal text-[13px] leading-relaxed resize-none"
@@ -144,12 +162,16 @@ export function ManualTranslateWindow() {
       {(result || error) && (
         <div className="px-4 mt-2 min-h-0 overflow-y-auto">
           {error ? (
-            <p className="px-3 py-2.5 text-[13px] font-medium text-[var(--popup-text-primary)] leading-relaxed rounded-lg bg-[var(--surface-secondary)]">
+            <p
+              role="alert"
+              className="px-3 py-2.5 text-[13px] font-medium text-[var(--popup-text-primary)] leading-relaxed rounded-lg bg-[var(--surface-secondary)]"
+            >
               {error}
             </p>
           ) : (
             result && (
               <>
+                {/* 翻译完成对键盘与读屏用户不可见 —— 结果以 role=status 播报 */}
                 <div className="px-1 pb-1.5 flex items-center gap-2">
                   <span className="text-[11px] font-semibold text-[var(--text-secondary)] tracking-wide uppercase">
                     {result.provider === "cache"
@@ -162,7 +184,10 @@ export function ManualTranslateWindow() {
                     </span>
                   )}
                 </div>
-                <div className="px-3 py-2.5 text-[13.5px] font-medium leading-[1.8] text-[var(--popup-text-primary)] rounded-lg bg-[var(--surface-secondary)] whitespace-pre-wrap break-words selectable">
+                <div
+                  role="status"
+                  className="px-3 py-2.5 text-[13.5px] font-medium leading-[1.8] text-[var(--popup-text-primary)] rounded-lg bg-[var(--surface-secondary)] whitespace-pre-wrap break-words selectable"
+                >
                   {result.translated_text}
                 </div>
                 <div className="pt-1.5 flex justify-end">

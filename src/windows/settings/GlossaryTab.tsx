@@ -74,7 +74,7 @@ export function GlossaryTab({
   applyConfig,
 }: {
   draft: AppConfig;
-  applyConfig: (key: keyof AppConfig, value: AppConfig[keyof AppConfig], feedback: "inline" | "toast" | null) => void;
+  applyConfig: (key: keyof AppConfig, value: AppConfig[keyof AppConfig], feedback: "inline" | "toast" | null) => Promise<boolean>;
 }) {
   const [sourceLang, setSourceLang] = useState("en");
   const [targetLang, setTargetLang] = useState(
@@ -82,6 +82,8 @@ export function GlossaryTab({
   );
   const [entries, setEntries] = useState<GlossaryEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  // 读取失败与空态分离：失败要显示原因与重试入口，不能落回「还没有术语」
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -91,22 +93,39 @@ export function GlossaryTab({
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
+  // 破坏性操作守卫：单条删除与整批导入替换都在用户确认后才执行 ——
+  // 同一窗口里「清空该语言对」有二次确认，危害相同的这两个入口不能裸奔
+  const [pendingDelete, setPendingDelete] = useState<{ id: number; term: string } | null>(null);
+  const [pendingImport, setPendingImport] = useState<{ file: File; kind: "json" | "csv" } | null>(null);
 
   const jsonInputRef = useRef<HTMLInputElement>(null);
   const csvInputRef = useRef<HTMLInputElement>(null);
+  const reloadSeqRef = useRef(0);
+  const formCardRef = useRef<HTMLDivElement>(null);
+  const sourceTermInputRef = useRef<HTMLInputElement>(null);
 
   const noteInfo = providerNote(draft.provider);
   const pairInvalid = sourceLang === targetLang;
 
   const reload = useCallback(async () => {
+    // 请求序号门：语言对快速切换或 mutation 后的补拉乱序返回时，只让
+    // 最新一次的结果生效 —— 旧语言对的迟到列表会盖掉新语言对的条目，
+    // 在新语言对标题下渲染文不对题的数据；此时点「保存修改」还会把
+    // 旧条目的语言对静默改写成当前对。
+    const seq = ++reloadSeqRef.current;
     setLoading(true);
     try {
-      setEntries(await listGlossaryEntries(sourceLang, targetLang));
-    } catch {
+      const list = await listGlossaryEntries(sourceLang, targetLang);
+      if (seq !== reloadSeqRef.current) return;
+      setEntries(list);
+      setLoadError(null);
+    } catch (err) {
+      if (seq !== reloadSeqRef.current) return;
       toast("读取术语表失败", "error");
+      setLoadError(errorMessage(err));
       setEntries([]);
     } finally {
-      setLoading(false);
+      if (seq === reloadSeqRef.current) setLoading(false);
     }
   }, [sourceLang, targetLang]);
 
@@ -176,6 +195,11 @@ export function GlossaryTab({
     setNote(entry.note);
     setCaseSensitive(entry.case_sensitive);
     setFormError(null);
+    // 视线管理：变化发生在视口外的顶部表单（按钮变「保存修改」、多出
+    // 「取消」），长列表下点「编辑」看起来像没有响应 —— 滚动到表单并
+    // 聚焦第一个输入框
+    formCardRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    requestAnimationFrame(() => sourceTermInputRef.current?.focus());
   };
 
   const remove = async (id: number) => {
@@ -184,6 +208,36 @@ export function GlossaryTab({
       await reload();
     } catch (err) {
       toast(`删除失败：${errorMessage(err)}`, "error");
+    }
+  };
+
+  /** 确认后执行单条删除；取消不产生任何调用 */
+  const confirmDelete = () => {
+    const target = pendingDelete;
+    setPendingDelete(null);
+    if (target) void remove(target.id);
+  };
+
+  /** 选完文件先确认再替换 —— 导入是整批覆盖，误选旧文件会静默清掉
+      当前语言对的全部条目且无法恢复 */
+  const importFile = (file: File, kind: "json" | "csv") => {
+    setPendingImport({ file, kind });
+  };
+
+  const confirmImport = async () => {
+    const pending = pendingImport;
+    setPendingImport(null);
+    if (!pending) return;
+    try {
+      const content = await pending.file.text();
+      const written =
+        pending.kind === "json"
+          ? await importGlossaryJson(sourceLang, targetLang, content)
+          : await importGlossaryCsv(sourceLang, targetLang, content);
+      toast(`已导入 ${written} 条术语（替换当前语言对）`, "success");
+      await reload();
+    } catch (err) {
+      toast(`导入失败：${errorMessage(err)}`, "error");
     }
   };
 
@@ -198,20 +252,6 @@ export function GlossaryTab({
     }
   };
 
-  const importFile = async (file: File, kind: "json" | "csv") => {
-    try {
-      const content = await file.text();
-      const written =
-        kind === "json"
-          ? await importGlossaryJson(sourceLang, targetLang, content)
-          : await importGlossaryCsv(sourceLang, targetLang, content);
-      toast(`已导入 ${written} 条术语（替换当前语言对）`, "success");
-      await reload();
-    } catch (err) {
-      toast(`导入失败：${errorMessage(err)}`, "error");
-    }
-  };
-
   const copyExport = async (kind: "json" | "csv") => {
     try {
       const content =
@@ -221,7 +261,7 @@ export function GlossaryTab({
       await navigator.clipboard.writeText(content);
       toast(`已复制 ${kind.toUpperCase()} 到剪贴板`, "success");
     } catch (err) {
-      toast(`导出失败：${errorMessage(err)}`, "error");
+      toast(`复制失败：${errorMessage(err)}`, "error");
     }
   };
 
@@ -282,6 +322,10 @@ export function GlossaryTab({
           value={sourceLang}
           onChange={(e) => {
             resetForm();
+            // 语言对切换让待确认的删除/导入失效：待导入文件是按旧语言对
+            // 选的，确认对话框却展示当前语言对 —— 确认会在新对上执行
+            setPendingDelete(null);
+            setPendingImport(null);
             setSourceLang(e.target.value);
           }}
           className="input-field text-xs py-1.5 flex-1 min-w-0"
@@ -297,6 +341,8 @@ export function GlossaryTab({
           value={targetLang}
           onChange={(e) => {
             resetForm();
+            setPendingDelete(null);
+            setPendingImport(null);
             setTargetLang(e.target.value);
           }}
           className="input-field text-xs py-1.5 flex-1 min-w-0"
@@ -315,9 +361,10 @@ export function GlossaryTab({
       ) : (
         <>
           {/* 新增 / 编辑 */}
-          <div className="macos-card px-3 py-3 space-y-2">
+          <div ref={formCardRef} className="macos-card px-3 py-3 space-y-2 scroll-mt-3">
             <div className="flex items-center gap-2">
               <input
+                ref={sourceTermInputRef}
                 value={sourceTerm}
                 onChange={(e) => setSourceTerm(e.target.value)}
                 placeholder="原文术语"
@@ -380,6 +427,21 @@ export function GlossaryTab({
           <div className="macos-card divide-y divide-[var(--border-secondary)] overflow-hidden">
             {loading ? (
               <p className="px-3 py-4 text-[12px] text-[var(--text-tertiary)]">正在读取…</p>
+            ) : loadError ? (
+              /* 读取失败必须与空态分离：toast 一闪而过，若落回「还没有
+                 术语」空态，已有 30 条术语的用户会信以为真并重复录入 */
+              <div className="px-3 py-4 flex items-center justify-between gap-3">
+                <p className="text-[12px] text-[var(--popup-text-primary)] leading-relaxed">
+                  术语表读取失败：{loadError}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void reload()}
+                  className="px-2.5 py-1 rounded-lg text-[12px] font-medium border border-[var(--border-primary)] text-[var(--text-secondary)] hover:bg-[var(--hover-bg)] transition-colors shrink-0"
+                >
+                  重试
+                </button>
+              </div>
             ) : entries.length === 0 ? (
               <p className="px-3 py-4 text-[12px] text-[var(--text-tertiary)]">
                 该语言对还没有术语。添加后，DeepL 翻译时按目标译法生效。
@@ -402,7 +464,7 @@ export function GlossaryTab({
                       </div>
                     )}
                   </div>
-                  <div className="flex items-center gap-1 shrink-0">
+                  <div className="flex items-center gap-2 shrink-0">
                     <button
                       type="button"
                       onClick={() => startEdit(entry)}
@@ -412,8 +474,13 @@ export function GlossaryTab({
                     </button>
                     <button
                       type="button"
-                      onClick={() => void remove(entry.id)}
-                      className="text-[11px] px-2 py-0.5 rounded border border-[var(--border-primary)] hover:bg-[var(--hover-bg)] text-red-500"
+                      onClick={() =>
+                        setPendingDelete({
+                          id: entry.id,
+                          term: `${entry.source_term} → ${entry.target_term}`,
+                        })
+                      }
+                      className="text-[11px] px-2 py-1.5 rounded border border-[var(--border-primary)] hover:bg-[var(--hover-bg)] text-red-500"
                     >
                       删除
                     </button>
@@ -454,10 +521,10 @@ export function GlossaryTab({
               导入 CSV
             </button>
             <button type="button" onClick={() => void copyExport("json")} className="text-[12px] px-3 py-1 rounded-lg border border-[var(--border-primary)] hover:bg-[var(--hover-bg)] text-[var(--text-secondary)]">
-              导出 JSON
+              复制 JSON
             </button>
             <button type="button" onClick={() => void copyExport("csv")} className="text-[12px] px-3 py-1 rounded-lg border border-[var(--border-primary)] hover:bg-[var(--hover-bg)] text-[var(--text-secondary)]">
-              导出 CSV
+              复制 CSV
             </button>
             <button
               type="button"
@@ -480,6 +547,26 @@ export function GlossaryTab({
           confirmLabel="确认清空"
           onConfirm={() => void clearPair()}
           onCancel={() => setConfirmClear(false)}
+        />
+      )}
+
+      {pendingDelete && (
+        <ConfirmDialog
+          title="删除这条术语？"
+          description={`将删除「${pendingDelete.term}」，删除后无法恢复。`}
+          confirmLabel="确认删除"
+          onConfirm={confirmDelete}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
+
+      {pendingImport && (
+        <ConfirmDialog
+          title="导入并替换当前语言对的术语？"
+          description={`将用所选${pendingImport.kind.toUpperCase()} 文件整批替换 ${sourceLang} → ${targetLang} 的全部条目（当前 ${entries.length} 条），其他语言对不受影响。`}
+          confirmLabel="确认导入"
+          onConfirm={() => void confirmImport()}
+          onCancel={() => setPendingImport(null)}
         />
       )}
     </div>

@@ -20,6 +20,12 @@ vi.mock("@/lib/commands", async (importOriginal) => {
   };
 });
 
+// 组件挂载会 listen("config-changed")（真实 listen 在 jsdom 里无
+// __TAURI_INTERNALS__ 必然抛错）—— 与 ManualTranslateWindow.test 同款 mock
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async () => () => {}),
+}));
+
 const mockedTranslate = vi.mocked(translateText);
 
 /** 受控 textarea 写入（原生 setter 绕过 React 的值覆盖） */

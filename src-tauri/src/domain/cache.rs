@@ -109,18 +109,22 @@ impl TranslationCache {
         self.db.try_conn()
     }
 
-    /// 缓存键：归一化文本 + 目标语言 + 作用域令牌。
+    /// 缓存键：归一化文本 + 目标语言 + 作用域令牌，各段「字节长度前缀」。
     ///
     /// 用 `\u{1}` 分隔而不是直接拼接：否则 "ab"+"c" 与 "a"+"bc" 会撞成同一个键。
-    /// 分隔符取控制字符，正常文本里不可能出现。令牌为空（无显式源语言、
-    /// 无术语表、控制台术语库全关）时与引入作用域之前的键完全一致，
-    /// 既有缓存不失效。
+    /// 只分隔还不够 —— 剪贴板文本（终端/编辑器复制的二进制片段）可以含
+    /// U+0001 本身，`(text="x\u{1}y", lang="z")` 与 `(text="x", lang="y\u{1}z…")`
+    /// 能拼出同一键，把另一上下文的译文端出来。长度前缀让每个段的边界
+    /// 由段自身的长度声明，任意内容都不再有歧义。键形状变更使既有缓存
+    /// 一次性失效（条目带 TTL、可再生成，升级后冷一次缓存即可）。
     fn key(text: &str, target_lang: &str, scope_token: &str) -> String {
-        if scope_token.is_empty() {
-            format!("{}\u{1}{}", text, target_lang)
-        } else {
-            format!("{}\u{1}{}\u{1}{}", text, target_lang, scope_token)
-        }
+        let part = |s: &str| format!("{}:{}", s.len(), s);
+        format!(
+            "{}\u{1}{}\u{1}{}",
+            part(text),
+            part(target_lang),
+            part(scope_token)
+        )
     }
 
     /// 该文本是否值得缓存
@@ -428,7 +432,12 @@ mod tests {
                  (cache_key, source_text, translated_text, source_lang, provider,
                   created_at, last_hit_at, hit_count)
              VALUES (?1, ?2, '译文', 'en', 'deepl', ?3, ?4, 0)",
-            rusqlite::params![format!("{}\u{1}zh", text), text, now_unix_ms(), last_hit_at],
+            rusqlite::params![
+                TranslationCache::key(text, "zh", ""),
+                text,
+                now_unix_ms(),
+                last_hit_at
+            ],
         )
         .unwrap();
     }
@@ -523,6 +532,22 @@ mod tests {
         );
     }
 
+    /// 长度前缀键形状：文本本身含分隔符时不再与其它组合撞键 —— 旧的
+    /// 纯分隔符形状下，("x\u{1}y", "z") 与 ("x", "y\u{1}z") 产出同一个键，
+    /// 会把另一上下文的译文端出来（剪贴板二进制片段可含 U+0001）。
+    #[tokio::test]
+    async fn key_shape_is_unambiguous_for_delimiter_containing_text() {
+        assert_ne!(
+            TranslationCache::key("x\u{1}y", "z", ""),
+            TranslationCache::key("x", "y\u{1}z", "")
+        );
+        // 跨段拼接歧义在长度前缀下同样被消除
+        assert_ne!(
+            TranslationCache::key("ab", "c", ""),
+            TranslationCache::key("a", "bc", "")
+        );
+    }
+
     // ── 大小限制 ─────────────────────────────────────────────────────────
 
     #[tokio::test]
@@ -571,8 +596,11 @@ mod tests {
                 "INSERT INTO translation_cache
                      (cache_key, source_text, translated_text, provider,
                       created_at, last_hit_at, hit_count)
-                 VALUES ('stale\u{1}zh', 'stale', '过期的译文', 'deepl', ?1, ?1, 0)",
-                rusqlite::params![now_unix_ms() - 120_000],
+                 VALUES (?2, 'stale', '过期的译文', 'deepl', ?1, ?1, 0)",
+                rusqlite::params![
+                    now_unix_ms() - 120_000,
+                    TranslationCache::key("stale", "zh", "")
+                ],
             )
             .unwrap();
         }
@@ -638,7 +666,7 @@ mod tests {
             let conn = db.lock().await;
             conn.query_row(
                 "SELECT last_hit_at, hit_count FROM translation_cache WHERE cache_key = ?1",
-                rusqlite::params!["x\u{1}zh"],
+                rusqlite::params![TranslationCache::key("x", "zh", "")],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap()
@@ -682,8 +710,8 @@ mod tests {
         let count: i64 = {
             let conn = db.lock().await;
             conn.query_row(
-                "SELECT hit_count FROM translation_cache WHERE cache_key = 'hello\u{1}zh'",
-                [],
+                "SELECT hit_count FROM translation_cache WHERE cache_key = ?1",
+                rusqlite::params![TranslationCache::key("hello", "zh", "")],
                 |r| r.get(0),
             )
             .unwrap()

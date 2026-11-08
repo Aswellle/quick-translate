@@ -86,6 +86,13 @@ pub fn normalize_entry(entry: GlossaryEntryInput) -> Result<GlossaryEntryInput, 
     if target_term.chars().count() > MAX_TERM_CHARS {
         return Err(format!("目标译法超过 {} 个字符", MAX_TERM_CHARS));
     }
+    // 指纹分隔符防御：术语原文/译法不允许出现 U+0001 —— 它是
+    // fingerprint() 的字段分隔符，("x\u{1}y","z") 与 ("x","y\u{1}z")
+    // 两条单条目表会产出同一指纹，让 DeepL 同步复用错误的 glossary。
+    // 术语是人工维护的词条，含控制字符本身就是粘贴垃圾。
+    if source_term.contains('\u{1}') || target_term.contains('\u{1}') {
+        return Err("术语不能包含控制字符".to_string());
+    }
     if note.chars().count() > MAX_NOTE_CHARS {
         return Err(format!("说明超过 {} 个字符", MAX_NOTE_CHARS));
     }

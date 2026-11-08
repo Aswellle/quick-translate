@@ -145,6 +145,28 @@ impl TranslationCoordinator {
         self.lock().last_filtered.take()
     }
 
+    /// 记录被敏感过滤拦截的内容，**不打断在途翻译**。
+    ///
+    /// 与 [`Self::supersede`] 的区别：不开启新代、不 abort 在途任务。
+    /// 「被拦截的内容不打断进行中的翻译」这条不变量此前靠调用 supersede
+    /// 实现 —— 但 supersede 的开新代会让在途翻译的结果被代际闸门丢弃
+    /// （abort 只是更早地杀死它），浮窗从此停在 loading，译文与落盘一并
+    /// 丢失。拦截需要做的只有暂存，让「仍然翻译」入口有数据可取。
+    ///
+    /// 进程里还没有任何代（首个动作就是被拦复制）时开一个占位代承载
+    /// 暂存：此刻必无在途任务（任务安装以代为前提），不会中止任何东西。
+    ///
+    /// 暂存内容的清空时机不变：下一次复制（supersede）或被取走。
+    pub fn intercept_filtered(&self, text: String, cursor: (f64, f64)) {
+        let mut inner = self.lock();
+        if inner.generation.current().is_none() {
+            // 占位代：仅为让暂存有代可依，与 supersede 的「下一请求作废
+            // 上一代」不同 —— 这里没有上一代请求可作废。
+            inner.generation.begin();
+        }
+        inner.last_filtered = Some((text, cursor));
+    }
+
     /// 安装任务句柄。
     ///
     /// 返回 false 表示该请求在「开新代 → 建窗/定位」这段异步间隙里已被
@@ -270,14 +292,15 @@ pub async fn execute_at_position(app: &AppHandle, cursor_x: f64, cursor_y: f64, 
 
     // ── 敏感内容过滤：必须发生在任何网络请求 / UI 动作之前 ─────────────
     //
-    // 放在 supersede 之前的语义：被拦截的内容不打断进行中的翻译、
-    // 不显示浮窗、不产生任何请求。拦截反馈用 toast —— 一句不含原文的
-    // 解释（计划 3.2 第 9 条「可解释反馈」）；原文不出现在事件、日志、
-    // 历史里的任何地方。
+    // 被拦截的内容不打断进行中的翻译、不显示浮窗、不产生任何请求。
+    // 拦截反馈用 toast —— 一句不含原文的解释（计划 3.2 第 9 条
+    // 「可解释反馈」）；原文不出现在事件、日志、历史里的任何地方。
     //
-    // 拦截时仍要开一代「占位代」：手动覆盖接口按「当前代」校验，且
-    // 被拦内容要暂存到 coordinator 供 take_filtered() 取走。这一代不
-    // 安装任务、不发事件，仅承载拦截结果。
+    // 暂存走 intercept_filtered：不开新代、不 abort 在途任务 —— 此前
+    // 这里调用 supersede，其开新代会让在途翻译的结果被代际闸门丢弃
+    // （abort 只是提前杀死它），浮窗从此停在 loading。「仍然翻译」
+    // 的手动覆盖路径（translate_filtered_text）仍以 supersede 开新代：
+    // 用户显式选择覆盖时，在途请求让位是正确的。
     let filter_enabled = state
         .config
         .read()
@@ -287,8 +310,7 @@ pub async fn execute_at_position(app: &AppHandle, cursor_x: f64, cursor_y: f64, 
         .unwrap_or(true);
     if let Some(rule) = filter_gate(&text, filter_enabled) {
         let len = text.len();
-        let id = coordinator.supersede();
-        coordinator.store_filtered(id, text, (cursor_x, cursor_y));
+        coordinator.intercept_filtered(text, (cursor_x, cursor_y));
         state.runtime.record_clipboard_filtered();
         crate::commands::system::emit_toast(
             app,
@@ -910,6 +932,59 @@ mod tests {
         c.store_filtered(a, "secret".to_string(), (0.0, 0.0));
         assert!(!c.has_in_flight());
         assert_eq!(c.current(), Some(a));
+    }
+
+    /// 拦截不得打断在途翻译：既不 abort 任务，也不让代际闸门丢弃其结果。
+    /// （此前拦截分支调用 supersede —— 在途任务被中止、结果被新代丢弃，
+    /// 浮窗从此停在 loading，译文与落盘一并丢失。）
+    #[test]
+    fn filter_interception_does_not_disturb_in_flight_translation() {
+        let c = TranslationCoordinator::new();
+        let finished = Arc::new(AtomicBool::new(false));
+
+        let a = c.supersede();
+        let flag = finished.clone();
+        let handle = tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            flag.store(true, Ordering::SeqCst);
+        });
+        assert!(c.install(a, handle));
+
+        c.intercept_filtered("secret-sample".to_string(), (1.0, 2.0));
+
+        assert_eq!(c.current(), Some(a), "拦截不得开启新代");
+        assert!(c.is_current(a), "在途翻译必须仍被代际闸门接纳");
+        assert!(c.run_if_current(a, || {}), "在途结果必须仍可提交");
+        assert!(c.has_in_flight(), "拦截不得中止在途任务");
+
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            finished.load(Ordering::SeqCst),
+            "在途任务被拦截路径意外中止"
+        );
+
+        assert_eq!(
+            c.take_filtered().map(|(t, _)| t),
+            Some("secret-sample".to_string()),
+            "拦截内容必须已暂存，供「仍然翻译」取走"
+        );
+    }
+
+    /// 进程首个动作就是被拦复制（尚无任何代）：开一个占位代承载暂存，
+    /// 不产生在途任务。
+    #[test]
+    fn filter_interception_on_fresh_coordinator_starts_placeholder_generation() {
+        let c = TranslationCoordinator::new();
+        assert!(c.current().is_none());
+
+        c.intercept_filtered("secret-sample".to_string(), (0.0, 0.0));
+
+        assert!(c.current().is_some(), "占位代让暂存有代可依");
+        assert!(!c.has_in_flight(), "占位代不产生在途任务");
+        assert_eq!(
+            c.take_filtered().map(|(t, _)| t),
+            Some("secret-sample".to_string())
+        );
     }
 
     /// 闸门为 false 时 f 绝不能被执行（副作用不能泄漏）

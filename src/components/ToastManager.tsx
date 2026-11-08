@@ -88,8 +88,10 @@ export function ToastManager() {
     };
   }, [addToast]);
 
-  if (toasts.length === 0) return null;
-
+  // live region 必须常驻挂载：与首条内容同帧插入的区域读屏不可靠播报
+  // （live region 的规则是「节点先存在，内容后变化」—— 此前空队列时
+  // return null，第一条 toast 常被漏播）。error 条目自带 role="alert"，
+  // 按规范以 assertive 播报，不被 polite 的空闲队列拖延。
   return (
     <div
       className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2 items-center pointer-events-none"
@@ -105,6 +107,7 @@ export function ToastManager() {
           action={t.action}
           onAction={handleAction}
           onClose={removeToast}
+          role={t.type === "error" ? "alert" : undefined}
         />
       ))}
     </div>

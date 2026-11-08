@@ -54,9 +54,10 @@ impl BaiduProvider {
         format!("{:x}", h.finalize())
     }
 
-    /// 组装请求参数（纯函数，便于测试可选术语库开关）。
+    /// 组装请求参数（纯函数，便于测试可选术语库开关与显式源语言）。
     fn build_params<'a>(
         text: &'a str,
+        from: &'a str,
         target: &'a str,
         app_id: &'a str,
         salt: &'a str,
@@ -65,7 +66,7 @@ impl BaiduProvider {
     ) -> Vec<(&'a str, &'a str)> {
         let mut params = vec![
             ("q", text),
-            ("from", "auto"),
+            ("from", from),
             ("to", target),
             ("appid", app_id),
             ("salt", salt),
@@ -119,6 +120,14 @@ impl TranslationProvider for BaiduProvider {
 
         let start = Instant::now();
         let target = Self::to_baidu_lang(target_lang);
+        // 显式源语言此前被静默丢弃（校验了、进了缓存作用域键、请求仍发
+        // auto）：设置页选了源语言就必须下发，否则译错语言且缓存键与
+        // 实际请求行为脱节
+        let from = options
+            .source_lang
+            .as_deref()
+            .map(Self::to_baidu_lang)
+            .unwrap_or("auto");
 
         // 百度签名：MD5(appid + q + salt + secret_key)
         let salt = format!(
@@ -133,6 +142,7 @@ impl TranslationProvider for BaiduProvider {
 
         let params = Self::build_params(
             text,
+            from,
             target,
             &self.app_id,
             &salt,
@@ -263,11 +273,12 @@ mod tests {
     /// 术语库开关只增加 needIntervene=1，不改变既有参数集合。
     #[test]
     fn term_base_switch_only_adds_need_intervene() {
-        let base = BaiduProvider::build_params("hello", "ZH", "app", "1", "sign", false);
+        let base = BaiduProvider::build_params("hello", "auto", "ZH", "app", "1", "sign", false);
         assert!(!base.iter().any(|(k, _)| *k == "needIntervene"));
         assert_eq!(base.len(), 6, "默认请求形状保持不变");
 
-        let with_terms = BaiduProvider::build_params("hello", "ZH", "app", "1", "sign", true);
+        let with_terms =
+            BaiduProvider::build_params("hello", "auto", "ZH", "app", "1", "sign", true);
         assert_eq!(with_terms.len(), base.len() + 1);
         assert!(
             with_terms
@@ -282,5 +293,21 @@ mod tests {
                 key
             );
         }
+    }
+
+    /// 显式源语言映射到百度源码并作为 from 下发（此前恒发 auto，被静默
+    /// 丢弃）。
+    #[test]
+    fn explicit_source_lang_is_mapped_and_sent() {
+        // 映射层：应用内代码 → 百度源码
+        assert_eq!(BaiduProvider::to_baidu_lang("ja"), "jp");
+        // 下发层：build_params 收到的就是映射后的值
+        let params = BaiduProvider::build_params("hello", "jp", "ZH", "app", "1", "sign", false);
+        assert!(
+            params.iter().any(|(k, v)| *k == "from" && *v == "jp"),
+            "映射后的显式源语言必须作为 from 下发"
+        );
+        let auto = BaiduProvider::build_params("hello", "auto", "ZH", "app", "1", "sign", false);
+        assert!(auto.iter().any(|(k, v)| *k == "from" && *v == "auto"));
     }
 }

@@ -564,33 +564,34 @@ fn toggle_clipboard_monitor(app: AppHandle) {
     let app_for_menu = app.clone();
 
     tauri::async_runtime::spawn(async move {
-        let current = state
-            .config
-            .read()
-            .await
-            .get("clipboard_monitor_enabled")
-            .map(|v| v == "true")
-            .unwrap_or(true);
-        let new_value = !current;
-        tracing::info!(
-            "[toggle_clipboard_monitor] 当前值={}, 切换到={}",
-            current,
-            new_value
-        );
+        // 读-反-写收进同一把写锁：与快捷键 toggle_monitor 同款并发问题，
+        // 托盘菜单按配置渲染，交错切换会让配置与菜单显示漂移
+        let new_value = {
+            let mut cfg = state.config.write().await;
+            let current = cfg
+                .get("clipboard_monitor_enabled")
+                .map(|v| v == "true")
+                .unwrap_or(true);
+            let new_value = !current;
+            tracing::info!(
+                "[toggle_clipboard_monitor] 当前值={}, 切换到={}",
+                current,
+                new_value
+            );
 
-        if let Err(e) = state
-            .config
-            .write()
-            .await
-            .set(
-                "clipboard_monitor_enabled",
-                if new_value { "true" } else { "false" },
-            )
-            .await
-        {
-            tracing::error!("切换剪贴板监控失败: {}", e);
-            return;
-        }
+            if let Err(e) = cfg
+                .set(
+                    "clipboard_monitor_enabled",
+                    if new_value { "true" } else { "false" },
+                )
+                .await
+            {
+                drop(cfg);
+                tracing::error!("切换剪贴板监控失败: {}", e);
+                return;
+            }
+            new_value
+        };
 
         if new_value {
             state.clipboard_monitor.resume();

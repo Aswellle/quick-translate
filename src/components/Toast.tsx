@@ -20,6 +20,8 @@ interface ToastProps {
   action?: ToastAction;
   onAction?: (id: string) => void;
   onClose: (id: number) => void;
+  /** 错误类条目由管理器标为 alert：assertive 播报，不被 polite 队列拖延 */
+  role?: "alert";
 }
 
 const TOAST_ICONS: Record<ToastType, React.ReactNode> = {
@@ -64,11 +66,18 @@ export function ToastItem({
   action,
   onAction,
   onClose,
+  role,
 }: ToastProps) {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
     const show = requestAnimationFrame(() => setVisible(true));
+    // 带动作的 toast 不自动消失：它是敏感拦截的唯一放行入口 —— 读完
+    // 一行警告、决定放行时 toast 已淡出的话，暂存内容还在后端但再无
+    // UI 路径可到达。关闭由用户显式做出（点动作或 ×）。
+    if (action) {
+      return () => cancelAnimationFrame(show);
+    }
     let fade: ReturnType<typeof setTimeout> | null = null;
     const hide = setTimeout(() => {
       setVisible(false);
@@ -79,7 +88,7 @@ export function ToastItem({
       clearTimeout(hide);
       if (fade) clearTimeout(fade);
     };
-  }, [id, duration, onClose]);
+  }, [id, duration, onClose, action]);
 
   // 带动作按钮的 toast 需要指针事件：容器是 pointer-events-none 的，
   // 按钮自身必须显式恢复 auto，否则点击会穿透到底层窗口。
@@ -93,6 +102,7 @@ export function ToastItem({
 
   return (
     <div
+      role={role}
       className={[
         "flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl max-w-xs pointer-events-auto",
         "bg-[var(--surface-primary)] dark:bg-[var(--surface-secondary)]",
@@ -112,6 +122,20 @@ export function ToastItem({
           className="ml-1 shrink-0 px-2 py-0.5 rounded-md text-[11.5px] font-medium bg-[var(--system-blue)] hover:brightness-110 text-white transition-all active:scale-95"
         >
           {action.label}
+        </button>
+      )}
+      {action && (
+        /* 带动作的 toast 不自动消失，必须给显式关闭路径 —— 否则用户
+           不想放行时它只能等下一次覆盖 */
+        <button
+          type="button"
+          onClick={() => onClose(id)}
+          aria-label="关闭通知"
+          className="shrink-0 w-5 h-5 flex items-center justify-center rounded-md text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--hover-bg)] transition-colors"
+        >
+          <svg className="w-3 h-3" viewBox="0 0 12 12" fill="none">
+            <path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+          </svg>
         </button>
       )}
     </div>

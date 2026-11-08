@@ -51,6 +51,22 @@ pub async fn clear_glossary(
     state.glossary.clear(&source_lang, &target_lang).await
 }
 
+/// 导入载荷的大小上限。整批替换入口必须先挡住一次性解析的超大载荷
+/// （与导出命令的 EXPORT_MAX_BYTES 同一防御位置）—— 5000 条 × 1000 字
+/// 的现实极限远小于此值，正常使用永远碰不到。
+const IMPORT_MAX_BYTES: usize = 64 * 1024 * 1024;
+
+fn check_import_size(content: &str) -> Result<(), AppError> {
+    if content.len() > IMPORT_MAX_BYTES {
+        return Err(AppError::ConfigError(format!(
+            "导入内容过大（{} 字节，上限 {}）",
+            content.len(),
+            IMPORT_MAX_BYTES
+        )));
+    }
+    Ok(())
+}
+
 /// 导入 JSON：替换当前语言对的条目（整批校验通过才落库），返回写入条数。
 #[tauri::command]
 pub async fn import_glossary_json(
@@ -59,6 +75,7 @@ pub async fn import_glossary_json(
     target_lang: String,
     content: String,
 ) -> Result<usize, AppError> {
+    check_import_size(&content)?;
     let entries = glossary::import_json(&content, &source_lang, &target_lang)
         .map_err(AppError::ConfigError)?;
     state
@@ -75,6 +92,7 @@ pub async fn import_glossary_csv(
     target_lang: String,
     content: String,
 ) -> Result<usize, AppError> {
+    check_import_size(&content)?;
     let entries = glossary::import_csv(&content, &source_lang, &target_lang)
         .map_err(AppError::ConfigError)?;
     state
