@@ -25,6 +25,7 @@ pub const ACTION_TRANSLATE_CLIPBOARD: &str = "translate_clipboard";
 pub const ACTION_OPEN_MANUAL: &str = "open_manual";
 pub const ACTION_TOGGLE_MONITOR: &str = "toggle_monitor";
 pub const ACTION_TOGGLE_POPUP: &str = "toggle_popup";
+pub const ACTION_RETRANSLATE_LAST: &str = "retranslate_last";
 
 pub struct HotkeyActionDef {
     pub id: &'static str,
@@ -61,6 +62,12 @@ pub const ACTIONS: &[HotkeyActionDef] = &[
         config_key: "hotkey_toggle_popup",
         default_accelerator: "CmdOrControl+Alt+H",
         label: "显示/隐藏翻译浮窗",
+    },
+    HotkeyActionDef {
+        id: ACTION_RETRANSLATE_LAST,
+        config_key: "hotkey_retranslate_last",
+        default_accelerator: "CmdOrControl+Alt+R",
+        label: "重新翻译上一次",
     },
 ];
 
@@ -228,6 +235,7 @@ fn configured_value(config: &AppConfig, action: &str) -> Option<String> {
         ACTION_OPEN_MANUAL => Some(config.hotkey_open_manual.clone()),
         ACTION_TOGGLE_MONITOR => Some(config.hotkey_toggle_monitor.clone()),
         ACTION_TOGGLE_POPUP => Some(config.hotkey_toggle_popup.clone()),
+        ACTION_RETRANSLATE_LAST => Some(config.hotkey_retranslate_last.clone()),
         _ => None,
     }
 }
@@ -254,6 +262,12 @@ fn dispatch(app: &AppHandle, action: &str) {
             let app = app.clone();
             tauri::async_runtime::spawn(async move {
                 toggle_popup(&app).await;
+            });
+        }
+        ACTION_RETRANSLATE_LAST => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                retranslate_last(&app).await;
             });
         }
         _ => {}
@@ -368,6 +382,25 @@ async fn toggle_popup(app: &AppHandle) {
             .report_popup(crate::runtime::ComponentState::Healthy, None);
         tracing::info!(event = "popup_show_by_hotkey", "[hotkeys] 快捷键显示浮窗");
     }
+}
+
+/// 重新翻译上一次实际发送的原文。
+///
+/// 复用 coordinator 的完整入口（敏感过滤、代际闸门、落盘），不保存也不
+/// 绕过任何结果；被过滤拦截过的内容从未记入 last_text。
+async fn retranslate_last(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let Some(text) = state.coordinator.last_text() else {
+        crate::commands::system::emit_toast(app, ToastPayload::info("还没有可重新翻译的内容"));
+        return;
+    };
+    let (x, y) = crate::system::clipboard::get_cursor_position();
+    tracing::info!(
+        event = "hotkey_retranslate_last",
+        len = text.len(),
+        "[hotkeys] 快捷键重新翻译上一次内容"
+    );
+    crate::system::translation::coordinator::execute_at_position(app, x, y, text).await;
 }
 
 #[cfg(test)]

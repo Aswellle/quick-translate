@@ -153,6 +153,7 @@ fn validate_value(key: &str, value: &str) -> Result<(), AppError> {
             | "hotkey_open_manual"
             | "hotkey_toggle_monitor"
             | "hotkey_toggle_popup"
+            | "hotkey_retranslate_last"
             | "youdao_vocab_id"
             | "tencent_term_repo_ids"
     ) || BOOL_KEYS.contains(&key)
@@ -205,7 +206,8 @@ fn validate_value(key: &str, value: &str) -> Result<(), AppError> {
         "hotkey_translate_clipboard"
         | "hotkey_open_manual"
         | "hotkey_toggle_monitor"
-        | "hotkey_toggle_popup" => {
+        | "hotkey_toggle_popup"
+        | "hotkey_retranslate_last" => {
             if value.chars().count() > 100 {
                 return Err(invalid());
             }

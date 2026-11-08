@@ -81,6 +81,12 @@ const KEY_DESCRIPTORS: &[KeyDescriptor] = &[
         set_string: Some(|c, v| c.hotkey_toggle_popup = v),
     },
     KeyDescriptor {
+        key: "hotkey_retranslate_last",
+        encrypted: false,
+        get_credential: None,
+        set_string: Some(|c, v| c.hotkey_retranslate_last = v),
+    },
+    KeyDescriptor {
         key: "youdao_vocab_id",
         encrypted: false,
         get_credential: None,
@@ -237,6 +243,7 @@ impl ConfigService {
             "hotkey_open_manual" => Some(self.cache.hotkey_open_manual.clone()),
             "hotkey_toggle_monitor" => Some(self.cache.hotkey_toggle_monitor.clone()),
             "hotkey_toggle_popup" => Some(self.cache.hotkey_toggle_popup.clone()),
+            "hotkey_retranslate_last" => Some(self.cache.hotkey_retranslate_last.clone()),
             "youdao_vocab_id" => Some(self.cache.youdao_vocab_id.clone()),
             "tencent_term_repo_ids" => Some(self.cache.tencent_term_repo_ids.clone()),
             "auto_start" => Some(self.cache.auto_start.to_string()),
@@ -889,6 +896,7 @@ fn read_field_for_test(config: &AppConfig, key: &str) -> String {
         "hotkey_open_manual" => config.hotkey_open_manual.clone(),
         "hotkey_toggle_monitor" => config.hotkey_toggle_monitor.clone(),
         "hotkey_toggle_popup" => config.hotkey_toggle_popup.clone(),
+        "hotkey_retranslate_last" => config.hotkey_retranslate_last.clone(),
         "youdao_vocab_id" => config.youdao_vocab_id.clone(),
         "tencent_term_repo_ids" => config.tencent_term_repo_ids.clone(),
         _ => String::new(),

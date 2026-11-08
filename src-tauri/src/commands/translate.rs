@@ -69,6 +69,9 @@ pub async fn translate_text(
             .unwrap_or_else(|| "zh".to_string()),
     };
 
+    // 记为「上一次翻译」，供快捷键重试（存实际发送的截断后文本）
+    state.coordinator.remember_text(&text_to_translate);
+
     // 术语表：仅在「开启 + 当前翻译源是 DeepL + 显式源语言 + 该语言对有
     // 条目」时同步并应用。同步失败返回 None（翻译继续，不假装生效）。
     let applied_glossary = crate::system::glossary_sync::prepare_deepl_glossary(

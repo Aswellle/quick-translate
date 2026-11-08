@@ -48,6 +48,9 @@ struct Inner {
     /// —— 下一次复制（supersede）或手动覆盖取走后即清空。绝不落盘、
     /// 绝不进日志、绝不出现在任何事件里。
     last_filtered: Option<(String, (f64, f64))>,
+    /// 最近一次**通过过滤并实际发起**的翻译原文（快捷键「重新翻译上一次」
+    /// 的数据源）。只活在内存里，不落盘、不进日志；被拦截的内容不会记入。
+    last_text: Option<String>,
 }
 
 /// 浮窗 show 流程的跨请求互斥锁。
@@ -87,6 +90,7 @@ impl TranslationCoordinator {
                 generation: RequestGeneration::default(),
                 in_flight: None,
                 last_filtered: None,
+                last_text: None,
             }),
         }
     }
@@ -96,6 +100,17 @@ impl TranslationCoordinator {
     /// 这正是本模块要消灭的故障模式。
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// 记住最近一次实际发起的翻译原文（只用于「重新翻译上一次」）。
+    /// 被敏感过滤拦截的内容不会调用本方法。
+    pub fn remember_text(&self, text: &str) {
+        self.lock().last_text = Some(text.to_string());
+    }
+
+    /// 取最近一次翻译原文；None = 本次进程还没有成功发起过翻译。
+    pub fn last_text(&self) -> Option<String> {
+        self.lock().last_text.clone()
     }
 
     /// 开启一代新请求，并中止上一代的在途任务。返回新请求 id。
@@ -287,6 +302,9 @@ pub async fn execute_at_position(app: &AppHandle, cursor_x: f64, cursor_y: f64, 
         );
         return;
     }
+
+    // 通过过滤、即将实际发起 —— 记为「上一次翻译」，供快捷键重试。
+    coordinator.remember_text(&text);
 
     // 先开新一代：上一代的任务被就地 abort，其迟到结果也会因 id 不匹配被丢弃
     let id = coordinator.supersede();
