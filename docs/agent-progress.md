@@ -4,12 +4,18 @@
 - Branch: main
 - Base commit: b64b04e（Merge pull request #80）
 - App version: 0.9.0
-- Current task: 全局快捷键（完成，待实机验证）；Task 10 术语表（DeepL/百度/有道/腾讯控制台引用 + 管理 UI 完成，真实 API 未验证）；下一步真实凭证验证或新的产品任务
+- Current task: 计划内 Task 01–11 已完成（Task 08 剩余受要求 19 阻塞）；剩余为外部验证项（实机快捷键/术语表、真实凭证、macOS），无未阻塞的代码任务
 - Working tree: 干净
 - 执行依据: docs/QUICK_TRANSLATE_AI_AGENT_DEVELOPMENT_PLAN.md（2026-11-07 修订）
 - 测试清单: docs/TEST_INVENTORY.md
 
 ## Completed
+
+### 2026-11-08 — 移除未使用的全局快捷键 JS 包
+- `@tauri-apps/plugin-global-shortcut`（JS 包）没有任何 import 或调用方：快捷键走 Rust 端 `tauri-plugin-global-shortcut` 注册与分发，前端只编辑加速键并读取状态。
+- 从 `package.json` 移除依赖并同步 `package-lock.json`（npm uninstall --offline，减少一项未使用的运行时依赖面）；Rust 侧插件与权限配置不变。
+- Tests: vitest 88/88；tsc PASS；build PASS
+- 未验证：无（纯依赖清理，无行为变化）。
 
 ### 2026-11-08 — 快捷键：重新翻译上一次
 - coordinator 记住最近一次通过敏感过滤并实际发起的原文（内存态，不落盘、不进日志；被拦截内容不记入），剪贴板与手动路径都写入。
@@ -219,13 +225,13 @@
 - Task: 无
 
 ## Blockers / decisions needed
-- `@tauri-apps/plugin-global-shortcut`（JS 包）已无使用方（快捷键走 Rust 端）：保留 / 移除待定，移除需同步 package-lock。不阻塞其他任务。
+- `@tauri-apps/plugin-global-shortcut`（JS 包）已移除（快捷键走 Rust 端）；Rust 插件保持不动。
 - 应用排除列表（Task 04）：当前剪贴板 API 在两个平台均无可靠的来源进程标识，需按计划先实现敏感过滤 + 暂停，应用排除标为平台能力待评估。
 
 ## Risks not yet verified
 - Platform: Windows
-  - Scenario: 全局快捷键的 OS 注册、冲突提示与三个动作的端到端行为
-  - Required manual test: 启动应用，逐个按下 `CmdOrControl+Alt+T/M/P`；再用其他应用占用同一组合验证冲突提示与旧快捷键保持可用
+  - Scenario: 全局快捷键的 OS 注册、冲突提示与五个动作的端到端行为
+  - Required manual test: 启动应用，逐个按下 `CmdOrControl+Alt+T/M/P/H/R`；再用其他应用占用同一组合验证冲突提示与旧快捷键保持可用
 - Platform: macOS
   - Scenario: 浮窗定位、剪贴板 changeCount 语义、打开外部 URL、全局快捷键注册
   - Required manual test: QT-001/002/004 的 macOS 实机验证（上轮审计遗留，EXTERNAL_VALIDATION_REQUIRED）
@@ -234,6 +240,7 @@
   - Required manual test: 显式 opt-in 的真实凭证测试
 
 ## Next task
-- Task 10 剩余：四个 Provider 的术语表效果 opt-in 真实凭证验证（DeepL/百度/有道/腾讯）；无代码阻塞项。
+- 计划内代码任务已全部完成；无未阻塞的实现项。
+- Task 10 剩余：四个 Provider 的术语表效果 opt-in 真实凭证验证（DeepL/百度/有道/腾讯）。
 - 全局快捷键与术语表实机验证（Windows 优先）；macOS 未验证项继续保留。
 - 阻塞项：Task 08 剩余（供应商目录分类/AI 类目）待要求 19 解禁。
