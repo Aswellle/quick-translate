@@ -68,14 +68,12 @@ function FilterSelect({
 }
 
 export function FilterBar({ filters, options, onChange }: FilterBarProps) {
-  // 选项在窗口打开时拉一次；库内出现新 provider/语言对后重开窗口即可
-  // 看到新选项（与导出目的地快照同一刷新语义）
-  const fetchedRef = useRef(false);
+  // 选项快照来自父级：挂载时拉一次，history-changed 数据变化时随列表
+  // 一起补刷 —— 新 provider/语言对要能进下拉。本地快照只负责「options
+  // 尚未到达时保留上一份非空值」的降级，不做跨刷新的过期冻结
   const [localOptions, setLocalOptions] = useState<HistoryFilterOptions | null>(null);
 
   useEffect(() => {
-    if (fetchedRef.current) return;
-    fetchedRef.current = true;
     if (options) {
       setLocalOptions(options);
     }

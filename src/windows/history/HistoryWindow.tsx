@@ -116,17 +116,27 @@ export function HistoryWindow() {
       const { searchQuery, page, starredOnly, sourceFilter, languagePairFilter, providerFilter } =
         useHistoryStore.getState();
       loadHistory(searchQuery, page, starredOnly, sourceFilter, languagePairFilter, providerFilter);
+      // 筛选选项随数据一起补刷：新配置的翻译源、新出现的语言对要能进
+      // 下拉 —— 本窗口 hide 而非销毁，只靠挂载时拉一次的话，选项列表
+      // 永远停留在首次打开时的库内数据
+      void refreshFilterOptions();
     }, [loadHistory])
   );
   useTauriEvent(EVENTS.HISTORY_CHANGED, onHistoryChanged);
 
-  // 筛选可选项：窗口打开时拉一次。失败静默降级为空选项（下拉只剩
-  // 「全部」），不影响列表本身
-  useEffect(() => {
-    getHistoryFilterOptions()
+  // 筛选可选项派生自库内数据（语言对/翻译源实际出现过的取值）。失败
+  // 静默降级为空选项（下拉只剩「全部」），不影响列表本身
+  const refreshFilterOptions = useCallback(() => {
+    return getHistoryFilterOptions()
       .then(setFilterOptions)
       .catch((err) => console.error("[history] 加载筛选选项失败:", err));
   }, []);
+
+  // 首次打开拉一次；转可见时（useVisibleRefresh 的补刷路径在 onHistoryChanged
+  // 里顺带刷新）保持选项与新数据同步
+  useEffect(() => {
+    void refreshFilterOptions();
+  }, [refreshFilterOptions]);
 
   // 筛选变化 → store（store 侧统一回第一页），列表加载由上面的
   // 筛选依赖 effect 承担
