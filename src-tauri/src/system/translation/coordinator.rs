@@ -769,6 +769,20 @@ mod tests {
     // ── 缓存回退的判定（计划第 15/16 节）────────────────────────────────
 
     /// 只有「所有翻译源都用不了」才回退缓存 —— 那才是离线的信号。
+    #[test]
+    fn remember_text_keeps_the_latest_and_survives_supersede() {
+        let c = TranslationCoordinator::new();
+        assert_eq!(c.last_text(), None);
+
+        c.remember_text("first");
+        c.remember_text("second");
+        assert_eq!(c.last_text().as_deref(), Some("second"));
+
+        // 新请求不该清掉「上一次翻译」—— 关闭浮窗后仍可重试
+        let _ = c.supersede();
+        assert_eq!(c.last_text().as_deref(), Some("second"));
+    }
+
     /// 其他失败把真实原因告诉用户，比递一个来源不明的旧译文有用。
     #[test]
     fn cache_fallback_is_only_for_total_provider_failure() {
